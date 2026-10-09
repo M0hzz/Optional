@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "optlab"
+version = "0.1.0"
+description = "Personal options-strategy research lab: data, filings, pricing, backtests, risk and a dashboard."
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "pandas",
+  "scipy",
+  "pyyaml",
+  "QuantLib",
+  "duckdb",
+  "polars",
+  "pyarrow",
+  "vectorbt",
+  "skfolio",
+  "streamlit",
+  "altair",
+]
+
+[project.optional-dependencies]
+data = ["openbb", "edgartools"]
+research = ["pyqlib", "lightgbm"]
+live = ["nautilus_trader"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
