@@ -1,0 +1,36 @@
+# optlab configuration. Every script and the dashboard read this file.
+
+data:
+  db_path: data/market.duckdb
+  # "openbb" pulls real data (needs `pip install openbb` and internet).
+  # "synthetic" generates realistic fake data so everything runs offline.
+  source: synthetic
+  openbb_provider: yfinance        # free; swap for polygon, intrinio, cboe, tradier...
+  history_start: "2018-01-01"
+
+universe: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, JPM]
+
+market:
+  risk_free_rate: 0.04             # used when no live rate is available
+  dividend_yield: 0.0
+
+edgar:
+  # The SEC requires a name + email on every request.
+  identity: "Your Name your.email@example.com"
+  lookback_days: 180
+
+account:
+  equity: 100000
+  max_risk_per_trade_pct: 2.0      # max loss of a single position, % of equity
+  max_underlying_pct: 25.0         # max capital tied to one underlying
+  max_portfolio_delta_pct: 50.0    # |dollar delta| as % of equity
+  max_portfolio_vega_pct: 1.0      # $ change per 1 vol-point, % of equity
+  max_drawdown_pct: 20.0
+
+strategy_defaults:
+  dte: 35
+  short_delta: 0.25
+  spread_width_pct: 5.0            # wing width as % of spot
+  profit_take_pct: 50.0            # close at 50% of max profit
+  slippage_pct_of_premium: 3.0     # haircut on every fill in quick backtests
+  commission_per_contract: 0.65

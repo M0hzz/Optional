@@ -1,0 +1,7 @@
+data/*.duckdb
+data/*.wal
+data/qlib_rankings.csv
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/

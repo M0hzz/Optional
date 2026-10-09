@@ -1,0 +1,26 @@
+# Core (Python 3.10+). Tested with Python 3.13.
+numpy
+pandas
+scipy
+pyyaml
+QuantLib
+duckdb
+polars
+pyarrow
+vectorbt
+skfolio
+streamlit
+altair
+pytest
+
+# Real data
+openbb
+edgartools
+
+# Execution / automation
+nautilus_trader
+
+# Qlib needs Python 3.10-3.12 and lives best in its own environment:
+#   pip install pyqlib lightgbm
+# LEAN runs in Docker via its CLI:
+#   pip install lean

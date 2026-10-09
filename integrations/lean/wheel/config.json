@@ -1,0 +1,12 @@
+{
+  "algorithm-language": "Python",
+  "parameters": {
+    "ticker": "SPY",
+    "delta": "0.25",
+    "min_dte": "25",
+    "max_dte": "45",
+    "profit_take": "0.5",
+    "max_alloc": "0.9"
+  },
+  "description": "The Wheel: cash-secured puts until assigned, then covered calls until called away."
+}
