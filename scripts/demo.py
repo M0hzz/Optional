@@ -14,7 +14,7 @@ import pandas as pd  # noqa: E402
 
 from optlab.backtest import BTParams, buy_and_hold, simulate, stats, sweep  # noqa: E402
 from optlab.config import load_config  # noqa: E402
-from optlab.data import Store  # noqa: E402
+from optlab.data import Store, risk_free_rate  # noqa: E402
 from optlab.data.chain import atm_iv  # noqa: E402
 from optlab.filings import insider_signal  # noqa: E402
 from optlab.pricing.engine import entry_cost, fill_entry_prices, price_position, scenario_grid  # noqa: E402
@@ -31,11 +31,11 @@ def main() -> None:
     ap.add_argument("--symbol", default=None)
     args = ap.parse_args()
     cfg = load_config()
-    rate = cfg["market"]["risk_free_rate"]
     d = cfg["strategy_defaults"]
 
     with Store(cfg["data"]["db_path"], read_only=True) as store:
         syms = store.symbols()
+        rate = risk_free_rate(store, cfg)
         prices = store.query("SELECT symbol, date, close FROM prices")
         ivs = {s: atm_iv(store.latest_chain(s)) for s in syms}
         ins = insider_signal(store.insider_trades())
@@ -44,7 +44,7 @@ def main() -> None:
     for s in closes:
         closes[s].index = pd.to_datetime(closes[s].index)
 
-    print(f"Data source: {cfg['data']['source']}\n\n1) Premium-selling scanner")
+    print(f"Data source: {cfg['data']['source']}   risk-free rate: {rate:.2%}\n\n1) Premium-selling scanner")
     ranked = rank_candidates(build_features(prices), {k: v for k, v in ivs.items() if v},
                              dict(zip(ins["symbol"].to_list(), ins["score"].to_list())))
     print(ranked.to_pandas().round(3).to_string(index=False))

@@ -129,3 +129,56 @@ def test_ranking_and_insiders():
     assert ranked.height == 3 and ranked["score"].is_finite().all()
     sig = insider_signal(synthetic_insider_trades(["AAPL", "MSFT"]))
     assert sig["score"].is_between(-1, 1).all()
+
+
+# ------------------------------------------------- fundamentals/macro/filings
+def test_fundamentals_and_macro_roundtrip(tmp_path):
+    from optlab.data import risk_free_rate
+
+    src = SyntheticSource(end=date(2024, 6, 28), rate=0.045)
+    cfg = {"market": {"risk_free_rate": 0.04, "rate_series": "treasury_3m"}}
+    with Store(tmp_path / "t.duckdb") as s:
+        assert risk_free_rate(s, cfg) == 0.04                      # empty macro table -> config fallback
+        assert src.fundamentals("SPY").is_empty()                  # ETFs have no fundamentals
+        s.upsert("fundamentals", src.fundamentals("AAPL"))
+        s.upsert("fundamentals", src.fundamentals("AAPL"))
+        f = s.latest_fundamentals()
+        assert f.height == 1 and f["next_earnings"][0] > date(2024, 6, 28)
+        macro = src.macro("2023-01-01")
+        s.upsert("macro", macro)
+        s.upsert("macro", macro)
+        assert s.macro().height == macro.height
+        assert set(macro["series"]) == {"treasury_1m", "treasury_3m", "treasury_1y", "treasury_2y", "treasury_10y", "vix"}
+        rate = risk_free_rate(s, cfg)
+        assert rate == s.latest_macro("treasury_3m") and 0 < rate < 0.15
+
+
+def test_financial_changes_and_flags():
+    from optlab.filings import financial_changes, financial_flags
+
+    rows = [("XYZ", "revenue", date(2023, 6, 30), 100.0, "Q2"), ("XYZ", "revenue", date(2024, 3, 31), 95.0, "Q1"),
+            ("XYZ", "revenue", date(2024, 6, 30), 80.0, "Q2"),
+            ("XYZ", "net_income", date(2023, 6, 30), 10.0, "Q2"), ("XYZ", "net_income", date(2024, 6, 30), -2.0, "Q2"),
+            ("XYZ", "long_term_debt", date(2024, 6, 30), 50.0, "Q2")]          # no year-ago value
+    fin = pl.DataFrame(rows, schema=["symbol", "metric", "period_end", "value", "fiscal_period"], orient="row")
+    ch = financial_changes(fin)
+    rev = ch.filter(pl.col("metric") == "revenue").row(0, named=True)
+    assert rev["year_ago"] == 100.0 and rev["yoy_pct"] == pytest.approx(-20.0)   # vs a year ago, not last quarter
+    assert ch.filter(pl.col("metric") == "long_term_debt")["yoy_pct"][0] is None
+    flags = financial_flags(ch).row(0, named=True)["financial_flags"]
+    assert "revenue -20% YoY" in flags and "net income turned negative" in flags
+
+
+def test_filing_flags_only_recent_red_flags():
+    from optlab.filings import filing_flags, synthetic_filings, synthetic_financials
+
+    fil = pl.DataFrame([("XYZ", date(2024, 6, 1), "8-K", "a1", "4.02,9.01", "", ""),
+                        ("XYZ", date(2024, 6, 2), "8-K", "a2", "2.02,9.01", "", ""),     # earnings: not a flag
+                        ("XYZ", date(2023, 1, 1), "8-K", "a3", "4.01", "", "")],         # too old
+                       schema=["symbol", "filing_date", "form", "accession_no", "items", "description", "url"],
+                       orient="row")
+    out = filing_flags(fil, as_of=date(2024, 6, 30)).row(0, named=True)
+    assert out["n_filing_flags"] == 1 and "Prior financials unreliable" in out["filing_flags"]
+    syms = ["AAPL", "SPY"]
+    assert set(synthetic_filings(syms)["symbol"]) == {"AAPL"}
+    assert synthetic_financials(syms)["metric"].n_unique() == 8

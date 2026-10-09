@@ -15,9 +15,9 @@ import streamlit as st  # noqa: E402
 
 from optlab.backtest import BTParams, buy_and_hold, simulate, stats, sweep  # noqa: E402
 from optlab.config import load_config  # noqa: E402
-from optlab.data import Store  # noqa: E402
+from optlab.data import Store, risk_free_rate  # noqa: E402
 from optlab.data.chain import atm_iv, skew_25d, with_dte  # noqa: E402
-from optlab.filings import insider_signal  # noqa: E402
+from optlab.filings import filing_flags, financial_changes, financial_flags, insider_signal  # noqa: E402
 from optlab.pricing import OptionSpec, implied_vol, payoff_at_expiry, price, scenario_grid  # noqa: E402
 from optlab.pricing.engine import entry_cost, fill_entry_prices, price_position  # noqa: E402
 from optlab.research import build_features, rank_candidates  # noqa: E402
@@ -26,7 +26,6 @@ from optlab.strategies import STRATEGIES, max_loss  # noqa: E402
 
 st.set_page_config(page_title="optlab", page_icon="📈", layout="wide")
 CFG = load_config()
-RATE = CFG["market"]["risk_free_rate"]
 DEF = CFG["strategy_defaults"]
 
 
@@ -51,6 +50,39 @@ def load_insiders() -> pl.DataFrame:
     return store().insider_trades()
 
 
+def _table(name: str, reader) -> pl.DataFrame:
+    # databases built before a table existed lack it until ingest.py is re-run
+    return reader() if store().has_table(name) else pl.DataFrame()
+
+
+@st.cache_data(ttl=600)
+def load_fundamentals() -> pl.DataFrame:
+    return _table("fundamentals", store().latest_fundamentals)
+
+
+@st.cache_data(ttl=600)
+def load_macro() -> pl.DataFrame:
+    return _table("macro", store().macro)
+
+
+@st.cache_data(ttl=600)
+def load_filings() -> pl.DataFrame:
+    return _table("filings", store().filings)
+
+
+@st.cache_data(ttl=600)
+def load_financials() -> pl.DataFrame:
+    return _table("financials", store().financials)
+
+
+def next_earnings(symbol: str):
+    f = load_fundamentals()
+    if f.is_empty():
+        return None
+    row = f.filter(pl.col("symbol") == symbol)
+    return row["next_earnings"][0] if not row.is_empty() else None
+
+
 def close_series(symbol: str) -> pd.Series:
     df = load_prices().filter(pl.col("symbol") == symbol).to_pandas()
     return pd.Series(df["close"].values, index=pd.to_datetime(df["date"]), name=symbol)
@@ -61,6 +93,7 @@ if not Path(CFG["data"]["db_path"]).exists():
     st.stop()
 
 symbols = store().symbols()
+RATE = risk_free_rate(store(), CFG)
 src_label = CFG["data"]["source"]
 
 # ------------------------------------------------------------------- sidebar
@@ -72,13 +105,17 @@ with st.sidebar:
     equity = st.number_input("Account equity ($)", value=float(CFG["account"]["equity"]), step=5000.0)
     limits = RiskLimits(**{**CFG["account"], "equity": equity})
     st.caption("Risk limits come from config.yaml → account.")
+    rate_src = CFG["market"].get("rate_series", "treasury_3m") if not load_macro().is_empty() else "config fallback"
+    st.caption(f"Risk-free rate: **{RATE:.2%}** ({rate_src})")
 
 spot_series = close_series(symbol)
 spot = float(spot_series.iloc[-1])
 chain = load_chain(symbol)
 iv_atm = atm_iv(chain) or float(np.log(spot_series).diff().tail(20).std() * np.sqrt(252) * 1.1)
 
-tabs = st.tabs(["Scanner", "Chain & pricer", "Strategy lab", "Backtest", "Risk & sizing", "Insiders"])
+earn_date = next_earnings(symbol)
+tabs = st.tabs(["Scanner", "Chain & pricer", "Strategy lab", "Backtest", "Risk & sizing", "Insiders",
+                "Company", "Macro"])
 
 # ------------------------------------------------------------------- scanner
 with tabs[0]:
@@ -89,20 +126,34 @@ with tabs[0]:
     ins = insider_signal(load_insiders())
     ins_scores = dict(zip(ins["symbol"].to_list(), ins["score"].to_list())) if not ins.is_empty() else {}
     ranked = rank_candidates(feats, ivs or None, ins_scores).to_pandas()
+    fund = load_fundamentals()
+    if not fund.is_empty():
+        e = fund.select(["symbol", "next_earnings"]).to_pandas()
+        e["days_to_earnings"] = (pd.to_datetime(e["next_earnings"]) - pd.Timestamp.today().normalize()).dt.days
+        ranked = ranked.merge(e[["symbol", "days_to_earnings"]], on="symbol", how="left")
+    flag_frames = [financial_flags(financial_changes(load_financials())) if not load_financials().is_empty() else None,
+                   filing_flags(load_filings()) if not load_filings().is_empty() else None]
+    for fl in flag_frames:
+        if fl is not None and not fl.is_empty():
+            ranked = ranked.merge(fl.select(["symbol", fl.columns[2]]).to_pandas(), on="symbol", how="left")
     qlib_file = ROOT / "data" / "qlib_rankings.csv"
     if qlib_file.exists():
         q = pd.read_csv(qlib_file)
         q.columns = ["symbol", "qlib_fwd_vol_change"]
         q["symbol"] = q["symbol"].str.upper()
         ranked = ranked.merge(q, on="symbol", how="left")
+    whole = [c for c in ranked.columns if c == "days_to_earnings" or c.startswith("n_")]
     st.dataframe(
-        ranked.style.format({c: "{:.2f}" for c in ranked.select_dtypes("number").columns})
+        ranked.style.format({c: "{:.0f}" if c in whole else "{:.2f}" for c in ranked.select_dtypes("number").columns},
+                            na_rep="—")
         .background_gradient(subset=["score"], cmap="RdYlGn"),
         width="stretch", hide_index=True)
     st.caption("score = IV richness vs realized vol + vol already calming − vol-of-vol + insider buying. "
                "Higher = better candidate for selling options. "
                + ("Qlib model predictions are merged in." if qlib_file.exists()
-                  else "Train the Qlib model (integrations/qlib) to add ML predictions here."))
+                  else "Train the Qlib model (integrations/qlib) to add ML predictions here.")
+               + " days_to_earnings inside your DTE means the trade holds through an earnings gap; "
+               "n_*_flags count red-flag 8-Ks and deteriorating financials (see the Company tab).")
 
     c1, c2 = st.columns(2)
     hist = feats.filter(pl.col("symbol") == symbol).select(["date", "close", "rv20", "rv60"]).drop_nulls().to_pandas()
@@ -149,7 +200,12 @@ with tabs[1]:
     typ = p4.selectbox("Type", ["put", "call"])
     style = p5.selectbox("Exercise", ["american", "european"])
     mkt = p6.number_input("Market price (for IV)", value=0.0, step=0.05)
-    spec = OptionSpec(spot, k, days, vol, typ, RATE, CFG["market"]["dividend_yield"], style)
+    fq = load_fundamentals()
+    fq = fq.filter(pl.col("symbol") == symbol) if not fq.is_empty() else fq
+    div_q = float(fq["dividend_yield"][0]) if not fq.is_empty() and fq["dividend_yield"][0] is not None \
+        else CFG["market"]["dividend_yield"]
+    spec = OptionSpec(spot, k, days, vol, typ, RATE, div_q, style)
+    st.caption(f"Rate {RATE:.2%} · dividend yield {div_q:.2%}" + (" (from fundamentals)" if not fq.is_empty() else ""))
     g = price(spec)
     m = st.columns(6)
     for col, (name, val, fmt) in zip(m, [("Fair value", g["price"], "{:.2f}"), ("Delta", g["delta"], "{:+.3f}"),
@@ -168,6 +224,9 @@ with tabs[2]:
     delta = c3.slider("Short delta", 0.05, 0.50, DEF["short_delta"], 0.01)
     width = c4.slider("Wing width (% of spot)", 1.0, 15.0, DEF["spread_width_pct"], 0.5)
     legs = STRATEGIES[strat](spot, iv_atm, dte=dte, short_delta=delta, spread_width_pct=width, rate=RATE)
+    if earn_date is not None and (earn_date - pd.Timestamp.today().date()).days <= dte:
+        st.warning(f"{symbol} reports earnings on {earn_date}, before this {dte}-day expiry. Expect a gap and "
+                   "an IV crush; size for the move or pick an expiry before the report.")
     fill_entry_prices(legs, spot, RATE, style="european")
     cost = entry_cost(legs)
     greeks = price_position(legs, spot, RATE, style="european")
@@ -342,3 +401,110 @@ with tabs[5]:
         st.dataframe(trades.filter(pl.col("symbol") == symbol).to_pandas(), width="stretch", hide_index=True)
         if src_label == "synthetic":
             st.caption("Synthetic insider records for demonstration.")
+
+# ------------------------------------------------------------------- company
+with tabs[6]:
+    st.subheader(f"{symbol}: fundamentals, financials and filings")
+    fund = load_fundamentals()
+    frow = fund.filter(pl.col("symbol") == symbol) if not fund.is_empty() else fund
+    if frow.is_empty():
+        st.info("No fundamentals for this symbol (ETFs have none). For stocks, run `python scripts/ingest.py`.")
+    else:
+        f = frow.row(0, named=True)
+        fmt = lambda v, spec: "—" if v is None else spec.format(v)  # noqa: E731
+        m = st.columns(5)
+        m[0].metric("Market cap", fmt(f["market_cap"] and f["market_cap"] / 1e9, "${:,.0f}B"))
+        m[1].metric("P/E (fwd)", f"{fmt(f['pe_ratio'], '{:.1f}')} ({fmt(f['forward_pe'], '{:.1f}')})")
+        m[2].metric("Dividend yield", fmt(f["dividend_yield"], "{:.2%}"))
+        m[3].metric("Beta", fmt(f["beta"], "{:.2f}"))
+        m[4].metric("Next earnings", str(f["next_earnings"] or "—"),
+                    f"in {(f['next_earnings'] - pd.Timestamp.today().date()).days} days" if f["next_earnings"] else None,
+                    delta_color="off")
+        st.caption(f"Profit margin {fmt(f['profit_margin'], '{:.1%}')} · revenue growth "
+                   f"{fmt(f['revenue_growth'], '{:+.1%}')} · debt/equity {fmt(f['debt_to_equity'], '{:.0f}')} "
+                   f"· as of {f['as_of']} (OpenBB / yfinance)")
+
+    st.markdown("**Financial changes (SEC XBRL, latest quarter vs a year earlier)**")
+    fin = load_financials()
+    fin_sym = fin.filter(pl.col("symbol") == symbol) if not fin.is_empty() else fin
+    if fin_sym.is_empty():
+        st.info("No financials. Set edgar.identity in config.yaml and run `python scripts/ingest.py --source openbb`.")
+    else:
+        ch = financial_changes(fin_sym).with_columns(pl.col("period_end").cast(pl.Utf8)).to_pandas()
+        st.dataframe(ch.drop(columns="symbol").style.format({"value": "{:,.2f}", "year_ago": "{:,.2f}",
+                                                              "yoy_pct": "{:+.1f}%"}, na_rep="—")
+                     .background_gradient(subset=["yoy_pct"], cmap="RdYlGn", vmin=-50, vmax=50),
+                     width="stretch", hide_index=True)
+        trend = (fin_sym.filter(pl.col("metric").is_in(["revenue", "net_income"]))
+                 .with_columns(pl.col("period_end").cast(pl.Utf8)).to_pandas())
+        st.altair_chart(alt.Chart(trend).mark_bar().encode(
+            x=alt.X("period_end:O", title="quarter ending"), y=alt.Y("value:Q", title="USD", axis=alt.Axis(format="~s")),
+            color="metric:N", xOffset="metric:N", tooltip=["metric", "period_end", alt.Tooltip("value:Q", format=",.0f")]
+        ).properties(title="Quarterly revenue and net income", height=260), width="stretch")
+
+    fl = financial_flags(financial_changes(fin)) if not fin.is_empty() else pl.DataFrame()
+    ff = filing_flags(load_filings()) if not load_filings().is_empty() else pl.DataFrame()
+    flagged = [d.filter(pl.col(d.columns[2]) > 0) for d in (fl, ff) if not d.is_empty()]
+    flagged = [d for d in flagged if not d.is_empty()]
+    st.markdown("**Red flags across the universe**")
+    if flagged:
+        out = flagged[0].to_pandas()
+        for d in flagged[1:]:
+            out = out.merge(d.to_pandas(), on="symbol", how="outer")
+        counts = [c for c in out.columns if c.startswith("n_")]
+        out[counts] = out[counts].fillna(0).astype(int)
+        st.dataframe(out.fillna(""), width="stretch", hide_index=True)
+        st.caption("Restatements, auditor changes, impairments, executive departures, falling revenue or "
+                   "rising debt: reasons to skip selling premium on a name until it settles.")
+    else:
+        st.success("No red-flag 8-Ks in the last 90 days and no deteriorating financials.")
+
+    st.markdown("**Recent filings**")
+    fil = load_filings()
+    fil_sym = fil.filter(pl.col("symbol") == symbol) if not fil.is_empty() else fil
+    if fil_sym.is_empty():
+        st.info("No filings for this symbol.")
+    else:
+        st.dataframe(fil_sym.drop("symbol").with_columns(pl.col("filing_date").cast(pl.Utf8)).to_pandas(),
+                     width="stretch", hide_index=True,
+                     column_config={"url": st.column_config.LinkColumn("link", display_text="open")})
+    if src_label == "synthetic":
+        st.caption("Synthetic fundamentals, financials and filings for demonstration.")
+
+# --------------------------------------------------------------------- macro
+with tabs[7]:
+    st.subheader("Rates and market volatility")
+    mac = load_macro()
+    if mac.is_empty():
+        st.info("No macro data. Run `python scripts/ingest.py`.")
+    else:
+        md = mac.to_pandas()
+        md["date"] = pd.to_datetime(md["date"])
+        latest = md.sort_values("date").groupby("series").tail(1).set_index("series")["value"]
+        tenors = [("treasury_1m", "1M"), ("treasury_3m", "3M"), ("treasury_1y", "1Y"), ("treasury_2y", "2Y"),
+                  ("treasury_10y", "10Y")]
+        m = st.columns(6)
+        for col, (k, lab) in zip(m, tenors):
+            col.metric(f"{lab} Treasury", f"{latest[k]:.2%}" if k in latest else "—")
+        m[5].metric("VIX", f"{latest['vix']:.1f}" if "vix" in latest else "—")
+        if {"treasury_2y", "treasury_10y"} <= set(latest.index):
+            slope = latest["treasury_10y"] - latest["treasury_2y"]
+            st.caption(f"10Y − 2Y slope: {slope * 1e4:+.0f} bp" + (" (inverted)" if slope < 0 else "")
+                       + f" · pricing uses {CFG['market'].get('rate_series', 'treasury_3m')} = {RATE:.2%}")
+        c1, c2 = st.columns(2)
+        curve = pd.DataFrame({"tenor": [lab for k, lab in tenors if k in latest],
+                              "yield": [latest[k] for k, _ in tenors if k in latest]})
+        c1.altair_chart(alt.Chart(curve).mark_line(point=True).encode(
+            x=alt.X("tenor:N", sort=[lab for _, lab in tenors]), y=alt.Y("yield:Q", axis=alt.Axis(format="%"),
+                                                                       scale=alt.Scale(zero=False))
+        ).properties(title="Treasury curve today", height=280), width="stretch")
+        rates = md[md["series"].isin(["treasury_3m", "treasury_2y", "treasury_10y"])]
+        c2.altair_chart(alt.Chart(rates).mark_line().encode(
+            x=alt.X("date:T", title=None), y=alt.Y("value:Q", title="yield", axis=alt.Axis(format="%")),
+            color="series:N").properties(title="Treasury yields", height=280), width="stretch")
+        vix = md[md["series"] == "vix"]
+        st.altair_chart(alt.Chart(vix).mark_line().encode(x=alt.X("date:T", title=None), y=alt.Y("value:Q", title="VIX"))
+                        .properties(title="VIX: market-wide implied volatility. High = rich premium, but bigger moves",
+                                    height=240), width="stretch")
+        if src_label == "synthetic":
+            st.caption("Synthetic rates and VIX for demonstration.")

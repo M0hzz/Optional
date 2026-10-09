@@ -14,7 +14,8 @@ altair
 pytest
 
 # Real data
-openbb
+openbb>=4.5,<5      # 5.x moved to per-provider namespaces (obb.cboe...) and dropped yfinance
+openbb-yfinance
 edgartools
 
 # Execution / automation

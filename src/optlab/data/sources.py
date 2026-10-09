@@ -3,9 +3,11 @@
 OpenBBSource    real data through the OpenBB Platform (needs `pip install openbb`)
 SyntheticSource realistic fake prices and option chains, for offline development
 
-Both expose the same two methods:
+Both expose the same methods:
     prices(symbol, start) -> prices frame
     option_chain(symbol)  -> option_chains frame (one snapshot)
+    fundamentals(symbol)  -> fundamentals frame (one row; empty for ETFs)
+    macro(start)          -> macro frame: Treasury yields and VIX, long format
 """
 from __future__ import annotations
 
@@ -66,6 +68,66 @@ class OpenBBSource:
         cols = ["snapshot_date", "symbol", "expiration", "strike", "option_type", "bid", "ask", "last",
                 "volume", "open_interest", "implied_vol", "underlying_price"]
         return pl.from_pandas(df[cols]).with_columns(pl.col(cols[5:]).cast(pl.Float64))
+
+
+    def fundamentals(self, symbol: str) -> pl.DataFrame:
+        """Valuation and quality snapshot (yfinance), plus the next earnings date."""
+        try:
+            m = self.obb.equity.fundamental.metrics(symbol, provider="yfinance").to_df().iloc[0]
+        except Exception:  # ETFs and indices have no fundamentals
+            return pl.DataFrame(schema=FUNDAMENTAL_SCHEMA)
+        num = lambda k: float(m[k]) if k in m and pd.notna(m[k]) else None  # noqa: E731
+        div = num("dividend_yield")
+        row = {
+            "symbol": symbol, "as_of": date.today(), "market_cap": num("market_cap"),
+            "pe_ratio": num("pe_ratio"), "forward_pe": num("forward_pe"),
+            # yfinance reports dividend_yield in percent (0.4 = 0.4%); store a fraction like the rest
+            "dividend_yield": div / 100 if div is not None else None,
+            "beta": num("beta"), "debt_to_equity": num("debt_to_equity"),
+            "profit_margin": num("profit_margin"), "revenue_growth": num("revenue_growth"),
+            "next_earnings": next_earnings_date(symbol),
+        }
+        return pl.DataFrame([row], schema=FUNDAMENTAL_SCHEMA)
+
+    def macro(self, start: str = "2018-01-01") -> pl.DataFrame:
+        """Daily Treasury yields (Federal Reserve H.15, no key needed) and the VIX close."""
+        frames = []
+        tr = self.obb.fixedincome.government.treasury_rates(start_date=start, provider="federal_reserve").to_df()
+        tr = tr.reset_index()
+        for col, name in TREASURY_SERIES.items():
+            if col in tr.columns:
+                frames.append(pd.DataFrame({"date": pd.to_datetime(tr["date"]).dt.date, "series": name,
+                                            "value": tr[col].astype(float)}))
+        vix = self.obb.index.price.historical("^VIX", start_date=start, provider="yfinance").to_df().reset_index()
+        frames.append(pd.DataFrame({"date": pd.to_datetime(vix["date"]).dt.date, "series": "vix",
+                                    "value": vix["close"].astype(float)}))
+        out = pd.concat(frames).dropna(subset=["value"])
+        return pl.from_pandas(out[["date", "series", "value"]])
+
+
+FUNDAMENTAL_SCHEMA = {
+    "symbol": pl.Utf8, "as_of": pl.Date, "market_cap": pl.Float64, "pe_ratio": pl.Float64,
+    "forward_pe": pl.Float64, "dividend_yield": pl.Float64, "beta": pl.Float64,
+    "debt_to_equity": pl.Float64, "profit_margin": pl.Float64, "revenue_growth": pl.Float64,
+    "next_earnings": pl.Date,
+}
+# OpenBB treasury_rates column -> macro series name. Values are decimals (0.042 = 4.2%).
+TREASURY_SERIES = {"month_1": "treasury_1m", "month_3": "treasury_3m", "year_1": "treasury_1y",
+                   "year_2": "treasury_2y", "year_10": "treasury_10y"}
+ETFS = {"SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "XLE", "XLF", "EEM", "VXX"}
+
+
+def next_earnings_date(symbol: str) -> date | None:
+    """Next scheduled earnings date. OpenBB 4's earnings calendar needs a paid FMP key,
+    so this reads it from yfinance (installed with openbb-yfinance) instead."""
+    try:
+        import yfinance as yf
+
+        dates = (yf.Ticker(symbol).calendar or {}).get("Earnings Date") or []
+        upcoming = sorted(d for d in dates if d >= date.today())
+        return upcoming[0] if upcoming else None
+    except Exception:
+        return None
 
 
 # Rough per-symbol (start price, end price, long-run vol). The random path is
@@ -159,6 +221,43 @@ class SyntheticSource:
         cols = ["snapshot_date", "symbol", "expiration", "strike", "option_type", "bid", "ask", "last",
                 "volume", "open_interest", "implied_vol", "underlying_price"]
         return pl.DataFrame(rows, schema=cols, orient="row")
+
+
+    def fundamentals(self, symbol: str) -> pl.DataFrame:
+        if symbol in ETFS:
+            return pl.DataFrame(schema=FUNDAMENTAL_SCHEMA)
+        rng = np.random.default_rng(_seed(symbol) + 1)
+        _, s_end, vol = _PROFILES.get(symbol, (100, 180, 0.30))
+        pe = float(rng.uniform(12, 45))
+        row = {
+            "symbol": symbol, "as_of": self.end, "market_cap": float(s_end * rng.uniform(2e9, 2e10)),
+            "pe_ratio": pe, "forward_pe": pe * float(rng.uniform(0.75, 1.0)),
+            "dividend_yield": float(rng.choice([0.0, rng.uniform(0.003, 0.03)])),
+            "beta": float(0.6 + vol * 2.5 + rng.normal(0, 0.1)),
+            "debt_to_equity": float(rng.uniform(10, 200)), "profit_margin": float(rng.uniform(0.05, 0.45)),
+            "revenue_growth": float(rng.normal(0.08, 0.1)),
+            # quarterly reports: the next one lands somewhere in the coming ~13 weeks
+            "next_earnings": self.end + timedelta(days=int(_seed(symbol) % 91) + 1),
+        }
+        return pl.DataFrame([row], schema=FUNDAMENTAL_SCHEMA)
+
+    def macro(self, start: str = "2018-01-01") -> pl.DataFrame:
+        """Mean-reverting short rate with an upward-sloping curve; VIX tracks synthetic SPY vol."""
+        rng = np.random.default_rng(42)
+        spy = self._path("SPY", start)
+        n, dt = len(spy), 1 / 252
+        r = np.empty(n)
+        x = self.rate
+        for i in range(n):
+            x += 1.0 * (self.rate - x) * dt + 0.006 * np.sqrt(dt) * rng.standard_normal()
+            r[i] = max(x, 0.0005)
+        curve = {"treasury_1m": -0.001, "treasury_3m": 0.0, "treasury_1y": 0.002,
+                 "treasury_2y": 0.004, "treasury_10y": 0.009}
+        frames = [pd.DataFrame({"date": spy["date"], "series": k, "value": np.maximum(r + v, 0.0)})
+                  for k, v in curve.items()]
+        vix = spy["vol"].to_numpy() * 100 * 1.1 + rng.normal(0, 0.8, n)
+        frames.append(pd.DataFrame({"date": spy["date"], "series": "vix", "value": np.clip(vix, 9, 90)}))
+        return pl.from_pandas(pd.concat(frames, ignore_index=True))
 
 
 def get_source(cfg: dict):

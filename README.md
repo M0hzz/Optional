@@ -7,7 +7,10 @@ trading options: **find** where premium is rich, **price** the trade, **size** i
 ```
              ┌──────────── data ────────────┐
  OpenBB ───▶ │ prices · option chains       │
+             │ fundamentals · earnings date │
+             │ Treasury yields · VIX        │
  EdgarTools ▶│ insider trades (Form 4)      │──▶ DuckDB file (data/market.duckdb)
+             │ 8-K/10-Q/10-K · financials   │
              └──────────────────────────────┘        │  read with Polars
                                                      ▼
    research ── Polars features + scanner ── Qlib (ML ranker, optional)
@@ -33,7 +36,7 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 18 tests
+python -m pytest                   # 21 tests
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
 streamlit run app/streamlit_app.py # the dashboard
 ```
@@ -42,12 +45,15 @@ streamlit run app/streamlit_app.py # the dashboard
 
 1. In `config.yaml` set `data.source: openbb` and `edgar.identity: "Your Name you@email.com"`
    (the SEC requires a name and email on every request).
-2. `python scripts/ingest.py` — pulls prices and today's option chains for the
-   `universe`, plus Form 4 insider trades.
+2. `python scripts/ingest.py` — pulls prices, today's option chains, fundamentals and
+   next earnings dates for the `universe`, Treasury yields and VIX, plus Form 4 insider
+   trades, recent 8-K/10-Q/10-K filings and quarterly financials from EDGAR.
 3. Run it daily (cron / Task Scheduler) to build up your own history of chain
    snapshots; free providers only give the current chain.
 
-`yfinance` is the default free provider. For better chains, set
+`yfinance` is the default free provider. Treasury yields come from the Federal Reserve
+(no key). The project pins OpenBB 4.x: OpenBB 5 replaced `obb.equity` / `obb.derivatives`
+with per-provider namespaces and dropped yfinance, so the fetchers here don't run on it. For better chains, set
 `openbb_provider` to `cboe`, `tradier`, `intrinio` or `polygon` and add the
 key with `obb.user.credentials`.
 
@@ -57,20 +63,22 @@ key with `obb.user.credentials`.
 
 | Tool | Where | What it does here |
 |---|---|---|
-| **OpenBB** | `src/optlab/data/sources.py` | `OpenBBSource` fetches daily prices and option chains and normalizes them to one schema. `SyntheticSource` produces stand-in data with stochastic vol, crash jumps and a realistic smile. |
-| **EdgarTools** | `src/optlab/filings/insiders.py` | Downloads Form 4 filings, keeps open-market buys (P) and sales (S), scores each stock −1…+1. Insider buying favors selling puts over calls. |
-| **DuckDB + Polars** | `src/optlab/data/store.py`, `research/features.py` | One local database file with `prices`, `option_chains`, `insider_trades`; idempotent upserts. Polars builds volatility features across the universe. |
+| **OpenBB** | `src/optlab/data/sources.py` | `OpenBBSource` fetches daily prices, option chains, fundamentals (market cap, P/E, dividend yield, beta, margins, growth) with the next earnings date, and economic data: Treasury yields 1M–10Y and the VIX. The 3-month yield becomes the risk-free rate in pricing, and each stock's dividend yield feeds the pricer. `SyntheticSource` produces stand-in data for all of it with stochastic vol, crash jumps and a realistic smile. |
+| **EdgarTools** | `src/optlab/filings/insiders.py`, `filings/company.py` | Downloads Form 4 filings, keeps open-market buys (P) and sales (S), scores each stock −1…+1; insider buying favors selling puts over calls. Also pulls recent 8-K/10-Q/10-K filings, flags risky 8-K items (restatement, auditor change, impairment, executive departure, cyber incident…), and reads quarterly revenue, net income, EPS, cash, debt and balance-sheet totals from XBRL to flag year-over-year deterioration. |
+| **DuckDB + Polars** | `src/optlab/data/store.py`, `research/features.py` | One local database file with `prices`, `option_chains`, `insider_trades`, `fundamentals`, `macro`, `filings`, `financials`; idempotent upserts. Polars builds volatility features across the universe. |
 | **QuantLib** | `src/optlab/pricing/engine.py` | American (finite-difference) and European pricing, full Greeks, implied-vol solver, multi-leg position Greeks, spot × vol scenario grids. `fast_bs.py` is a NumPy BSM for bulk work, checked against QuantLib in tests. |
 | **vectorbt** | `src/optlab/backtest/quick.py` | Simulates put-writes, covered calls, put spreads and iron condors on any price history (profit-take, stop, slippage, commissions, T-bill yield on collateral), scores them with vectorbt, sweeps DTE × delta. |
 | **LEAN** | `integrations/lean/wheel/` | The Wheel (cash-secured puts → assignment → covered calls) using real option quotes, IB fees, and delta-based contract selection. |
 | **skfolio** | `src/optlab/risk/sizing.py` | Allocates across strategy return streams (min CVaR, risk parity on drawdown, HRP, max Sharpe). Alongside: per-trade sizing by max loss and concentration, and book-level delta/vega/concentration limits. |
-| **Streamlit** | `app/streamlit_app.py` | Six tabs: Scanner · Chain & pricer · Strategy lab · Backtest · Risk & sizing · Insiders. |
+| **Streamlit** | `app/streamlit_app.py` | Eight tabs: Scanner · Chain & pricer · Strategy lab · Backtest · Risk & sizing · Insiders · Company · Macro. |
 | **Qlib** | `integrations/qlib/vol_ranker.py` | Trains LightGBM to predict which underlyings' volatility will fall over the next month (best to sell premium on). Rankings appear in the dashboard scanner. |
 | **NautilusTrader** | `integrations/nautilus/` | `DeltaHedger` keeps an options book delta-neutral by trading the underlying. Same class for backtest and live. |
 
 ## Configuration (`config.yaml`)
 
 - `universe` — symbols to track.
+- `market` — fallback risk-free rate and which macro series (`rate_series`) to price with.
+- `edgar` — your SEC identity and how far back to read insider trades and filings.
 - `account` — equity and risk limits: max loss per trade (% equity), max capital
   per underlying, max |dollar delta| and vega as % of equity.
 - `strategy_defaults` — DTE, short delta, wing width, profit-take, slippage, commission.
@@ -81,17 +89,22 @@ key with `obb.user.credentials`.
 
 - **Scanner** — ranks the universe for premium selling: IV vs realized vol
   (from the latest chain), whether vol is already calming, vol-of-vol, insider
-  score, plus Qlib predictions if you've trained the model. Price and
+  score, plus Qlib predictions if you've trained the model. Also shows days to
+  the next earnings report and counts of filing / financial red flags. Price and
   realized-vol charts with today's ATM IV overlaid.
 - **Chain & pricer** — volatility smile per expiry, put-IV surface, raw quotes,
   and a QuantLib calculator (price, Greeks, implied vol from a market price).
 - **Strategy lab** — pick a strategy, DTE, delta and wings; see credit, max loss,
   position Greeks, payoff at expiry and halfway, and a spot × IV scenario table.
+  Warns when an earnings report falls before expiry.
 - **Backtest** — vectorbt run vs buy-and-hold, trade log, win rate, and a
   DTE × delta heatmap of Sharpe / return / drawdown.
 - **Risk & sizing** — contracts allowed for a trade, an editable book checked
   against your limits, and a skfolio allocation across symbols × strategies.
 - **Insiders** — Form 4 summary and transactions.
+- **Company** — fundamentals and next earnings date, quarterly financials vs a year
+  earlier, red flags across the universe, and recent filings with links to EDGAR.
+- **Macro** — Treasury curve and its history, 10Y−2Y slope, and the VIX.
 
 ---
 
@@ -154,6 +167,8 @@ Paper account first.
   fit on one period and evaluate on the next (skfolio's `WalkForward`).
 - **Free option-chain data is a snapshot.** Historical IV needs your own daily
   ingest or a paid provider.
+- **Earnings dates come from yfinance**, not OpenBB: OpenBB 4's earnings calendar
+  needs a paid FMP key. ETFs have no fundamentals, earnings or financials.
 - The EDGAR and OpenBB fetchers follow those libraries' current APIs; if a
   provider renames a column, adjust the mapping in `sources.py` / `insiders.py`.
 
@@ -163,7 +178,7 @@ Paper account first.
 config.yaml               settings and risk limits
 src/optlab/
   data/        store.py (DuckDB) · sources.py (OpenBB, synthetic) · chain.py
-  filings/     insiders.py (EdgarTools)
+  filings/     insiders.py · company.py (EdgarTools)
   pricing/     engine.py (QuantLib) · fast_bs.py (NumPy BSM)
   strategies/  covered call, CSP, credit spreads, iron condor, straddle
   backtest/    quick.py (vectorbt)
