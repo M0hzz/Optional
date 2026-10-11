@@ -115,7 +115,7 @@ iv_atm = atm_iv(chain) or float(np.log(spot_series).diff().tail(20).std() * np.s
 
 earn_date = next_earnings(symbol)
 tabs = st.tabs(["Scanner", "Chain & pricer", "Strategy lab", "Backtest", "Risk & sizing", "Insiders",
-                "Company", "Macro"])
+                "Company", "Macro", "Option chain", "Monitor"])
 
 # ------------------------------------------------------------------- scanner
 with tabs[0]:
@@ -508,3 +508,161 @@ with tabs[7]:
                                     height=240), width="stretch")
         if src_label == "synthetic":
             st.caption("Synthetic rates and VIX for demonstration.")
+
+
+# -------------------------------------------------------------- option chain
+@st.cache_resource
+def live_feed(kind: str):
+    from optlab.live.feed import LiveFeed, SyntheticFeed
+
+    return SyntheticFeed(rate=RATE) if kind == "synthetic" else LiveFeed(rate=RATE, chain_ttl=60)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_chain(ticker: str, source: str) -> tuple[pd.DataFrame, str]:
+    feed = live_feed("synthetic" if source == "synthetic" else "live")
+    return feed.chain(ticker, None if source == "synthetic" else source), pd.Timestamp.now().strftime("%H:%M:%S")
+
+
+with tabs[8]:
+    st.subheader("Full option chain")
+    c1, c2, c3 = st.columns([1, 1, 2])
+    ticker = c1.text_input("Any optionable symbol", value=symbol).strip().upper()
+    source = c2.selectbox("Source", ["cboe", "yfinance", "synthetic"],
+                          help="cboe: every expiration and strike with Greeks, 15-min delayed, free. "
+                               "yfinance: same contracts, slower, Greeks computed here. synthetic: offline test data.")
+    c3.caption("Standard calls and puts only: weeklies, monthlies, quarterlies and LEAPS. Adjusted contracts "
+               "left over from splits or mergers are dropped. Index options use the index name (SPX, NDX, RUT).")
+    if ticker:
+        try:
+            with st.spinner(f"Loading every {ticker} contract from {source}..."):
+                ch, fetched = fetch_chain(ticker, source)
+        except Exception as exc:
+            ch, fetched = pd.DataFrame(), ""
+            st.error(f"Couldn't load {ticker} from {source}: {str(exc).strip().splitlines()[-1][:300]}. "
+                     "Check the symbol and your internet connection, or pick another source.")
+        if not ch.empty:
+            from optlab.live.scanner import chain_stats
+
+            stats_ = chain_stats(ch)
+            u = float(ch["underlying_price"].iloc[0])
+            m = st.columns(6)
+            m[0].metric(f"{ticker} price", f"{u:,.2f}")
+            m[1].metric("Contracts", f"{len(ch):,}")
+            m[2].metric("Expirations", ch["expiration"].nunique())
+            m[3].metric("~30d ATM IV", f"{stats_['atm_iv']:.1%}" if stats_["atm_iv"] == stats_["atm_iv"] else "—")
+            m[4].metric("Put/call OI", f"{stats_['put_call_oi']:.2f}" if stats_["put_call_oi"] == stats_["put_call_oi"] else "—")
+            m[5].metric("Fetched", fetched)
+
+            f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
+            exps = sorted(ch["expiration"].unique())
+            labels = ["All expirations"] + [f"{e} ({(e - pd.Timestamp.today().date()).days}d)" for e in exps]
+            pick = f1.selectbox("Expiration", labels)
+            band = f2.slider("Strikes within ±% of price (100 = all)", 5, 100, 100, 5)
+            layout = f3.radio("Layout", ["Calls | Puts", "List"])
+            greeks = f4.checkbox("Greeks", value=True)
+            view = ch if pick == "All expirations" else ch[ch["expiration"] == exps[labels.index(pick) - 1]]
+            if band < 100:
+                view = view[(view["strike"] - u).abs() <= u * band / 100]
+            cols = ["bid", "ask", "last", "volume", "open_interest", "iv"] + (["delta", "gamma", "theta", "vega"] if greeks else [])
+            short = {"open_interest": "OI", "volume": "vol"}
+            if layout == "Calls | Puts":
+                view = view.assign(root=view["contract"].str[:-15])
+                key = ["expiration", "root", "strike"] if view["root"].nunique() > 1 else ["expiration", "strike"]
+                calls = view[view["type"] == "call"].set_index(key)[cols].rename(columns=lambda c: f"C {short.get(c, c)}")
+                puts = view[view["type"] == "put"].set_index(key)[cols[::-1]].rename(columns=lambda c: f"P {short.get(c, c)}")
+                table = calls.join(puts, how="outer").reset_index()
+                table = table[key[:-1] + list(calls.columns) + ["strike"] + list(puts.columns)]
+            else:
+                table = view[["expiration", "dte", "type", "strike"] + cols + ["mid", "spread_pct", "otm_pct", "breakeven",
+                                                                               "annualized_yield", "contract"]]
+            table = table.assign(expiration=table["expiration"].astype(str))
+            fmt = {c: st.column_config.NumberColumn(format="%.2f") for c in table.columns
+                   if any(k in c for k in ("bid", "ask", "last", "mid", "breakeven"))}
+            fmt.update({c: st.column_config.NumberColumn(format="%.1f%%") for c in table.columns if c.endswith(("_pct", "yield"))})
+            fmt.update({c: st.column_config.NumberColumn(format="%.3f") for c in table.columns
+                        if c.split()[-1] in ("iv", "delta", "gamma", "theta", "vega")})
+            fmt["strike"] = st.column_config.NumberColumn(format="%.2f")
+            st.dataframe(table, width="stretch", hide_index=True, height=620, column_config=fmt)
+            st.caption(f"{len(view):,} contracts shown · price {u:,.2f} · strikes below the price are in the money for "
+                       "calls, above it for puts · IV and Greeks per share; theta per day, vega per 1 vol point.")
+            st.download_button("Download CSV", view.to_csv(index=False).encode(), f"{ticker}_chain.csv", "text/csv")
+
+# -------------------------------------------------------------------- monitor
+MON = ROOT / "data" / "monitor"
+
+
+@st.fragment(run_every="20s")
+def monitor_panel():
+    import json
+
+    status_file = MON / "status.json"
+    if not status_file.exists():
+        st.info("The monitor hasn't run yet. In a terminal: `python scripts/monitor.py` (waits for the start time in "
+                "scans.yaml), or `python scripts/monitor.py --once` for a single pass now.")
+        return
+    status = json.loads(status_file.read_text())
+    last = pd.Timestamp(status["last_run"]) if status.get("last_run") else None
+    age = (pd.Timestamp.now(tz=last.tz) - last).total_seconds() if last is not None else None
+    m = st.columns(4)
+    m[0].metric("Last pass", last.strftime("%a %H:%M:%S") if last is not None else "—",
+                f"{age / 60:.0f} min ago" if age and age > 120 else None, delta_color="off")
+    m[1].metric("Pass time", f"{status.get('seconds', 0):.1f}s")
+    m[2].metric("Symbols", status.get("symbols", 0))
+    m[3].metric("Scan hits", status.get("hits", 0))
+    st.caption(f"Schedule: {status.get('schedule', '—')}"
+               + (f" · waiting until {status['waiting_until']}" if status.get("waiting_until") else "")
+               + " · this panel refreshes every 20 s")
+    for e in status.get("errors", []):
+        st.warning(e)
+
+    pos_file, hits_file = MON / "latest_positions.parquet", MON / "latest_hits.parquet"
+    st.markdown("**Open positions**")
+    pos = pd.read_parquet(pos_file) if pos_file.exists() else pd.DataFrame()
+    if pos.empty:
+        st.caption("No positions in scans.yaml. Add them under `positions:` to get HOLD / WATCH / EXIT checks.")
+    else:
+        colors = {"EXIT": "background-color: #f8d7da", "WATCH": "background-color: #fff3cd",
+                  "HOLD": "background-color: #d1e7dd", "ERROR": "background-color: #e2e3e5"}
+        st.dataframe(pos.style.map(lambda v: colors.get(v, ""), subset=["status"]).format(na_rep="—")
+                     .format({"pnl": "{:+,.0f}", "pnl_pct": "{:+.1f}%", "value": "{:,.0f}", "price": "{:,.2f}",
+                              "short_strike_otm_pct": "{:.1f}%", "position_delta": "{:+.0f}", "theta_day": "{:+.1f}",
+                              "dte": "{:.0f}", "days_to_earnings": "{:.0f}"}, na_rep="—"),
+                     width="stretch", hide_index=True)
+    st.markdown("**Scan hits**")
+    hits = pd.read_parquet(hits_file) if hits_file.exists() else pd.DataFrame()
+    if hits.empty:
+        st.caption("Nothing passes right now.")
+    else:
+        for scan_name, g in hits.groupby("scan", sort=False):
+            st.markdown(f"*{scan_name}* · {g['symbol'].nunique()} symbol(s)")
+            g = g.drop(columns="scan").dropna(axis=1, how="all")
+            whole = ("dte", "open_interest", "volume")
+            st.dataframe(g, width="stretch", hide_index=True, column_config={
+                c: st.column_config.NumberColumn(format="%d" if c in whole else "%.2f")
+                for c in g.select_dtypes("number").columns})
+    alerts_file = MON / "alerts.csv"
+    if alerts_file.exists():
+        with st.expander("Recent alerts"):
+            st.dataframe(pd.read_csv(alerts_file).tail(100).iloc[::-1], width="stretch", hide_index=True)
+
+
+with tabs[9]:
+    st.subheader("Live monitor")
+    st.caption("Scans and position checks from scans.yaml, run by `python scripts/monitor.py` on its schedule. "
+               "Alerts arrive as desktop notifications; nothing is traded.")
+    monitor_panel()
+    with st.expander("Scans defined in scans.yaml"):
+        try:
+            from optlab.live.scanner import load_scan_config
+
+            scfg = load_scan_config(ROOT / "scans.yaml")
+            for sc in scfg["scans"]:
+                st.markdown(f"**{sc.get('name')}** · {sc.get('timeframe', '1d')} bars · "
+                            f"watchlist: {sc.get('watchlist') or sc.get('symbols')}")
+                st.code("\n".join(map(str, sc.get("stock") or [])) +
+                        (("\noptions: " + str({k: v for k, v in sc["options"].items()})) if sc.get("options") else ""),
+                        language="text")
+        except Exception as exc:
+            st.error(f"scans.yaml: {exc}")
+

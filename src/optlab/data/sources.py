@@ -114,15 +114,22 @@ FUNDAMENTAL_SCHEMA = {
 # OpenBB treasury_rates column -> macro series name. Values are decimals (0.042 = 4.2%).
 TREASURY_SERIES = {"month_1": "treasury_1m", "month_3": "treasury_3m", "year_1": "treasury_1y",
                    "year_2": "treasury_2y", "year_10": "treasury_10y"}
-ETFS = {"SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "XLE", "XLF", "EEM", "VXX"}
+ETFS = {"SPY", "QQQ", "IWM", "DIA", "TLT", "GLD", "SLV", "XLE", "XLF", "XLK", "XLV", "XLI", "XLY", "XLP",
+        "XLU", "XLB", "XLRE", "SMH", "EEM", "EFA", "HYG", "LQD", "VXX", "UVXY", "ARKK", "KRE", "XBI", "USO",
+        "SPX", "NDX", "RUT", "VIX", "XSP", "DJX"}
 
 
 def next_earnings_date(symbol: str) -> date | None:
     """Next scheduled earnings date. OpenBB 4's earnings calendar needs a paid FMP key,
     so this reads it from yfinance (installed with openbb-yfinance) instead."""
+    if symbol in ETFS or symbol.startswith("^"):
+        return None
     try:
+        import logging
+
         import yfinance as yf
 
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)  # 404s for funds are expected, not news
         dates = (yf.Ticker(symbol).calendar or {}).get("Earnings Date") or []
         upcoming = sorted(d for d in dates if d >= date.today())
         return upcoming[0] if upcoming else None

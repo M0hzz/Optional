@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-data = ["openbb>=4.5,<5", "openbb-yfinance", "edgartools"]
+data = ["openbb>=4.5,<5", "openbb-yfinance", "openbb-cboe>=1.4,<2", "edgartools"]
 research = ["pyqlib", "lightgbm"]
 live = ["nautilus_trader"]
 dev = ["pytest"]

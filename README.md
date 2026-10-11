@@ -20,6 +20,7 @@ trading options: **find** where premium is rich, **price** the trade, **size** i
    risk ────── sizing rules + Greek limits + skfolio allocation
    execute ─── NautilusTrader: delta-hedging strategy (backtest → live)
    view ────── Streamlit dashboard over all of the above
+   monitor ─── live scans + position checks every minute, desktop alerts
 ```
 
 Everything runs offline on **synthetic data** out of the box, so you can explore
@@ -36,9 +37,10 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 21 tests
+python -m pytest                   # 40 tests
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
 streamlit run app/streamlit_app.py # the dashboard
+python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
 ```
 
 ### Real data
@@ -70,7 +72,7 @@ key with `obb.user.credentials`.
 | **vectorbt** | `src/optlab/backtest/quick.py` | Simulates put-writes, covered calls, put spreads and iron condors on any price history (profit-take, stop, slippage, commissions, T-bill yield on collateral), scores them with vectorbt, sweeps DTE × delta. |
 | **LEAN** | `integrations/lean/wheel/` | The Wheel (cash-secured puts → assignment → covered calls) using real option quotes, IB fees, and delta-based contract selection. |
 | **skfolio** | `src/optlab/risk/sizing.py` | Allocates across strategy return streams (min CVaR, risk parity on drawdown, HRP, max Sharpe). Alongside: per-trade sizing by max loss and concentration, and book-level delta/vega/concentration limits. |
-| **Streamlit** | `app/streamlit_app.py` | Eight tabs: Scanner · Chain & pricer · Strategy lab · Backtest · Risk & sizing · Insiders · Company · Macro. |
+| **Streamlit** | `app/streamlit_app.py` | Ten tabs: Scanner · Chain & pricer · Strategy lab · Backtest · Risk & sizing · Insiders · Company · Macro · Option chain · Monitor. |
 | **Qlib** | `integrations/qlib/vol_ranker.py` | Trains LightGBM to predict which underlyings' volatility will fall over the next month (best to sell premium on). Rankings appear in the dashboard scanner. |
 | **NautilusTrader** | `integrations/nautilus/` | `DeltaHedger` keeps an options book delta-neutral by trading the underlying. Same class for backtest and live. |
 
@@ -105,8 +107,64 @@ key with `obb.user.credentials`.
 - **Company** — fundamentals and next earnings date, quarterly financials vs a year
   earlier, red flags across the universe, and recent filings with links to EDGAR.
 - **Macro** — Treasury curve and its history, 10Y−2Y slope, and the VIX.
+- **Option chain** — the full chain of any optionable symbol: every expiration and
+  strike, calls and puts side by side with Greeks, filters, CSV download.
+- **Monitor** — the live monitor's latest scan hits, position statuses and alerts;
+  refreshes every 20 seconds.
 
 ---
+
+## Live monitor
+
+`scripts/monitor.py` runs the scans and position checks in **`scans.yaml`** on a
+schedule (default 09:30–16:00 New York time, weekdays, every 60 seconds) and sends
+a desktop notification when something changes. It only checks; it never trades.
+
+```bash
+python scripts/monitor.py               # waits for the start time, then scans every minute
+python scripts/monitor.py --once        # one pass now, full results printed
+python scripts/monitor.py --now         # scan continuously from now, ignoring the clock
+python scripts/monitor.py --start 10:00 --end 15:30
+python scripts/monitor.py --synthetic --once   # offline test
+```
+
+In `scans.yaml`:
+
+- **schedule** — start, end, timezone, days, every_seconds.
+- **watchlists** — named symbol lists, inline or from a file
+  (`file:watchlists/liquid_options.txt`, ~60 liquid optionable names to start from).
+- **scans** — each has a watchlist, a bar `timeframe` (1m, 5m, 15m, 30m, 1h, 1d, 1wk),
+  `stock` conditions on the security and optional `options` filters on its chain
+  (type, DTE range, delta range, open interest, spread, any extra conditions, sort, top N).
+- **positions** — your open trades (legs with strike, expiration, qty, entry price).
+  Each pass marks them from the live chain and returns **EXIT** if any `exit_when`
+  condition is true, **WATCH** if any `watch_when` is, else **HOLD**.
+
+Conditions are plain text: `close > sma(200) and rsi(14) < 40`,
+`crosses_above(ema(9), ema(21))`, `iv > hv(20) * 1.2 and open_interest >= 500`.
+Studies: SMA, EMA, RSI, MACD (+signal/histogram), ATR, ADX/DI, Bollinger Bands, stochastics,
+Williams %R, CCI, OBV, VWAP, historical vol, highest/lowest, % change, relative volume,
+crossovers and look-backs; chain numbers: ATM IV, 25-delta skew, put/call ratios. The
+full list with units is at the top of `scans.yaml`. Conditions are parsed, not executed
+as code, so the file can't run anything but these studies; typos are reported at startup
+with suggestions.
+
+Alerts fire when a symbol newly passes a scan or a position's status changes; an EXIT
+repeats every `repeat_exit_minutes`. They use `notify-send` (Ubuntu: `sudo apt install
+libnotify-bin` if missing) and are also printed and logged to `data/monitor/alerts.csv`.
+
+**Data and speed.** Option chains come from CBOE through OpenBB: every expiration and
+strike, Greeks included, free but **15 minutes delayed**. Bars come from Yahoo
+(near real-time for most US stocks), batched ~100 tickers per request. A full pass over
+the default scans takes ~10 s; a chain-based scan over 60 symbols ~30 s, so keep
+chain-heavy scans to a few dozen symbols for a 1-minute cycle. The monitor warns
+when a pass runs longer than `every_seconds`. Real-time chains need a paid feed
+(e.g. Tradier with a brokerage account, or Barchart OnDemand). Barchart's website
+itself can't be used: its terms forbid automated scraping.
+
+To start it automatically, leave it running in a terminal (it sleeps until the start
+time each weekday), or add it to *Startup Applications* on Ubuntu with the command
+`bash -c "cd ~/path/to/Optional && .venv/bin/python scripts/monitor.py"`.
 
 ## Integrations that run outside the core
 
@@ -185,7 +243,11 @@ src/optlab/
   risk/        sizing.py (limits + skfolio)
   research/    features.py (Polars features, scanner, Qlib export)
 app/streamlit_app.py      dashboard
-scripts/                  ingest.py · demo.py
+scripts/                  ingest.py · demo.py · monitor.py
+src/optlab/live/          expr.py (conditions) · indicators.py · feed.py (chains, bars) ·
+                          scanner.py · monitor.py (schedule, alerts)
+scans.yaml                live monitor settings, scans and positions
+watchlists/               symbol lists for scans
 integrations/             lean/ · qlib/ · nautilus/
 tests/                    pytest suite
 ```
