@@ -94,11 +94,17 @@ class Store:
         return df.height
 
     # ------------------------------------------------------------------- reads
+    def _read(self, sql: str, params: list | None = None):
+        """Run a read on its own cursor. One DuckDB connection isn't safe to share across
+        threads, and the dashboard reads from several at once (reruns, browser tabs, the
+        Monitor tab's auto-refresh); sharing it mixed up results between queries."""
+        return self.con.cursor().execute(sql, params or [])
+
     def query(self, sql: str, params: list | None = None) -> pl.DataFrame:
-        return self.con.execute(sql, params or []).pl()
+        return self._read(sql, params).pl()
 
     def columns(self, table: str) -> list[str]:
-        return [r[0] for r in self.con.execute(f"DESCRIBE {table}").fetchall()]
+        return [r[0] for r in self._read(f"DESCRIBE {table}").fetchall()]
 
     def prices(self, symbol: str, start: str | None = None) -> pl.DataFrame:
         sql = "SELECT * FROM prices WHERE symbol = ?"
@@ -130,7 +136,7 @@ class Store:
 
     def has_table(self, table: str) -> bool:
         """False for tables added after a database was built; re-run ingest.py to create them."""
-        return bool(self.con.execute(
+        return bool(self._read(
             "SELECT count(*) FROM information_schema.tables WHERE table_name = ?", [table]).fetchone()[0])
 
     def latest_fundamentals(self) -> pl.DataFrame:
@@ -143,7 +149,7 @@ class Store:
         return df.filter(pl.col("series").is_in(series)) if series else df
 
     def latest_macro(self, series: str) -> float | None:
-        row = self.con.execute("SELECT value FROM macro WHERE series = ? AND value IS NOT NULL "
+        row = self._read("SELECT value FROM macro WHERE series = ? AND value IS NOT NULL "
                                "ORDER BY date DESC LIMIT 1", [series]).fetchone()
         return float(row[0]) if row else None
 
@@ -158,7 +164,7 @@ class Store:
         return self.query("SELECT * FROM financials ORDER BY symbol, metric, period_end")
 
     def symbols(self) -> list[str]:
-        return [r[0] for r in self.con.execute("SELECT DISTINCT symbol FROM prices ORDER BY 1").fetchall()]
+        return [r[0] for r in self._read("SELECT DISTINCT symbol FROM prices ORDER BY 1").fetchall()]
 
     def close(self) -> None:
         self.con.close()

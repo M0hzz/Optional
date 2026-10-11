@@ -182,3 +182,27 @@ def test_filing_flags_only_recent_red_flags():
     syms = ["AAPL", "SPY"]
     assert set(synthetic_filings(syms)["symbol"]) == {"AAPL"}
     assert synthetic_financials(syms)["metric"].n_unique() == 8
+
+
+def test_store_reads_are_thread_safe(tmp_path):
+    # the dashboard shares one Store across threads (reruns, browser tabs, auto-refresh)
+    import threading
+
+    src = SyntheticSource(end=date(2024, 6, 28))
+    with Store(tmp_path / "t.duckdb") as s:
+        s.upsert("prices", src.prices("SPY", "2024-01-01"))
+        s.upsert("macro", src.macro("2024-01-01"))
+    store, errors = Store(tmp_path / "t.duckdb", read_only=True), []
+
+    def work():
+        for _ in range(100):
+            try:
+                assert store.has_table("macro") and store.latest_macro("treasury_3m") is not None
+                assert store.symbols() == ["SPY"] and store.prices("SPY").height > 0
+            except Exception as exc:
+                errors.append(exc)
+    threads = [threading.Thread(target=work) for _ in range(6)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    store.close()
+    assert not errors, errors[:3]
