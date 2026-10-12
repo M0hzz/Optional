@@ -37,7 +37,7 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 40 tests
+python -m pytest                   # 43 tests
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
 streamlit run app/streamlit_app.py # the dashboard
 python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
@@ -150,7 +150,10 @@ as code, so the file can't run anything but these studies; typos are reported at
 with suggestions.
 
 Alerts fire when a symbol newly passes a scan or a position's status changes; an EXIT
-repeats every `repeat_exit_minutes`. They use `notify-send` (Ubuntu: `sudo apt install
+repeats every `repeat_exit_minutes`. To stop a value sitting on a threshold from alerting
+every minute, a symbol alerts again for a scan only after being out of it for
+`rearm_minutes` (30), and a position's new status must hold for `confirm_passes` (3)
+passes in a row. They use `notify-send` (Ubuntu: `sudo apt install
 libnotify-bin` if missing) and are also printed and logged to `data/monitor/alerts.csv`.
 
 **Data and speed.** Option chains come from CBOE through OpenBB: every expiration and
@@ -161,6 +164,13 @@ chain-heavy scans to a few dozen symbols for a 1-minute cycle. The monitor warns
 when a pass runs longer than `every_seconds`. Real-time chains need a paid feed
 (e.g. Tradier with a brokerage account, or Barchart OnDemand). Barchart's website
 itself can't be used: its terms forbid automated scraping.
+
+**Rehearse first.** `python scripts/simulate_day.py` replays a scripted synthetic
+session (morning rally, a momentum burst, an afternoon selloff with an IV spike,
+recovery) through your scans and three demo positions, one pass per simulated minute,
+in about three minutes. `--speed 1` runs one simulated minute per second; `--notify`
+sends the desktop alerts; `--own-positions` uses yours. The log is saved to
+`data/simulation/day_log.txt`.
 
 To start it automatically, leave it running in a terminal (it sleeps until the start
 time each weekday), or add it to *Startup Applications* on Ubuntu with the command
@@ -243,9 +253,9 @@ src/optlab/
   risk/        sizing.py (limits + skfolio)
   research/    features.py (Polars features, scanner, Qlib export)
 app/streamlit_app.py      dashboard
-scripts/                  ingest.py · demo.py · monitor.py
+scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py
 src/optlab/live/          expr.py (conditions) · indicators.py · feed.py (chains, bars) ·
-                          scanner.py · monitor.py (schedule, alerts)
+                          scanner.py · monitor.py (schedule, alerts) · replay.py (simulated day)
 scans.yaml                live monitor settings, scans and positions
 watchlists/               symbol lists for scans
 integrations/             lean/ · qlib/ · nautilus/

@@ -78,7 +78,8 @@ def main() -> None:
     print(f"Loading {source} data feed...", flush=True)
     feed = make_feed(source, rate=rate, chain_source=data.get("chain_source", "cboe"),
                      chain_refresh=float(data.get("chain_refresh_seconds", 50)))
-    tracker = AlertTracker(OUT / "alert_state.json", alerts_cfg.get("repeat_exit_minutes", 15))
+    tracker = AlertTracker(OUT / "alert_state.json", alerts_cfg.get("repeat_exit_minutes", 15),
+                           alerts_cfg.get("rearm_minutes", 30), alerts_cfg.get("confirm_passes", 3))
     if desktop and not notify("optlab monitor", "Notifications are working.", "low"):
         print("notify-send not found: alerts will print here only. On Ubuntu: sudo apt install libnotify-bin")
         desktop = False

@@ -170,13 +170,42 @@ def test_schedule_window_and_next_start():
 
 
 def test_alerts_fire_on_changes_only(tmp_path):
-    t = AlertTracker(tmp_path / "s.json", repeat_exit_minutes=15)
+    t = AlertTracker(tmp_path / "s.json", repeat_exit_minutes=15, rearm_minutes=30, confirm_passes=1)
     hits = pd.DataFrame([{"scan": "a", "symbol": "SPY", "price": 1.0, "contract": None, "details": ""}])
     pos = pd.DataFrame([{"position": "p", "status": "HOLD", "reasons": "", "pnl": 1.0, "pnl_pct": 1.0}])
     now = datetime(2026, 10, 9, 10, 0, tzinfo=NY)
     assert len(t.alerts(hits, pos, now)) == 1                       # new hit; HOLD on first sight is quiet
-    assert t.alerts(hits, pos, now) == []                           # nothing changed
+    assert t.alerts(hits, pos, now + timedelta(minutes=1)) == []    # nothing changed
     pos.loc[0, "status"] = "EXIT"
-    assert "HOLD → EXIT" in t.alerts(hits, pos, now)[0][0]
-    assert t.alerts(hits, pos, now + timedelta(minutes=5)) == []    # within repeat window
-    assert len(t.alerts(hits, pos, now + timedelta(minutes=16))) == 1
+    assert "HOLD → EXIT" in t.alerts(hits, pos, now + timedelta(minutes=2))[0][0]
+    assert t.alerts(hits, pos, now + timedelta(minutes=7)) == []    # within the repeat window
+    assert "still" in t.alerts(hits, pos, now + timedelta(minutes=18))[0][0]
+
+
+def test_alerts_ignore_flapping(tmp_path):
+    t = AlertTracker(tmp_path / "s.json", rearm_minutes=30, confirm_passes=3)
+    hit = pd.DataFrame([{"scan": "a", "symbol": "SPY", "price": 1.0, "contract": None, "details": ""}])
+    none = hit.iloc[0:0]
+    pos = lambda st: pd.DataFrame([{"position": "p", "status": st, "reasons": "", "pnl": 0.0, "pnl_pct": 0.0}])  # noqa: E731
+    t0 = datetime(2026, 10, 9, 10, 0, tzinfo=NY)
+    at = lambda m: t0 + timedelta(minutes=m)  # noqa: E731
+    assert len(t.alerts(hit, pos("HOLD"), at(0))) == 1
+    t.alerts(none, pos("WATCH"), at(1))                           # drops out, status wobbles for one pass
+    assert t.alerts(hit, pos("HOLD"), at(2)) == []                # back within 30 min, status back: silence
+    for m in (3, 4):
+        assert t.alerts(none, pos("WATCH"), at(m)) == []          # WATCH not yet confirmed
+    assert "HOLD → WATCH" in t.alerts(none, pos("WATCH"), at(5))[0][0]   # third pass in a row
+    assert len(t.alerts(hit, pos("WATCH"), at(40))) == 1          # out of the scan > 30 min: re-armed
+
+
+def test_replay_day_tells_its_story():
+    from optlab.live.replay import ReplayFeed, demo_positions
+
+    feed = ReplayFeed(date(2026, 10, 12), ["SPY", "IWM", "AAPL", "NVDA"])
+    spy = [feed.set_minute(m) or feed.spot("SPY") for m in (0, 60, 285)]
+    assert spy[1] > spy[0] > spy[2] and spy[2] / spy[0] < 0.985     # rally, then the selloff
+    positions = demo_positions(feed)
+    feed.set_minute(0)
+    first, _ = run_positions({"positions": positions}, feed, today=feed.day)
+    assert (first["status"] != "ERROR").all()
+    assert feed.bars(["SPY"], "5m")["SPY"].index[-1].date() == feed.day

@@ -20,6 +20,8 @@ data:
 alerts:
   desktop: true
   repeat_exit_minutes: 15    # re-alert an EXIT this often while it stays true (0 = once)
+  rearm_minutes: 30          # a scan hit alerts again only after being out of the scan this long
+  confirm_passes: 3          # a position's new status must hold this many passes before alerting
 
 # Lists of symbols. Use them in scans with `watchlist: name` (or a list of names).
 # A list can also live in a file, one symbol per line:  big: file:watchlists/liquid_options.txt
@@ -89,6 +91,7 @@ scans:
     timeframe: 1m
     stock:
       - crosses_above(rsi(14), 30)
+      - change_pct(30) < -1           # only after a real drop: down over 1% in 30 minutes
 
 # ------------------------------------------------------------ positions
 # Open trades to check every pass. Status: EXIT if any exit_when is true, else

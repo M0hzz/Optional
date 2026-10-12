@@ -3,8 +3,8 @@
 Schedule   runs between `start` and `end` on the listed weekdays, in `timezone`,
            every `every_seconds` seconds aligned to the clock (09:31:00, 09:32:00, ...).
 Alerts     a desktop notification when a symbol newly passes a scan, or a position's
-           status changes (HOLD -> WATCH -> EXIT). EXIT repeats every
-           `repeat_exit_minutes` while it stays true. Nothing is re-sent every minute.
+           status changes (HOLD -> WATCH -> EXIT); see AlertTracker for the guards that
+           stop a value sitting on a threshold from alerting every minute.
 Files      data/monitor/latest_hits.parquet, latest_positions.parquet and status.json
            (read by the dashboard's Monitor tab) and alerts.csv (a log of every alert).
 """
@@ -89,28 +89,38 @@ def notify(title: str, body: str, urgency: str = "normal") -> bool:
 
 
 class AlertTracker:
-    """Remembers what was already alerted (survives restarts within the same day)."""
+    """Decides which changes deserve a notification; survives restarts within the same day.
 
-    def __init__(self, state_path: Path, repeat_exit_minutes: float = 15):
+    Two guards keep a symbol or position sitting on a threshold from alerting every minute:
+    - a scan hit alerts when it first appears, and again only after it has been out of
+      that scan for `rearm_minutes`;
+    - a position's new status must hold for `confirm_passes` passes in a row before it is
+      alerted (its first status of the day is reported at once, unless it is HOLD).
+    An EXIT repeats every `repeat_exit_minutes` while it stays the alerted status.
+    """
+
+    def __init__(self, state_path: Path, repeat_exit_minutes: float = 15, rearm_minutes: float = 30,
+                 confirm_passes: int = 3):
         self.path, self.repeat = state_path, repeat_exit_minutes
-        self.state = {"day": str(date.today()), "hits": [], "positions": {}, "exit_alerted": {}}
+        self.rearm, self.confirm = rearm_minutes, max(int(confirm_passes), 1)
+        self.state = {"day": str(date.today()), "hits_seen": {}, "pos": {}}
         if state_path.exists():
             try:
                 saved = json.loads(state_path.read_text())
-                if saved.get("day") == str(date.today()):
+                if saved.get("day") == str(date.today()) and "pos" in saved:
                     self.state.update(saved)
             except Exception:
                 pass
 
     def alerts(self, hits: pd.DataFrame, positions: pd.DataFrame, now: datetime) -> list[tuple[str, str, str]]:
-        out = []
-        current = {}
+        out, ts = [], now.timestamp()
+        seen = self.state["hits_seen"]
         for (scan, sym), g in hits.groupby(["scan", "symbol"], sort=False):
-            current[f"{scan}|{sym}"] = g
-        seen = set(self.state["hits"])
-        for key in [k for k in current if k not in seen]:
-            scan, sym = key.split("|", 1)
-            g = current[key]
+            key = f"{scan}|{sym}"
+            last = seen.get(key)
+            seen[key] = ts
+            if last is not None and ts - last <= self.rearm * 60 + 1:
+                continue  # still in the scan, or back after only a short gap
             body = f"{sym} @ {g['price'].iloc[0]:,.2f}"
             if g["contract"].notna().any():
                 r = g.iloc[0]
@@ -119,23 +129,29 @@ class AlertTracker:
             elif g["details"].iloc[0]:
                 body += f"\n{g['details'].iloc[0]}"
             out.append((f"Scan hit: {scan}", body, "normal"))
-        self.state["hits"] = sorted(current)
 
         for r in positions.to_dict("records"):
             name, status = r["position"], r["status"]
-            before = self.state["positions"].get(name)
-            last_exit = self.state["exit_alerted"].get(name)
-            repeat_due = (status == "EXIT" and last_exit and self.repeat
-                          and now.timestamp() - last_exit >= self.repeat * 60)
-            changed = status != before and not (before is None and status == "HOLD")
-            if changed or repeat_due:
+            p = self.state["pos"].setdefault(name, {"alerted": None, "cand": None, "count": 0, "exit_at": None})
+            p["count"] = p["count"] + 1 if status == p["cand"] else 1
+            p["cand"] = status
+            title = None
+            if p["alerted"] is None:
+                if status != "HOLD":
+                    title = f"{status}: {name}"
+                p["alerted"] = status
+            elif status != p["alerted"] and p["count"] >= self.confirm:
+                title = f"{p['alerted']} → {status}: {name}"
+                p["alerted"] = status
+            elif (status == p["alerted"] == "EXIT" and self.repeat and p["exit_at"]
+                  and ts - p["exit_at"] >= self.repeat * 60):
+                title = f"EXIT (still): {name}"
+            if title:
                 pnl = f" P&L {r['pnl']:+,.0f} ({r['pnl_pct']:+.0f}%)" if pd.notna(r.get("pnl")) else ""
-                title = f"{status}: {name}" if before is None or repeat_due else f"{before} → {status}: {name}"
                 out.append((title, (r["reasons"] or "all conditions OK") + pnl,
                             "critical" if status in ("EXIT", "ERROR") else "normal"))
                 if status == "EXIT":
-                    self.state["exit_alerted"][name] = now.timestamp()
-            self.state["positions"][name] = status
+                    p["exit_at"] = ts
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self.state))
         return out
