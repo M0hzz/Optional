@@ -83,13 +83,22 @@ class Evaluator:
     functions it knows (sma, rsi, ...) are handed to it whole and reduced to their latest
     value, so contract- and position-level conditions can mix chain columns with
     indicators: `bid > 1 and rsi(14) < 40`.
+
+    `memo`, when given, caches every function call's result by its syntax tree, so a
+    study used by several conditions (`ema(9)` in three rules) is computed once. Only
+    pass one when names and funcs stay fixed for the evaluator's lifetime.
     """
 
-    def __init__(self, names: dict, funcs: dict | None = None, series_eval: "Evaluator | None" = None):
-        self.names, self.funcs, self.series_eval = names, funcs or {}, series_eval
+    def __init__(self, names: dict, funcs: dict | None = None, series_eval: "Evaluator | None" = None,
+                 memo: dict | None = None):
+        self.names, self.funcs, self.series_eval, self.memo = names, funcs or {}, series_eval, memo
 
     def __call__(self, text: str):
         return self._eval(parse(text).body, text)
+
+    def node(self, node: ast.AST, text: str = ""):
+        """Evaluate one sub-expression of a parsed condition (used to measure its parts)."""
+        return self._eval(node, text)
 
     def _eval(self, node, text):
         if isinstance(node, ast.Constant):
@@ -105,12 +114,20 @@ class Evaluator:
         if isinstance(node, ast.Call):
             fname = node.func.id
             if fname in self.funcs:
+                key = ast.dump(node) if self.memo is not None else None
+                if key is not None and key in self.memo:
+                    return self.memo[key]
                 args = [self._eval(a, text) for a in node.args]
                 kwargs = {k.arg: self._eval(k.value, text) for k in node.keywords}
                 try:
-                    return self.funcs[fname](*args, **kwargs)
-                except TypeError as exc:
+                    out = self.funcs[fname](*args, **kwargs)
+                except ExprError:
+                    raise
+                except (TypeError, ValueError) as exc:
                     raise ExprError(f"Bad arguments to {fname}() in {text!r}: {exc}") from None
+                if key is not None:
+                    self.memo[key] = out
+                return out
             if self.series_eval is not None and fname in self.series_eval.funcs:
                 return last(self.series_eval._eval(node, text))
             raise ExprError(self._unknown(fname, text, "function"))

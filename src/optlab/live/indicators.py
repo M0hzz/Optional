@@ -95,7 +95,7 @@ def bar_functions(bars: pd.DataFrame, timeframe: str = "1d") -> tuple[dict, dict
 
     def change_pct(n=1, s=None):
         s = src(s)
-        return 100 * (s / s.shift(int(n)) - 1)
+        return 100 * (s / s.shift(_lookback(n, "change_pct")) - 1)
 
     def crosses_above(a, b):
         a, b = _series(a, c), _series(b, c)
@@ -136,7 +136,7 @@ def bar_functions(bars: pd.DataFrame, timeframe: str = "1d") -> tuple[dict, dict
         "distance_pct": lambda a, b: 100 * (_series(a, c) / _series(b, c) - 1),
         "avg_volume": lambda n=20: v.rolling(int(n)).mean(),
         "rel_volume": lambda n=20: v / v.rolling(int(n)).mean(),
-        "ago": lambda x, n=1: _series(x, c).shift(int(n)),
+        "ago": lambda x, n=1: _series(x, c).shift(_lookback(n, "ago", minimum=0)),
         "crosses_above": crosses_above,
         "crosses_below": crosses_below,
         "abs": lambda x: x.abs() if isinstance(x, pd.Series) else abs(x),
@@ -145,6 +145,16 @@ def bar_functions(bars: pd.DataFrame, timeframe: str = "1d") -> tuple[dict, dict
     }
     names = {"open": o, "high": h, "low": l, "close": c, "price": c, "volume": v}
     return names, funcs
+
+
+def _lookback(n, fname: str, minimum: int = 1) -> int:
+    """Bar counts must look backwards: a negative shift would read future bars."""
+    if not float(n).is_integer() or int(n) < minimum:
+        from .expr import ExprError
+
+        raise ExprError(f"{fname}() needs a whole number of bars >= {minimum}, got {n!r}"
+                        + (" (negative values would look into the future)" if float(n) < 0 else ""))
+    return int(n)
 
 
 def _series(x, like: pd.Series) -> pd.Series:
