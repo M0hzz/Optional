@@ -11,13 +11,15 @@ data:
 universe: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMZN, JPM]
 
 market:
-  risk_free_rate: 0.04             # used when no live rate is available
+  risk_free_rate: 0.04             # fallback when the macro table has no Treasury yield yet
+  rate_series: treasury_3m         # macro series used as the risk-free rate in pricing
   dividend_yield: 0.0
 
 edgar:
   # The SEC requires a name + email on every request.
   identity: "Your Name your.email@example.com"
-  lookback_days: 180
+  lookback_days: 180               # Form 4 insider trades
+  filings_lookback_days: 365       # 8-K / 10-Q / 10-K filings
 
 account:
   equity: 100000

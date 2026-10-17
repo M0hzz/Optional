@@ -1,0 +1,66 @@
+# Liquid, actively traded US options. One symbol per line; edit freely.
+# ETFs
+SPY
+QQQ
+IWM
+DIA
+XLF
+XLE
+XLK
+GLD
+SLV
+TLT
+HYG
+EEM
+# Tech
+AAPL
+MSFT
+NVDA
+AMZN
+GOOGL
+META
+TSLA
+AVGO
+AMD
+NFLX
+ORCL
+CRM
+ADBE
+INTC
+MU
+QCOM
+PLTR
+SHOP
+UBER
+# Financials
+JPM
+BAC
+WFC
+GS
+MS
+C
+COIN
+PYPL
+# Energy and industrials
+XOM
+CVX
+OXY
+CAT
+BA
+GE
+F
+GM
+# Health and consumer
+UNH
+LLY
+JNJ
+PFE
+MRK
+ABBV
+KO
+PEP
+WMT
+COST
+HD
+NKE
+DIS

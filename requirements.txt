@@ -14,7 +14,9 @@ altair
 pytest
 
 # Real data
-openbb
+openbb>=4.5,<5      # 5.x moved to per-provider namespaces (obb.cboe...) and dropped yfinance
+openbb-yfinance
+openbb-cboe>=1.4,<2   # full option chains with Greeks (the monitor and the Option chain tab)
 edgartools
 
 # Execution / automation
