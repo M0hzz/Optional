@@ -37,7 +37,7 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 43 tests
+python -m pytest                   # 96 tests
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
 streamlit run app/streamlit_app.py # the dashboard
 python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
@@ -72,7 +72,7 @@ key with `obb.user.credentials`.
 | **vectorbt** | `src/optlab/backtest/quick.py` | Simulates put-writes, covered calls, put spreads and iron condors on any price history (profit-take, stop, slippage, commissions, T-bill yield on collateral), scores them with vectorbt, sweeps DTE × delta. |
 | **LEAN** | `integrations/lean/wheel/` | The Wheel (cash-secured puts → assignment → covered calls) using real option quotes, IB fees, and delta-based contract selection. |
 | **skfolio** | `src/optlab/risk/sizing.py` | Allocates across strategy return streams (min CVaR, risk parity on drawdown, HRP, max Sharpe). Alongside: per-trade sizing by max loss and concentration, and book-level delta/vega/concentration limits. |
-| **Streamlit** | `app/streamlit_app.py` | Ten tabs: Scanner · Chain & pricer · Strategy lab · Backtest · Risk & sizing · Insiders · Company · Macro · Option chain · Monitor. |
+| **Streamlit** | `app/streamlit_app.py` | Eleven tabs: Scanner · Chain & pricer · Strategy lab · Backtest · Risk & sizing · Insiders · Company · Macro · Option chain · Monitor · Signal explorer. |
 | **Qlib** | `integrations/qlib/vol_ranker.py` | Trains LightGBM to predict which underlyings' volatility will fall over the next month (best to sell premium on). Rankings appear in the dashboard scanner. |
 | **NautilusTrader** | `integrations/nautilus/` | `DeltaHedger` keeps an options book delta-neutral by trading the underlying. Same class for backtest and live. |
 
@@ -176,6 +176,72 @@ To start it automatically, leave it running in a terminal (it sleeps until the s
 time each weekday), or add it to *Startup Applications* on Ubuntu with the command
 `bash -c "cd ~/path/to/Optional && .venv/bin/python scripts/monitor.py"`.
 
+## Historical Signal Explorer
+
+Answers *"in this past period, at which bars did my conditions match or nearly match, and
+exactly why?"* It is historical information for research and education. It recommends
+nothing, assumes no trades, and never places one.
+
+```bash
+python scripts/explore.py strategies/momentum_breakout.yaml            # live Yahoo data
+python scripts/explore.py strategies/oversold_recovery.yaml --csv out.csv
+python scripts/explore.py my.yaml --source synthetic --symbols AAPL MSFT --start 2026-01-01
+```
+
+Or use the **Signal explorer** dashboard tab: pick or edit a strategy, press **Search**,
+filter the results, select one for its explanation and chart, and read the forward
+behaviour table. Strategies live in `strategies/*.yaml` (three examples ship:
+momentum breakout, oversold recovery, trend pullback).
+
+```yaml
+historical_signal_search:
+  name: Pullback in an uptrend
+  symbols: [SPY]
+  timeframe: 1d                      # 1m 5m 15m 30m 1h 1d 1wk
+  range: {start: 2020-01-01, end: 2026-10-01, timezone: America/New_York, market_hours_only: true}
+  conditions:
+    - id: trend
+      expression: close > sma(200)
+      weight: 40
+      tolerance: {type: percent_distance, value: 1}     # within 1% of the SMA counts as near
+    - id: oversold
+      expression: rsi(14) < 35
+      required: false
+      weight: 60
+      tolerance: {type: absolute, value: 5}             # RSI up to 40 counts as near
+  matching: {minimum_score: 70, include_exact: true, include_near: true}
+```
+
+**Conditions** use the same language as `scans.yaml`, plus behaviour functions:
+`rising`, `falling` (strictly, each of the last N bars), `increasing`, `decreasing`
+(flat steps allowed, net move required), `stayed_above`, `stayed_below`,
+`crossed_above_within`, `crossed_below_within`, `touched(a, b, tolerance_pct=)` and
+`between(x, lo, hi)` (inclusive). A `sequence:` lists ordered steps, each within
+`within_bars` bars of the previous one (same bar allowed).
+
+**Scoring.** Exact = every condition passes. Each condition earns credit: pass 1; near
+(failing, but its shortfall is strictly inside its tolerance) `min(0.99, 1 − shortfall /
+tolerance)`; fail 0. Score = `100 × Σ(weight × credit) / Σ weight`. Shortfall is the
+distance to the threshold (absolute, or % of the compared value for `percent_distance`);
+for ranges, the distance to the broken bound; for crossovers, the gap before crossing, or
+"recent" if it crossed within `recent_bars` (credit `1 − k / (recent_bars + 1)`). Other
+expressions are pass/fail only and say so. Near matches also need the required conditions
+(strict: pass; tolerant: pass or near), `minimum_score` and `minimum_pass_count`.
+
+**Forward behaviour after signal** (not a backtest): return, maximum favourable and
+adverse move and realized vol from the signal bar's close, over N bars or N trading days.
+Horizons past the data are marked incomplete; `dedupe_bars` spaces signals out.
+
+**Data and its limits.** Bars come from Yahoo (fetched into `data/history.duckdb`, which
+keeps everything already fetched), the archive alone, or synthetic data. Yahoo's free
+intraday history is short: about 7 days of 1m, 60 days of 5m–30m, 730 days of 1h; daily
+goes back decades. Fetch regularly to build longer intraday history. Every search reports
+its data source, first and last bar, warm-up, missing bars, holidays, whether prices are
+adjusted and whether extended hours are included. Only completed bars are evaluated;
+bars still warming up are "not evaluable" and never match. Option conditions (IV,
+Greeks, skew, put/call) and earnings dates are refused: optlab has no timestamped
+history of them. Early-close days count as missing bars (the calendar has no half-days).
+
 ## Integrations that run outside the core
 
 ### LEAN (realistic validation)
@@ -253,10 +319,14 @@ src/optlab/
   risk/        sizing.py (limits + skfolio)
   research/    features.py (Polars features, scanner, Qlib export)
 app/streamlit_app.py      dashboard
-scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py
+scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py · explore.py
 src/optlab/live/          expr.py (conditions) · indicators.py · feed.py (chains, bars) ·
                           scanner.py · monitor.py (schedule, alerts) · replay.py (simulated day)
 scans.yaml                live monitor settings, scans and positions
+src/optlab/history/       bars.py (archive, Yahoo, synthetic) · strategy.py (YAML validation) ·
+                          explorer.py (evaluation, scoring) · forward.py · library.py (saved strategies/searches)
+app/signal_explorer.py    the Signal explorer tab
+strategies/               historical-search strategies (YAML)
 watchlists/               symbol lists for scans
 integrations/             lean/ · qlib/ · nautilus/
 tests/                    pytest suite

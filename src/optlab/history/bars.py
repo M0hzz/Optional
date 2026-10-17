@@ -91,7 +91,7 @@ class Archive:
             return 0
         rows = df.reset_index().rename(columns={df.index.name or "index": "ts"})
         rows = rows.assign(symbol=symbol, timeframe=timeframe, source=source, adjusted=adjusted,
-                           fetched_at=pd.Timestamp.utcnow().tz_localize(None))
+                           fetched_at=pd.Timestamp.now("UTC").tz_localize(None))
         cols = ["symbol", "timeframe", "ts", "open", "high", "low", "close", "volume", "session", "source",
                 "adjusted", "fetched_at"]
         self.con.register("_in", rows[cols])
@@ -178,49 +178,62 @@ def _daily_walk(symbol: str) -> pd.DataFrame:
     return pd.DataFrame({"open": open_, "close": close, "vol": vol}, index=pd.DatetimeIndex(days))
 
 
-def _session_minutes(symbol: str, day: date, open_: float, close: float, vol_day: float) -> pd.DataFrame:
-    rng = np.random.default_rng(_seed("minutes", symbol, day))
-    steps = rng.standard_normal(390) * vol_day / np.sqrt(390)
-    walk = np.cumsum(steps)
-    bridge = walk - np.linspace(0, 1, 390) * walk[-1]          # pinned to the day's close
-    path = np.exp(np.log(open_) + np.linspace(0, 1, 390) * np.log(close / open_) + bridge)
-    prev = np.r_[open_, path[:-1]]
-    wick = np.abs(rng.normal(0, vol_day / np.sqrt(390) / 2, 390)) * path
+def _session_paths(symbol: str, days, opens, closes, vols) -> dict[str, np.ndarray]:
+    """Minute OHLCV for many sessions at once, as (sessions x 390) arrays. Each session is
+    seeded by (symbol, date), so its bars never depend on which other days are generated."""
+    m = len(days)
+    steps = np.empty((m, 390))
+    wick_n = np.empty((m, 390))
+    vol_n = np.empty((m, 390))
+    for r, day in enumerate(days):
+        rng = np.random.default_rng(_seed("minutes", symbol, day))
+        steps[r], wick_n[r], vol_n[r] = rng.standard_normal(390), rng.standard_normal(390), rng.standard_normal(390)
+    sd = (vols / np.sqrt(390))[:, None]
+    walk = np.cumsum(steps * sd, axis=1)
+    lin = np.linspace(0, 1, 390)[None, :]
+    bridge = walk - lin * walk[:, -1:]                         # pinned to each day's close
+    path = np.exp(np.log(opens)[:, None] + lin * np.log(closes / opens)[:, None] + bridge)
+    prev = np.concatenate([opens[:, None], path[:, :-1]], axis=1)
+    wick = np.abs(wick_n * sd / 2) * path
     u = 1 + 1.5 * np.linspace(-1, 1, 390) ** 2
-    vol = 2e4 * u * rng.lognormal(0, 0.35, 390)
-    start = datetime.combine(day, SESSION_OPEN)
-    idx = pd.DatetimeIndex([start + timedelta(minutes=i) for i in range(390)]).tz_localize(EXCHANGE_TZ)
-    return pd.DataFrame({"open": prev, "high": np.maximum(prev, path) + wick, "low": np.minimum(prev, path) - wick,
-                         "close": path, "volume": vol}, index=idx)
+    volume = 2e4 * u[None, :] * np.exp(0.35 * vol_n)
+    return {"open": prev, "high": np.maximum(prev, path) + wick, "low": np.minimum(prev, path) - wick,
+            "close": path, "volume": volume}
+
+
+def _aggregate(a: dict, width: int) -> dict:
+    """Combine each session's minutes into bins of `width` minutes anchored at 09:30 (1h: 7 bins, the last 30 min)."""
+    edges = np.arange(0, 390, width)
+    return {"open": a["open"][:, edges], "close": a["close"][:, np.r_[edges[1:] - 1, 389]],
+            "high": np.maximum.reduceat(a["high"], edges, axis=1), "low": np.minimum.reduceat(a["low"], edges, axis=1),
+            "volume": np.add.reduceat(a["volume"], edges, axis=1)}
 
 
 def synthetic_bars(symbol: str, timeframe: str, start: date, end: date) -> pd.DataFrame:
     """Regular-session synthetic bars, indexed by naive UTC timestamps like the archive."""
     walk = _daily_walk(symbol)
     walk = walk[(walk.index >= pd.Timestamp(start)) & (walk.index <= pd.Timestamp(end))]
-    frames = [_session_minutes(symbol, d.date(), r.open, r.close, r.vol) for d, r in walk.iterrows()]
-    if not frames:
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume", "session"])
-    m = pd.concat(frames)
-    rule = {"1m": None, "5m": "5min", "15m": "15min", "30m": "30min", "1h": "60min", "1d": "D", "1wk": "W-FRI"}[timeframe]
-    agg = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
-    if rule is None:
-        out = m
-    elif timeframe in INTRADAY:
-        # session-anchored bins, like exchange bars: 09:30, 10:30, ... for 1h
-        parts = [g.resample(rule, origin=g.index[0], label="left", closed="left").agg(agg)
-                 for _, g in m.groupby(m.index.date)]
-        out = pd.concat(parts).dropna()
+    cols = ["open", "high", "low", "close", "volume"]
+    if walk.empty:
+        return pd.DataFrame(columns=cols + ["session"])
+    days = [d.date() for d in walk.index]
+    a = _session_paths(symbol, days, walk["open"].to_numpy(), walk["close"].to_numpy(), walk["vol"].to_numpy())
+    if timeframe in INTRADAY:
+        width = INTRADAY[timeframe]
+        b = a if width == 1 else _aggregate(a, width)
+        per = b["close"].shape[1]
+        offs = pd.to_timedelta(np.arange(per) * width, unit="min")
+        local = pd.DatetimeIndex([pd.Timestamp.combine(d, SESSION_OPEN) + o for d in days for o in offs])
+        idx = local.tz_localize(EXCHANGE_TZ).tz_convert("UTC").tz_localize(None)
+        out = pd.DataFrame({k: b[k].ravel() for k in cols}, index=idx)
     else:
-        out = m.tz_localize(None).resample(rule).agg(agg).dropna()
+        daily = _aggregate(a, 390)
+        out = pd.DataFrame({k: daily[k].ravel() for k in cols}, index=pd.DatetimeIndex(days))
         if timeframe == "1wk":  # Yahoo labels weeks by their Monday
+            out = out.resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last",
+                                             "volume": "sum"}).dropna()
             out.index = out.index - pd.Timedelta(days=4)
-        out["session"] = "regular"
-        out.index.name = "ts"
-        return out
-    out = out.copy()
     out["session"] = "regular"
-    out.index = out.index.tz_convert("UTC").tz_localize(None)
     out.index.name = "ts"
     return out
 
@@ -271,10 +284,37 @@ def _calendar_days_for(bars: int, timeframe: str) -> int:
     return int(math.ceil(bars / per_day * 7 / 5 * 1.25)) + 7
 
 
+_CACHE: dict[tuple, tuple[float, tuple]] = {}
+CACHE_SECONDS = {"yahoo": 600, "archive": 600, "synthetic": 86_400}
+
+
+def clear_cache() -> None:
+    _CACHE.clear()
+
+
 def load_history(symbol: str, timeframe: str, start, end, tz: str = EXCHANGE_TZ, market_hours_only: bool = True,
                  warmup_bars: int = 200, source: str = "yahoo", archive_path: str | Path = DEFAULT_ARCHIVE,
-                 now: datetime | None = None) -> tuple[pd.DataFrame, pd.Series, DataReport]:
-    """Bars for [start - warm-up, end] in `tz`, a mask of the bars inside [start, end], and a report."""
+                 now: datetime | None = None, use_cache: bool = True) -> tuple[pd.DataFrame, pd.Series, DataReport]:
+    """Bars for [start - warm-up, end] in `tz`, a mask of the bars inside [start, end], and a report.
+
+    Results are cached in memory by symbol, timeframe, range and settings (10 minutes for Yahoo and
+    the archive, a day for synthetic), so re-running a search with different scoring doesn't refetch."""
+    import copy
+    import time as _time
+
+    key = (symbol, timeframe, str(start), str(end), tz, market_hours_only, int(warmup_bars), source,
+           str(archive_path), str(now))
+    hit = _CACHE.get(key) if use_cache else None
+    if hit and _time.time() - hit[0] < CACHE_SECONDS.get(source, 600):
+        bars, mask, rep = hit[1]
+        return bars, mask, copy.deepcopy(rep)
+    out = _load_history(symbol, timeframe, start, end, tz, market_hours_only, warmup_bars, source, archive_path, now)
+    if use_cache:
+        _CACHE[key] = (_time.time(), out)
+    return out[0], out[1], copy.deepcopy(out[2])
+
+
+def _load_history(symbol, timeframe, start, end, tz, market_hours_only, warmup_bars, source, archive_path, now):
     if timeframe not in TIMEFRAMES:
         raise ValueError(f"timeframe must be one of {', '.join(TIMEFRAMES)}")
     t0, t1 = to_local(start, tz), to_local(end, tz, end_of_day=True)

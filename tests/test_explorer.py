@@ -400,3 +400,103 @@ def test_results_record_matches_beyond_the_limit():
     bars = daily(np.full(10, 110.0))
     res = search(strat(["close > 105"], output={"limit": 3}), bars)
     assert len(res.results) == 3 and res.total_matches == 10
+
+
+# ----------------------------------------------- data edge cases, persistence
+def test_missing_bars_inside_the_data_are_counted(tmp_path):
+    from optlab.history.bars import Archive
+
+    raw = synthetic_bars("XYZ", "5m", date(2026, 3, 2), date(2026, 3, 6))
+    with Archive(tmp_path / "h.duckdb") as a:
+        a.upsert_bars("XYZ", "5m", raw.drop(raw.index[100:110]), "test")      # a 50-minute hole on Mar 3
+    _, mask, rep = load_history("XYZ", "5m", "2026-03-02", "2026-03-06", source="archive", warmup_bars=0,
+                                archive_path=tmp_path / "h.duckdb", now="2026-03-10", use_cache=False)
+    assert rep.missing_bars == 10 and int(mask.sum()) == 5 * 78 - 10 and rep.sessions_before_data == 0
+
+
+def test_extended_hours_bars_follow_the_toggle(tmp_path):
+    from optlab.history.bars import Archive
+
+    raw = synthetic_bars("XYZ", "5m", date(2026, 3, 2), date(2026, 3, 2))
+    pre = raw.iloc[:3].copy()
+    pre.index = pre.index - pd.Timedelta(hours=2)                              # 07:30-07:40 ET
+    pre["session"] = "extended"
+    with Archive(tmp_path / "h.duckdb") as a:
+        a.upsert_bars("XYZ", "5m", pd.concat([pre, raw]), "test")
+    kw = dict(source="archive", warmup_bars=0, archive_path=tmp_path / "h.duckdb", now="2026-03-10", use_cache=False)
+    reg, _, rep = load_history("XYZ", "5m", "2026-03-02", "2026-03-02", market_hours_only=True, **kw)
+    allb, _, rep2 = load_history("XYZ", "5m", "2026-03-02", "2026-03-02", market_hours_only=False, **kw)
+    assert len(reg) == 78 and len(allb) == 81 and allb.index[0].strftime("%H:%M") == "07:30"
+    assert not rep.extended_hours_included and rep2.extended_hours_included
+
+
+def test_dst_fall_back_keeps_session_times():
+    bars, mask, _ = load_history("XYZ", "1h", "2026-10-30", "2026-11-02", source="synthetic", warmup_bars=0,
+                                 now="2026-11-10")
+    inr = bars[mask.to_numpy()]
+    firsts = inr.groupby(inr.index.date).head(1).index
+    assert [t.strftime("%H:%M%z") for t in firsts] == ["09:30-0400", "09:30-0500"]   # clocks fell back Nov 1
+
+
+def test_bar_cache_avoids_reloading():
+    from optlab.history import bars as hb
+
+    hb.clear_cache()
+    a = load_history("XYZ", "5m", "2026-03-02", "2026-03-03", source="synthetic", warmup_bars=10, now="2026-03-10")
+    b = load_history("XYZ", "5m", "2026-03-02", "2026-03-03", source="synthetic", warmup_bars=10, now="2026-03-10")
+    assert a[0] is b[0] and len(hb._CACHE) == 1
+    b[2].warnings.append("x")
+    assert "x" not in load_history("XYZ", "5m", "2026-03-02", "2026-03-03", source="synthetic", warmup_bars=10,
+                                   now="2026-03-10")[2].warnings                     # reports are copies
+
+
+def test_each_study_is_computed_once(monkeypatch):
+    import optlab.live.indicators as ind
+
+    calls = []
+    real = ind.ema
+    monkeypatch.setattr(ind, "ema", lambda *a, **k: calls.append(1) or real(*a, **k))
+    search(strat(["ema(9) > ema(21)", "ema(9) > ema(21) * 0.99", "close > ema(9)"]), daily(np.arange(1, 60.)))
+    assert len(calls) == 2
+
+
+def test_strategy_files_save_load_duplicate_and_yaml_round_trip(tmp_path):
+    from optlab.history.library import duplicate_strategy, list_strategies, save_strategy
+
+    s = strat([{"id": "a", "expression": "close > sma(20)", "weight": 3,
+                "tolerance": {"type": "percent_distance", "value": 1}}],
+              sequence=[{"id": "x", "expression": "close > 1"}, {"id": "y", "expression": "volume > 1", "within_bars": 2}])
+    again = parse_strategy(s.to_yaml())                                   # export -> import keeps every setting
+    assert again.version == s.version
+    path = save_strategy(s.to_yaml(), tmp_path)
+    with pytest.raises(FileExistsError):
+        save_strategy(s.to_yaml(), tmp_path)
+    dup = duplicate_strategy(path, "Copy of t", tmp_path)
+    assert set(list_strategies(tmp_path)) == {"t", "Copy of t"} and dup.name == "copy_of_t.yaml"
+    with pytest.raises(StrategyError):
+        save_strategy("name: bad\nsymbols: [X]\ntimeframe: 9m\n", tmp_path)
+
+
+def test_saved_search_reproduces_and_detects_changes(tmp_path):
+    from optlab.history.library import compare_to_saved, list_searches, load_search, save_search
+
+    s = strat(["close > 105"], data={"source": "synthetic"})
+    bars = daily([100, 110, 120])
+    res = search(s, bars)
+    sid = save_search(res, s.to_yaml(), archive_path=tmp_path / "h.duckdb")
+    yml, meta, saved = load_search(sid, archive_path=tmp_path / "h.duckdb")
+    assert len(saved) == 2 and meta["strategy_version"] == s.version and len(list_searches(tmp_path / "h.duckdb")) == 1
+    assert compare_to_saved(search(parse_strategy(yml), bars), meta) == []
+    notes = compare_to_saved(search(s, daily([100, 110, 121])), meta)
+    assert any("bars differ" in n for n in notes)
+
+
+def test_scans_yaml_rules_still_work_and_can_use_behaviour_functions():
+    from optlab.live.feed import SyntheticFeed
+    from optlab.live.scanner import run_pass
+
+    cfg = {"watchlists": {"w": ["SPY"]}, "positions": [],
+           "scans": [{"name": "old", "watchlist": "w", "stock": ["close > 0", "crosses_above(rsi(14), 0) or rsi(14) > 0"]},
+                     {"name": "new", "watchlist": "w", "stock": ["stayed_above(close, 0, bars=5)", "between(rsi(14), 0, 100)"]}]}
+    res = run_pass(cfg, SyntheticFeed(end=date(2024, 12, 31)), today=date(2024, 12, 31))
+    assert not res.errors and set(res.hits["scan"]) == {"old", "new"}
