@@ -184,6 +184,46 @@ def chain_health(symbol: str, chain: pd.DataFrame | None, fetched_at: datetime |
     return out
 
 
+BAR_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "30m": 30, "1h": 60}
+
+
+def intraday_health(symbol: str, bars: pd.DataFrame, timeframe: str, now: datetime, source: str,
+                    delay_minutes: int = 15) -> tuple[pd.DataFrame, list[Check]]:
+    """Intraday bars (index = bar START, exchange time): drop the bar still forming, then check order,
+    duplicates and latency (time since the last completed bar ended, allowing the feed's delay)."""
+    out: list[Check] = []
+    add = lambda *a, **k: out.append(Check(*a, symbol=symbol, **k))  # noqa: E731
+    if bars is None or bars.empty:
+        add("bars_present", f"{timeframe} bars available", False, "No intraday bars.", effect="block",
+            affects=["technical rules"], action="Check the monitor's data feed.")
+        return bars, out
+    width = pd.Timedelta(minutes=BAR_MINUTES[timeframe])
+    now_et = pd.Timestamp(now).tz_convert(ET).tz_localize(None) if pd.Timestamp(now).tzinfo else pd.Timestamp(now)
+    idx = pd.DatetimeIndex(bars.index)
+    idx = idx.tz_convert(ET).tz_localize(None) if idx.tz is not None else idx
+    done = idx + width <= now_et
+    if not done.all():
+        add("forming", "Completed bars only", True, f"{int((~done).sum())} bar(s) still forming are excluded.")
+    bars = bars[np.asarray(done)]
+    idx = idx[np.asarray(done)]
+    if not idx.is_monotonic_increasing:
+        add("order", "Bars in time order", False, "Bars are out of order.", effect="block", affects=["technical rules"])
+        return bars, out
+    dup = idx.duplicated(keep="last")
+    if dup.any():
+        add("duplicates", "No duplicate bars", False, f"{int(dup.sum())} duplicate bar(s); last copy used.",
+            effect="downgrade", affects=["technical rules"])
+        bars, idx = bars[~dup], idx[~dup]
+    if len(idx):
+        age = (now_et - (idx[-1] + width)).total_seconds() / 60
+        lim = 2 * BAR_MINUTES[timeframe] + delay_minutes
+        add("latency", "Bar latency", age <= lim, f"Last completed {timeframe} bar ended {age:,.0f} min ago (limit "
+            f"{lim} min, allowing a {delay_minutes}-minute feed delay).", effect="none" if age <= lim else "downgrade",
+            affects=[] if age <= lim else ["technical rules"], action="" if age <= lim else "Check the feed or market hours.")
+    add("source", "Data source", True, source)
+    return bars, out
+
+
 def summarize(checks: list[Check]) -> dict:
     failed = [c for c in checks if not c.passed]
     return {"passed": sum(c.passed for c in checks), "failed": len(failed),

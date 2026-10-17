@@ -12,7 +12,9 @@ from datetime import datetime
 import pandas as pd
 
 from .config import OverlayConfig
-from .quality import Check, bar_health, blocked, completed_bars, downgraded, last_completed_session
+from .config import DAILY_TIMEFRAMES
+from .market import overview
+from .quality import Check, bar_health, blocked, completed_bars, downgraded, intraday_health, last_completed_session
 from .rules import RuleResult, evaluate_rule, indicator_version, make_evaluator, timeframe_alignment, to_weekly
 from .status import STATUSES
 
@@ -44,6 +46,7 @@ class OverlayScan:
     n_bars: int = 0
     n_rules: int = 0
     versions: dict = field(default_factory=dict)
+    skipped: list = field(default_factory=list)       # (rule name, reason) for rules not evaluated here
 
     def for_tab(self, key: str) -> list[RuleResult]:
         return [r for r in self.results if key in r.tab_scope or r.rule_id == "conflict"]
@@ -88,7 +91,10 @@ def _error_result(rule, symbol: str, check: Check, versions: dict) -> RuleResult
                       reason_code=f"blocked:{check.id}", versions=versions, data_flags=["DATA_ERROR"])
 
 
-def scan(frames: dict[str, pd.DataFrame], cfg: OverlayConfig, now: datetime, source: str = "") -> OverlayScan:
+def scan(frames: dict[str, pd.DataFrame], cfg: OverlayConfig, now: datetime, source: str = "",
+         macro: pd.DataFrame | None = None, intraday: dict[str, dict[str, pd.DataFrame]] | None = None) -> OverlayScan:
+    """frames: daily bars per symbol. intraday: {timeframe: {symbol: bars}} for intraday rules (the live
+    monitor supplies these; without them intraday rules are listed as skipped, never guessed)."""
     t0 = time.perf_counter()
     th = cfg.thresholds
     versions = {"config": cfg.version, "indicators": indicator_version()}
@@ -108,15 +114,19 @@ def scan(frames: dict[str, pd.DataFrame], cfg: OverlayConfig, now: datetime, sou
     bench = clean.get(bench_sym)
     sector_of = cfg.market.get("symbol_sectors") or {}
     rules = [r for r in cfg.rules if r.enabled]
+    daily_rules = [r for r in rules if r.timeframe in DAILY_TIMEFRAMES]
+    for r in rules:
+        if r.timeframe not in DAILY_TIMEFRAMES and (not intraday or r.timeframe not in intraday):
+            out.skipped.append((r.name, f"{r.timeframe} rule: evaluated by the live monitor (python scripts/monitor.py), "
+                                        "which fetches intraday bars"))
     for sym, bars in clean.items():
         checks = checks_by[sym]
-        mine = [r for r in rules if not r.symbols or sym in r.symbols]
+        mine = [r for r in daily_rules if not r.symbols or sym in r.symbols]
         stop = blocked(checks, "technical rules")
         if stop:
             out.results += [_error_result(r, sym, stop[0], {**versions, "rule": r.version}) for r in mine]
             continue
-        flags = (["STALE_DATA"] if any(c.id == "fresh" for c in downgraded(checks, "technical rules")) else []) + (
-            ["DOWNGRADED"] if any(c.id != "fresh" for c in downgraded(checks, "technical rules")) else [])
+        flags = _flags(checks)
         sector = clean.get(sector_of.get(sym, ""))
         evs = {}
         weekly = None
@@ -137,10 +147,44 @@ def scan(frames: dict[str, pd.DataFrame], cfg: OverlayConfig, now: datetime, sou
             out.n_bars += len(b)
         out.alignment[sym] = timeframe_alignment(bars, to_weekly(bars, last_sess)) if len(bars) > 60 else {
             "higher": "Unavailable", "intermediate": "Unavailable", "lower": "Unavailable", "agreement": "Unavailable"}
+    for tf, tf_frames in (intraday or {}).items():
+        tf_rules = [r for r in rules if r.timeframe == tf]
+        if not tf_rules:
+            continue
+        done = {}
+        for sym, raw in tf_frames.items():
+            done[sym], checks = intraday_health(sym, raw, tf, now, source)
+            out.checks += checks
+            if blocked(checks, "technical rules"):
+                stop = blocked(checks, "technical rules")[0]
+                out.results += [_error_result(r, sym, stop, {**versions, "rule": r.version}) for r in tf_rules]
+                done.pop(sym)
+            else:
+                checks_by[f"{sym}|{tf}"] = checks
+        for sym, b in done.items():
+            if len(b) < 2:
+                continue
+            ev = make_evaluator(b, tf, done.get(bench_sym), done.get(sector_of.get(sym, "")))
+            for rule in [r for r in tf_rules if not r.symbols or sym in r.symbols]:
+                res = evaluate_rule(rule, b, ev, sym, th, {**versions, "rule": rule.version}, source)
+                res.data_flags = _flags(checks_by[f"{sym}|{tf}"])
+                out.results.append(res)
+                out.n_bars += len(b)
     out.results += conflicts(out.results, versions)
+    try:
+        bull = {r.symbol: True for r in out.results if r.direction == "bullish" and r.status in ACTIVE}
+        out.market = overview(clean, cfg, macro, bull)
+    except Exception as exc:          # the market panel must never hide the rule results
+        out.market = {"error": f"{type(exc).__name__}: {exc}"}
     out.n_symbols, out.n_rules = len(clean), len(rules)
     out.seconds = time.perf_counter() - t0
     return out
+
+
+def _flags(checks) -> list[str]:
+    d = downgraded(checks, "technical rules")
+    return (["STALE_DATA"] if any(c.id in ("fresh", "latency") for c in d) else []) + (
+        ["DOWNGRADED"] if any(c.id not in ("fresh", "latency") for c in d) else [])
 
 
 def conflicts(results: list[RuleResult], versions: dict) -> list[RuleResult]:

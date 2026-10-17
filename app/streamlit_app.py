@@ -162,7 +162,8 @@ def overlay_scan(cfg_json: str, data_key: str, minute: str):
 
     cfg = overlay_validate(json.loads(cfg_json))
     frames = frames_from_prices(load_prices().to_pandas())
-    return overlay_run(frames, cfg, pd.Timestamp.now(tz="America/New_York").to_pydatetime(), src_label)
+    return overlay_run(frames, cfg, pd.Timestamp.now(tz="America/New_York").to_pydatetime(), src_label,
+                       macro=load_macro().to_pandas() if not load_macro().is_empty() else None)
 
 
 def overlay_now_key() -> tuple[str, str]:
@@ -178,7 +179,7 @@ if ocfg_error is not None:
     st.error("overlay.yaml has problems, so the built-in overlay defaults are in use:\n\n"
              + "\n".join(f"- {p}" for p in ocfg_error.problems))
 if OSCAN is not None:
-    ov.console(OSCAN, OF)
+    ov.console(OSCAN, OF, ov.market_chips(OSCAN))
 
 
 def overlay_on(key: str) -> bool:
@@ -822,6 +823,9 @@ with tabs[7]:
               "bigger moves against you.",
               "Option pricing in this app uses the rate named in the caption below."],
              ["yield", "vix", "iv"])
+    if overlay_on("macro"):
+        ov.market_panel(OSCAN)
+        st.divider()
     mac = load_macro()
     if mac.is_empty():
         st.info("No macro data. Run `python scripts/ingest.py`.")
@@ -1081,6 +1085,8 @@ with tabs[9]:
               "loaded are listed at the bottom of this tab."],
              ["rsi", "ma", "macd", "bb", "atr", "guide"])
     monitor_panel()
+    if overlay_on("monitor"):
+        ov.monitor_overlay_panel(MON)
     with st.expander("Scans defined in scans.yaml"):
         try:
             from optlab.live.scanner import load_scan_config
@@ -1133,7 +1139,7 @@ with tabs[11]:
                                            else f"{c.tolerance:g} ({c.tolerance_type.replace('_', ' ')})"}
                                           for c in r.conditions]), rename={"id": "ID"}, width="stretch")
         with t3:
-            from optlab.overlay.status import STATUSES as OST, COLORS as OCOL
+            from optlab.overlay.status import STATUSES as OST
 
             ui.show(pd.DataFrame([{"status": f"{s.icon} {OCFG.labels.get(s.code, s.label)}", "colour": s.color.capitalize(),
                                    "meaning": s.meaning} for s in OST.values()]), width="stretch")

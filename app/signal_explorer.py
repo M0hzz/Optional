@@ -9,7 +9,6 @@ import altair as alt
 import numpy as np
 import pandas as pd
 import streamlit as st
-import yaml
 
 import ui
 from optlab.history.bars import TIMEFRAMES, bars_per_session, nyse_business_days

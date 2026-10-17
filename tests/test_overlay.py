@@ -267,3 +267,117 @@ def test_no_banned_words_in_labels_or_meanings():
     text = " ".join(f"{s.label} {s.meaning}" for s in STATUSES.values()).lower()
     for w in BANNED_WORDS:
         assert w not in text
+
+
+# ---------------------------------------------------------------- phase 2
+from optlab.overlay.alerts import TransitionTracker, format_alert, transition_text  # noqa: E402
+from optlab.overlay.market import overview  # noqa: E402
+from optlab.overlay.quality import intraday_health  # noqa: E402
+
+DEFAULT_RULES = {r["id"]: r for r in defaults()["rules"]}
+
+
+def test_confirmed_breakout_and_failed_breakout():
+    base = [100 + 0.2 * np.sin(i) for i in range(60)]
+    vol = [1e6] * 60 + [2e6]
+    up = bars_from(base + [104], vol, spread=0.002)
+    r = run(DEFAULT_RULES["confirmed_breakout"], up, th={"stale_after_bars": 50})
+    assert r.base_status == "CONFIRMED", r.explanation
+    fail = bars_from(base + [100], vol, spread=0.002)
+    fail.iloc[-1, fail.columns.get_loc("high")] = 104          # traded above the 20-day high, closed back inside
+    f = run(DEFAULT_RULES["failed_breakout"], fail)
+    assert f.base_status == "CONFIRMED" and run(DEFAULT_RULES["confirmed_breakout"], fail).base_status != "CONFIRMED"
+
+
+def test_vwap_reclaim_and_rejection():
+    rule = {"id": "reclaim", "name": "Reclaim", "conditions": [
+        {"id": "was_below", "expression": "ago(close, 1) < ago(rolling_vwap(20), 1)"},
+        {"id": "closes_above", "expression": "close > rolling_vwap(20)"}]}
+    closes = [100] * 25 + [97, 96, 95, 101]
+    assert run(rule, bars_from(closes)).status == "CONFIRMED"
+    rej = {"id": "reject", "name": "Reject", "conditions": [
+        {"id": "tested", "expression": "high >= rolling_vwap(20)"}, {"id": "closed_below", "expression": "close < rolling_vwap(20)"}]}
+    b = bars_from([100] * 25 + [97, 96, 95, 95.5])
+    b.iloc[-1, b.columns.get_loc("high")] = 101
+    assert run(rej, b).status == "CONFIRMED"
+
+
+def test_compression_then_expansion():
+    rng = np.random.default_rng(5)
+    calm = 100 + np.cumsum(rng.normal(0, 1.0, 150))
+    tight = calm[-1] + np.cumsum(rng.normal(0, 0.05, 40))
+    comp = run(DEFAULT_RULES["compression"], bars_from(np.r_[calm, tight], spread=0.001), th={"stale_after_bars": 99})
+    assert comp.base_status in ("CONFIRMED", "NEAR_CONFIRMATION") and comp.direction == "neutral"
+    burst = tight[-1] + np.cumsum(np.full(6, 2.5))
+    vol = [1e6] * 190 + [3e6] * 6
+    exp = run(DEFAULT_RULES["compression_exit"], bars_from(np.r_[calm, tight, burst], vol, spread=0.001),
+              th={"stale_after_bars": 99, "overextended_atr_multiple": 99})
+    assert exp.base_status == "CONFIRMED", exp.explanation
+
+
+def test_breadth_divergence():
+    n = 260
+    idx_up = bars_from(np.r_[np.linspace(100, 120, n - 1), 125])          # index makes a new 20-bar high
+    weak = {f"S{i}": bars_from(np.r_[np.linspace(100, 140, n - 30), np.linspace(140, 100, 30)]) for i in range(5)}
+    frames = {"SPY": idx_up, **weak}
+    m = overview(frames, cfg_with([simple()]), None)
+    name, verdict, items = m["verdicts"]["breadth_divergence"]
+    assert items[0]["status"] == "pass" and items[1]["status"] == "pass" and verdict in ("CONFIRMED", "NEAR_CONFIRMATION")
+    assert m["breadth_low_sample"] and m["breadth"]["n"] == 5
+
+
+def test_market_overview_never_fabricates_missing_data():
+    m = overview({"SPY": bars_from(np.linspace(100, 120, 300))}, cfg_with([simple()]), None)
+    assert "DIA" in m["missing_indexes"] and not m["sectors"]["available"] and m["vix"] is None
+    assert "No economic-calendar source" in m["events_note"]
+
+
+def test_alert_dedupe_cooldown_and_transition_text(tmp_path):
+    rule = {"id": "vol", "name": "Volume", "conditions": [
+        {"id": "rv", "expression": "rel_volume(20) >= 1.5", "tolerance": {"type": "absolute", "value": 0.2}},
+        {"id": "up", "expression": "close > 1"}]}
+    b = bars_from([100] * 31, [1e6] * 29 + [1.46e6, 1.62e6])
+    r = run(rule, b)
+    assert r.transition == "near_to_confirmed"
+    text = transition_text(r)
+    assert text.startswith("CONFIRMED at the 2026-03-02 close.") and "now meets the >= 1.5 requirement" in text
+    tr = TransitionTracker(tmp_path / "s.json", cooldown_minutes=30)
+    assert len(tr.alerts([r], NOW)) == 1
+    assert tr.alerts([r], NOW) == []                               # same bar again: deduplicated
+    tr2 = TransitionTracker(tmp_path / "s.json", cooldown_minutes=30)
+    assert tr2.alerts([r], NOW) == []                              # survives a restart
+    later = run(rule, bars_from([100] * 32, [1e6] * 30 + [1.46e6, 1.62e6], end="2026-03-03"))
+    assert TransitionTracker(tmp_path / "s.json", 30).alerts([later], NOW) == []   # inside the cooldown
+    assert TransitionTracker(tmp_path / "s.json", 30).alerts([later], NOW.replace(hour=23)) == []  # that bar stays suppressed
+    third = run(rule, bars_from([100] * 33, [1e6] * 31 + [1.46e6, 1.62e6], end="2026-03-04"))
+    assert len(TransitionTracker(tmp_path / "s.json", 30).alerts([third], NOW.replace(hour=23))) == 1   # cooldown over
+    body = format_alert(r)
+    for section in ("STATUS:", "RULE:", "OBSERVED CONDITIONS:", "MISSING CONFIRMATION:", "MARKET CONTEXT:",
+                    "HISTORICAL EVIDENCE:", "ACCOUNT FIT:", "DATA QUALITY:", "EVENT FLAGS:", "INVALIDATION:"):
+        assert section in body
+
+
+def test_signal_stacking_counts_groups_once(tmp_path):
+    rules = [{"id": a, "name": a, "group": g, "conditions": [{"expression": "close > 100"}]}
+             for a, g in (("ema_align", "ema"), ("ema_cross", "ema"), ("breakout", "level"))]
+    sc = scan({"X": bars_from([99] * 30 + [101])}, cfg_with(rules), NOW)
+    alerts = TransitionTracker(tmp_path / "s.json", 0, stacking_bars=3).alerts(sc.results, NOW)
+    stack = [a for a in alerts if a.rule == "stacking"]
+    assert len(stack) == 1 and "2 independent rule groups" in stack[0].body
+
+
+def test_intraday_completed_bars_and_latency():
+    idx = pd.date_range("2026-03-02 09:30", periods=12, freq="5min")
+    b = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": 1.0, "volume": 1.0}, index=idx)
+    kept, checks = intraday_health("X", b, "5m", datetime(2026, 3, 2, 10, 22, tzinfo=ET), "test")
+    assert kept.index[-1] == pd.Timestamp("2026-03-02 10:15")      # the 10:20 bar is still forming
+    assert next(c for c in checks if c.id == "latency").passed
+    _, late = intraday_health("X", b, "5m", datetime(2026, 3, 2, 11, 30, tzinfo=ET), "test")
+    assert not next(c for c in late if c.id == "latency").passed
+
+
+def test_intraday_rules_skipped_without_intraday_data():
+    r = simple()
+    r["timeframe"] = "5m"
+    sc = scan({"X": bars_from([99] * 30 + [101])}, cfg_with([r]), NOW)
+    assert sc.results == [] and "live monitor" in sc.skipped[0][1]

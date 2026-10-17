@@ -204,6 +204,9 @@ def evaluate_rule(rule: Rule, bars: pd.DataFrame, ev: Evaluator, symbol: str, th
     unavailable = [e.cond.id for e in evals if e.status[i] == "n/a"]
     rows = explain(evals, i)
     for r, e in zip(rows, evals):
+        r["lhs"] = _lhs_op(e)[0]
+        r["prev_status"] = e.status[i - 1] if n > 1 else None
+        r["prev_observed"] = float(e.observed[i - 1]) if n > 1 else float("nan")
         r["required_value"] = (f"{_lhs_op(e)[1]} {_fmt(e.target[i])}" if e.kind == "compare" else e.relation)
         r["needed"] = "" if e.status[i] == "pass" else _needed(e, i)
     base = states[i]

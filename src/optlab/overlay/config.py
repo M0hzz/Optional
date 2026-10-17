@@ -29,7 +29,8 @@ USER_PATH = PROJECT_ROOT / "overlay.yaml"
 TAB_KEYS = ("scanner", "chain_pricer", "strategy_lab", "backtest", "risk", "insiders", "company", "macro",
             "option_chain", "monitor", "signal_explorer")
 DIRECTIONS = ("bullish", "bearish", "neutral")
-RULE_TIMEFRAMES = ("1d", "1wk")   # built from the stored daily bars, so every tab sees the same data
+RULE_TIMEFRAMES = ("1d", "1wk", "5m", "15m", "30m", "1h")
+DAILY_TIMEFRAMES = ("1d", "1wk")  # built from the stored daily bars; intraday rules run in the live monitor
 # names and functions the overlay adds to the expression language (see rules.overlay_extras)
 OVERLAY_NAMES = {"bench_close", "rs_line", "sector_close"}
 OVERLAY_FUNCS = {"rs", "sector_rs"}
@@ -320,8 +321,7 @@ def _parse_rule(r, w: str, p: list, seen: set) -> Rule | None:
         p.append(f"{w}.kind: must be technical or volatility")
     tf = str(r.get("timeframe", "1d"))
     if tf not in RULE_TIMEFRAMES:
-        p.append(f"{w}.timeframe: must be one of {', '.join(RULE_TIMEFRAMES)} (overlay rules run on the stored "
-                 "daily bars; use the Signal explorer for intraday searches)")
+        p.append(f"{w}.timeframe: must be one of {', '.join(RULE_TIMEFRAMES)}")
     scope = r.get("tab_scope") or []
     for s in scope:
         if s not in TAB_KEYS:

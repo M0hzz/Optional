@@ -212,3 +212,99 @@ def data_health_panel(sc: OverlayScan) -> None:
     ui.show(view[["symbol", "name", "passed", "detail", "effect", "affects", "action"]],
             rename={"name": "Check", "passed": "Result", "effect": "Effect", "affects": "Affected features",
                     "action": "Corrective action"}, width="stretch")
+
+
+# ------------------------------------------------------------------ phase 2: market and monitor
+VERDICT_TEXT = {"CONFIRMED": "Present", "NEAR_CONFIRMATION": "Nearly present (one item missing)",
+                "NOT_PRESENT": "Not present", "INSUFFICIENT_DATA": "Insufficient data",
+                "VOLATILITY_EXPANSION": "Present: volatility expanding"}
+
+
+def market_chips(sc: OverlayScan) -> list:
+    m = sc.market or {}
+    if not m or m.get("error"):
+        return [("DATA_ERROR", "🧭 Market overview unavailable")] if m.get("error") else []
+    out = [("INFO", f"🧭 Market: {m['regime']}")]
+    vr = m.get("volatility_regime", "")
+    out.append(("VOLATILITY_EXPANSION" if vr.startswith("Expanded") else "INFO", f"🌀 Volatility: {vr.split(' (')[0]}"))
+    if m.get("breadth_low_sample"):
+        out.append(("LOW_SAMPLE_SIZE", f"🔬 Breadth from {m['breadth'].get('n', 0)} symbols"))
+    return out
+
+
+def market_panel(sc: OverlayScan) -> None:
+    m = sc.market or {}
+    st.markdown("### 🧭 Overlay: market overview", help="Computed from the stored daily bars and the VIX series. "
+                "Fixed checklists; nothing is estimated when data is missing.")
+    if not m or m.get("error"):
+        st.warning(f"Market overview unavailable: {m.get('error', 'no data')}")
+        return
+    br, vix = m["breadth"], m["vix"]
+    c = st.columns(4)
+    c[0].metric("Market regime", m["regime"], help="Broad bullish/bearish alignment when every available item of that "
+                "checklist passes; leaning when one item fails; otherwise mixed.")
+    c[1].metric("Volatility regime", m["volatility_regime"].split(" (")[0], help=m["volatility_regime"])
+    c[2].metric("Breadth", f"{br.get('pct_above_ma', float('nan')):.0f}% above MA" if br.get("n") else "—",
+                f"{br.get('advancers', 0)} up / {br.get('decliners', 0)} down" if br.get("n") else None, delta_color="off",
+                help=f"Share of {br.get('n', 0)} non-index symbols above their {sc.config.market['breadth_ma']}-day "
+                     "moving average on the latest common date.")
+    c[3].metric("VIX", f"{vix['level']:.1f}" if vix else "—", f"{vix['change_5d']:+.1f} over 5 days" if vix else None,
+                delta_color="off", help="From the macro table; 1-year percentile "
+                f"{vix['pct_rank']:.0f}." if vix else "No VIX series in the macro table.")
+    if m["breadth_low_sample"]:
+        chips([("LOW_SAMPLE_SIZE", f"🔬 Low sample size: breadth uses {br.get('n', 0)} symbols (minimum "
+                f"{sc.config.thresholds['breadth_minimum_symbols']}). Add symbols to config.yaml → universe.")])
+    if m["missing_indexes"]:
+        st.caption(f"Not in the database, so left out (not estimated): {', '.join(m['missing_indexes'])}.")
+    if m["indexes"]:
+        rows = pd.DataFrame(m["indexes"].values()).drop(columns=["date", "prior_high", "prior_low", "bb_width_rank_5ago"])
+        ui.show(rows, formats={"close": "money", "change_pct": "spts", "ret20_pct": "spts", "gap_pct": "spts",
+                               "rel_volume": "num", "atr_pct_rank": "int", "bb_width_pct_rank": "int"},
+                rename={"change_pct": "Day change", "ret20_pct": "20-day return", "above_vwap": "Above 20-day VWAP",
+                        "ema_bullish": "EMA 9 > 21", "above_sma50": "Above 50-day", "above_sma200": "Above 200-day",
+                        "gap_pct": "Gap at open", "rel_volume": "Relative volume", "atr_pct_rank": "ATR percentile",
+                        "bb_width_pct_rank": "Band-width percentile", "high_20": "20-day high", "low_20": "20-day low"},
+                help={"trend": "Up: close and 21-day EMA above the 50-day SMA; Down: both below; else Mixed.",
+                      "atr_pct_rank": "Where ATR(14) sits among the last 252 values (0 = lowest)."}, width="stretch")
+    st.markdown("**Regime checklists**")
+    for key, (name, verdict, items) in m["verdicts"].items():
+        with st.expander(f"{STATUSES[verdict].icon} {name}: {VERDICT_TEXT.get(verdict, verdict)}"):
+            if not items:
+                st.caption(m["sectors"].get("note", "Not enough data for this checklist."))
+                continue
+            df = pd.DataFrame(items).assign(status=lambda d: d["status"].map({"pass": "Pass", "fail": "Fail", "n/a": "N/A"}))
+            ui.show(df, rename={"item": "Condition", "value": "Observed"}, width="stretch",
+                    styler=ui.status_styler(["Status"], ui.STATUS_COLORS))
+    if m["sectors"]["available"]:
+        st.markdown("**Sector strength vs the benchmark (20-day)**")
+        ui.show(m["sectors"]["table"], formats={"rs20": "spts", "rs20_5ago": "spts", "rank": "int", "rank_5ago": "int",
+                                                "rank_change": "int"},
+                rename={"etf": "ETF", "rs20": "Relative strength", "rs20_5ago": "5 bars ago", "rank_5ago": "Rank 5 bars ago",
+                        "rank_change": "Rank change"}, width="stretch")
+    else:
+        st.caption(m["sectors"]["note"])
+    for t in m["conflicts"]:
+        chips([("CONFLICTING", f"⚖️ {t}")])
+    st.caption(f"{m['events_note']} Data through {ui.fmt(m['date'], 'date')}.")
+
+
+def monitor_overlay_panel(mon_dir) -> None:
+    latest, log = mon_dir / "overlay_latest.json", mon_dir / "overlay_alerts.csv"
+    st.markdown("**Overlay alerts (state changes on completed bars)**",
+                help="Written by scripts/monitor.py each pass: one alert per rule, symbol, bar and change, with a "
+                     "cooldown so the same state doesn't repeat. Signal stacking groups related rules once.")
+    if latest.exists():
+        d = json.loads(latest.read_text())
+        st.caption(f"Last overlay pass {d['time'][:19].replace('T', ' ')} · {d['seconds']:,.2f} s · {d['symbols']:,} symbols"
+                   f" · {d['rules']:,} rules · {d['bars']:,} bars"
+                   + (f" · skipped: {'; '.join(n for n, _ in d['skipped'])}" if d.get("skipped") else ""))
+    if not log.exists():
+        st.caption("No overlay alerts yet. They appear when a rule is newly confirmed, goes from near to confirmed, "
+                   "becomes near, or loses its confirmation.")
+        return
+    al = pd.read_csv(log).tail(200).iloc[::-1]
+    al["time"] = al["time"].astype(str).str[:16].str.replace("T", " ")
+    al["status"] = al["status"].map(lambda c: badge(c) if c in STATUSES else c)
+    ui.show(al[["time", "status", "symbol", "bar", "title", "body"]], rename={"bar": "Bar", "title": "Alert",
+                                                                            "body": "Details"},
+            styler=status_cells, width="stretch", height=320)
