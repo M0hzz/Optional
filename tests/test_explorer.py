@@ -338,3 +338,65 @@ def test_sequence_validation():
         strat([], sequence=[{"expression": "close > 1"}, {"expression": "close > 2"}])
     with pytest.raises(StrategyError, match=r"sequence\[0\].within_bars"):
         strat([], sequence=[{"expression": "close > 1", "within_bars": 2}])
+
+
+# --------------------------------------------------------- forward behaviour
+def test_forward_returns_mfe_mae_and_incomplete():
+    from optlab.history.forward import forward_behavior
+
+    bars = daily([100, 110, 90, 120, 130])
+    bars["high"] = [101, 115, 95, 125, 131]
+    bars["low"] = [99, 105, 85, 118, 129]
+    ev = pd.DataFrame({"symbol": ["XYZ"], "timestamp": [bars.index[0]], "match_type": ["exact"]})
+    per, summ = forward_behavior(ev, {"XYZ": bars}, ["1", "3", "5"], "1d")
+    h1, h3, h5 = (per[per["horizon"] == h].iloc[0] for h in ("1", "3", "5"))
+    assert h1["forward_return_pct"] == pytest.approx(10) and h1["max_favorable_pct"] == pytest.approx(15)
+    assert h3["forward_return_pct"] == pytest.approx(20)
+    assert h3["max_favorable_pct"] == pytest.approx(25) and h3["max_adverse_pct"] == pytest.approx(-15)
+    assert not h5["complete"]                                     # runs past the last bar
+    row = summ[(summ["horizon"] == "5") & (summ["group"] == "all")].iloc[0]
+    assert row["signals"] == 0 and row["incomplete"] == 1
+
+
+def test_forward_trading_day_horizon_intraday():
+    from optlab.history.forward import horizon_end
+
+    bars, _, _ = load_history("XYZ", "1h", "2026-03-02", "2026-03-04", source="synthetic", warmup_bars=0,
+                              now="2026-03-10")
+    i = list(bars.index.strftime("%Y-%m-%d %H:%M")).index("2026-03-02 11:30")
+    j = horizon_end(bars, i, "1d", "1h")
+    assert bars.index[j].strftime("%Y-%m-%d %H:%M") == "2026-03-03 11:30"
+    last = len(bars) - 1
+    assert horizon_end(bars, last, "1d", "1h") is None            # no next session in the data
+
+
+def test_dedupe_and_summary_by_match_type():
+    from optlab.history.forward import forward_behavior
+
+    bars = daily(np.arange(100, 120, dtype=float))
+    ts = bars.index
+    ev = pd.DataFrame({"symbol": "XYZ", "timestamp": [ts[0], ts[1], ts[2], ts[5]],
+                       "match_type": ["exact", "near", "near", "exact"]})
+    per, summ = forward_behavior(ev, {"XYZ": bars}, ["2"], "1d", dedupe_bars=3)
+    assert sorted(per["timestamp"].unique()) == [ts[0], ts[5]]      # ts[1], ts[2] within 3 bars of ts[0]
+    assert summ.attrs["deduped"] == 2
+    allrow = summ[summ["group"] == "all"].iloc[0]
+    assert allrow["signals"] == 2 and allrow["positive_pct"] == 100
+    assert summ[summ["group"] == "near"].iloc[0]["signals"] == 0
+
+
+def test_chart_studies_split_price_and_lower_panels():
+    from optlab.history.explorer import chart_studies
+
+    bars, _, _ = load_history("XYZ", "5m", "2026-03-02", "2026-03-04", source="synthetic", warmup_bars=60,
+                              now="2026-03-10")
+    s = strat(["ema(9) > ema(21)", "close > vwap()", "rsi(14) >= 55", "crosses_above(close, bb_upper())"],
+              timeframe="5m")
+    price, lower = chart_studies(s, bars)
+    assert set(price) == {"ema(9)", "ema(21)", "vwap()", "bb_upper()"} and set(lower) == {"rsi(14)"}
+
+
+def test_results_record_matches_beyond_the_limit():
+    bars = daily(np.full(10, 110.0))
+    res = search(strat(["close > 105"], output={"limit": 3}), bars)
+    assert len(res.results) == 3 and res.total_matches == 10

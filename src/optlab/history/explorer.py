@@ -301,6 +301,7 @@ class SearchResult:
     bars: dict[str, pd.DataFrame]
     evals: dict[str, list]
     seconds: float = 0.0
+    total_matches: int = 0        # before output.limit; results are cut to the limit, never silently
     bars_evaluated: int = 0
     not_evaluable: int = 0
     errors: list[str] = field(default_factory=list)
@@ -400,6 +401,7 @@ def run_search(strategy: Strategy, archive_path=None, now=None, progress=None,
         frames.append(classify(strategy, sym, bars, in_range, evals, scores))
     out = pd.concat([f for f in frames if not f.empty], ignore_index=True) if any(
         not f.empty for f in frames) else pd.DataFrame()
+    res.total_matches = len(out)
     res.results = sort_limit(out, strategy)
     res.seconds = time.time() - t0
     return res
@@ -427,3 +429,57 @@ def to_csv(df: pd.DataFrame) -> str:
     if "timestamp" in out:
         out["timestamp"] = out["timestamp"].astype(str)  # keeps the UTC offset, so the timezone is unambiguous
     return out.to_csv(index=False)
+
+
+PRICE_STUDIES = {"sma", "ema", "vwap", "bb_upper", "bb_mid", "bb_lower", "highest", "lowest"}
+
+
+def chart_studies(strategy: Strategy, bars: pd.DataFrame, max_lower: int = 3) -> tuple[dict, dict]:
+    """Studies named in the strategy, split into price overlays and lower-panel lines, for event charts.
+    A numeric study is drawn on the price chart when it lives near the price (within 25% on median)."""
+    names, funcs = bar_functions(bars, strategy.timeframe)
+    ev = Evaluator(names, funcs, memo={})
+    price, lower, seen = {}, {}, set()
+    close = bars["close"]
+    for expr in strategy.expressions():
+        for node in ast.walk(parse(expr)):
+            if not isinstance(node, ast.Call) or node.func.id in CROSS_FUNCS:
+                continue
+            label = ast.unparse(node)
+            if label in seen:
+                continue
+            seen.add(label)
+            try:
+                v = ev.node(node)
+            except ExprError:
+                continue
+            if not isinstance(v, pd.Series) or v.dtype == bool or v.notna().sum() == 0:
+                continue
+            near_price = (v / close - 1).abs().median() < 0.25
+            if near_price and (node.func.id in PRICE_STUDIES or node.func.id == "ago"):
+                price[label] = v
+            elif not near_price and len(lower) < max_lower:
+                lower[label] = v
+    return price, lower
+
+
+BEHAVIOUR_FUNCS = {"rising", "falling", "increasing", "decreasing", "stayed_above", "stayed_below",
+                   "crossed_above_within", "crossed_below_within", "touched"}
+
+
+def condition_kind(expression: str) -> tuple[str, str]:
+    """How a condition will be scored, before any data is loaded: (kind, plain-English note)."""
+    body = parse(expression).body
+    if isinstance(body, ast.Compare) and len(body.ops) == 1 and type(body.ops[0]) in _OPS:
+        return "compare", "near-match measurable: distance to the threshold"
+    if (isinstance(body, ast.Compare) and len(body.ops) == 2 and all(type(o) in _OPS for o in body.ops)
+            and {_OPS[type(o)][0] for o in body.ops} in ({"<"}, {">"})) or (
+            isinstance(body, ast.Call) and body.func.id == "between" and len(body.args) == 3):
+        return "between", "near-match measurable: distance to the nearer bound"
+    if isinstance(body, ast.Call) and body.func.id in CROSS_FUNCS and len(body.args) == 2:
+        return "cross", "exact on the crossing bar; near if recent (recent_bars) or within tolerance of crossing"
+    if isinstance(body, ast.Call) and body.func.id in BEHAVIOUR_FUNCS:
+        return "boolean", "pass/fail only: behaviour over several bars"
+    if isinstance(body, (ast.BoolOp, ast.UnaryOp)):
+        return "boolean", "pass/fail only: combines several rules"
+    return "boolean", "pass/fail only: no single measurable distance"

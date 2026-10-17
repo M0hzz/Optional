@@ -115,7 +115,7 @@ iv_atm = atm_iv(chain) or float(np.log(spot_series).diff().tail(20).std() * np.s
 
 earn_date = next_earnings(symbol)
 tabs = st.tabs(["Scanner", "Chain & pricer", "Strategy lab", "Backtest", "Risk & sizing", "Insiders",
-                "Company", "Macro", "Option chain", "Monitor"])
+                "Company", "Macro", "Option chain", "Monitor", "Signal explorer"])
 
 # ------------------------------------------------------------------- scanner
 with tabs[0]:
@@ -665,4 +665,11 @@ with tabs[9]:
                         language="text")
         except Exception as exc:
             st.error(f"scans.yaml: {exc}")
+
+# ------------------------------------------------------ historical signal explorer
+with tabs[10]:
+    sys.path.insert(0, str(ROOT / "app"))
+    from signal_explorer import render as render_signal_explorer  # noqa: E402
+
+    render_signal_explorer()
 
