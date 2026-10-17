@@ -155,3 +155,94 @@ def test_synthetic_bars_do_not_depend_on_range():
     a = synthetic_bars("XYZ", "15m", date(2026, 4, 6), date(2026, 4, 10))
     b = synthetic_bars("XYZ", "15m", date(2026, 3, 2), date(2026, 5, 1))
     assert len(a) == 5 * 26 and (a["close"] == b.loc[a.index, "close"]).all()
+
+
+# ------------------------------------------------------ near-match scoring
+def _one_bar_eval(expression, tol=None, recent=0, closes=(100,), volume=None):
+    bars = daily(list(closes), volume=volume)
+    c = {"id": "k", "expression": expression, "weight": 30}
+    if tol:
+        c["tolerance"] = {"type": tol[0], "value": tol[1]}
+    if recent:
+        c["recent_bars"] = recent
+    s = strat([c], matching={"include_near": True, "minimum_score": 0})
+    res = search(s, bars)
+    return res.evals["XYZ"][0], res
+
+
+def test_spec_example_rel_volume_near():
+    from optlab.history.explorer import explain
+
+    vol = [100] * 20 + [142]          # 20-bar average of the window ending here = (19*100 + 142) / 20 = 102.1
+    e, _ = _one_bar_eval("volume / 100 >= 1.5", tol=("absolute", 0.20), closes=[100] * 21, volume=vol)
+    assert e.status[-1] == "near" and e.observed[-1] == pytest.approx(1.42)
+    assert e.shortfall[-1] == pytest.approx(0.08) and e.credit[-1] == pytest.approx(0.6)
+    ex = explain([e], 20)[0]
+    assert ex["points"] == pytest.approx(60.0) and "inside the 0.2 tolerance" in ex["explanation"]
+
+
+def test_tolerance_boundaries():
+    def st(close, tol, expr="close >= 100"):
+        e, _ = _one_bar_eval(expr, tol=("absolute", tol), closes=[close])
+        return e.status[-1], round(float(e.credit[-1]), 4)
+    assert st(100, 1) == ("pass", 1.0)                       # >= counts equality
+    assert st(99.5, 1) == ("near", 0.5)
+    assert st(99.0, 1) == ("fail", 0.0)                      # shortfall == tolerance: outside (strict)
+    assert st(100, 1, "close > 100") == ("near", 0.99)       # a tie fails a strict >; capped below full
+    e, _ = _one_bar_eval("close >= 100", closes=[99.9])      # no tolerance: just fail
+    assert e.status[-1] == "fail"
+
+
+def test_percent_distance_tolerance():
+    e, _ = _one_bar_eval("close > 200", tol=("percent_distance", 0.5), closes=[199.4])
+    assert e.shortfall[-1] == pytest.approx(0.3) and e.status[-1] == "near"   # 100 * 0.6 / 200
+    assert e.credit[-1] == pytest.approx(1 - 0.3 / 0.5)
+
+
+def test_between_measures_distance_to_broken_bound():
+    e, _ = _one_bar_eval("40 < close < 60", tol=("absolute", 5), closes=[62])
+    assert e.kind == "between" and e.shortfall[-1] == pytest.approx(2) and e.status[-1] == "near"
+    e, _ = _one_bar_eval("40 < close < 60", tol=("absolute", 5), closes=[33])
+    assert e.shortfall[-1] == pytest.approx(7) and e.status[-1] == "fail"
+
+
+def test_crossover_exact_recent_and_near():
+    closes = [1, 1, 5, 5, 5, 5, 2.8]
+    e, _ = _one_bar_eval("crosses_above(close, 3)", tol=("absolute", 0.5), recent=2, closes=closes)
+    assert e.status.tolist() == ["fail", "fail", "pass", "near", "near", "fail", "near"]
+    assert e.extra["recent_k"][3] == 1 and e.credit[3] == pytest.approx(1 - 1 / 3)
+    assert e.credit[4] == pytest.approx(1 - 2 / 3)           # two bars ago
+    assert e.status[5] == "fail"                             # crossed 3 bars ago: outside recent_bars
+    assert e.shortfall[6] == pytest.approx(0.2)              # not crossed, 0.2 below: near by gap
+
+
+def test_boolean_conditions_are_pass_fail_only():
+    e, _ = _one_bar_eval("close > 1 and close < 0", tol=("absolute", 5), closes=[3])
+    assert e.kind == "boolean" and e.status[-1] == "fail" and "pass/fail only" in e.note
+
+
+def test_weighted_score_required_modes_and_pass_count():
+    bars = daily([100, 99.5, 100, 99.5], volume=[10, 10, 1, 1])
+    conds = [{"id": "price", "expression": "close >= 100", "weight": 75, "tolerance": {"type": "absolute", "value": 1}},
+             {"id": "vol", "expression": "volume >= 5", "weight": 25, "required": False}]
+    strict = search(strat(conds, matching={"include_near": True, "minimum_score": 0}), bars).results
+    assert strict["match_type"].tolist() == ["exact", "near"]                     # bar 3: required fails strict
+    assert strict["score"].tolist() == [100.0, 75.0]
+    tol = search(strat(conds, matching={"include_near": True, "minimum_score": 0, "required_mode": "tolerant"}),
+                 bars).results
+    assert tol["score"].tolist() == [100.0, 62.5, 75.0, 37.5]                    # 75*0.5 + 25 = 62.5
+    assert tol["match_type"].tolist() == ["exact", "near", "near", "near"]
+    high = search(strat(conds, matching={"include_near": True, "minimum_score": 60, "required_mode": "tolerant",
+                                         "minimum_pass_count": 1}), bars).results
+    assert high["score"].tolist() == [100.0, 62.5, 75.0]
+    only_near = search(strat(conds, matching={"include_near": True, "include_exact": False, "minimum_score": 0}),
+                       bars).results
+    assert (only_near["match_type"] == "near").all()
+
+
+def test_sort_by_score():
+    bars = daily([100, 99.5, 99.8, 100])
+    c = [{"id": "p", "expression": "close >= 100", "tolerance": {"type": "absolute", "value": 1}}]
+    s = strat(c, matching={"include_near": True, "minimum_score": 0, "required_mode": "tolerant"},
+              output={"sort_by": "score", "order": "descending"})
+    assert search(s, bars).results["score"].tolist() == [100.0, 100.0, 80.0, 50.0]

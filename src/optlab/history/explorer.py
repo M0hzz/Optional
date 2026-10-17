@@ -115,16 +115,128 @@ def evaluate_symbol(strategy: Strategy, bars: pd.DataFrame) -> list[CondEval]:
     return [evaluate_condition(c, ev, bars.index) for c in strategy.conditions]
 
 
+def _near_credit(shortfall: np.ndarray, tol: float) -> np.ndarray:
+    """Linear partial credit strictly inside the tolerance: 1 - shortfall / tolerance, capped at 0.99."""
+    return np.minimum(NEAR_CAP, 1 - shortfall / tol)
+
+
+def _gap(raw: np.ndarray, base: np.ndarray, ttype: str) -> np.ndarray:
+    """Distance from passing in the tolerance's units: absolute, or % of the compared value."""
+    raw = np.maximum(raw, 0.0)
+    if ttype == "percent_distance":
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return np.where(np.abs(base) > 0, 100 * raw / np.abs(base), np.nan)
+    return raw
+
+
+def measure(e: CondEval) -> None:
+    """Fill status / credit / shortfall for every bar.
+
+    compare  a > b, a >= b: shortfall = b - a; a < b, a <= b: shortfall = a - b
+    between  lo < x < hi: shortfall = lo - x below the range, x - hi above it
+    cross    pass if it crosses on this bar; near ("recent") if it crossed k <= recent_bars bars
+             ago and is still on the crossed side, credit 1 - k / (recent_bars + 1); near if it
+             hasn't crossed and the gap is inside the tolerance
+    boolean  pass/fail only
+    percent_distance tolerances measure shortfall as % of the compared value (b, or the bound).
+    Near = failing with 0 <= shortfall < tolerance (strictly inside). Equality counts as passing
+    only where the rule says so (>= and <=); for > and < a tie is a near with 0.99 credit.
+    """
+    n = len(e.passed)
+    tt, tol = e.cond.tolerance_type, e.cond.tolerance
+    failing = e.evaluable & ~e.passed
+    shortfall = np.full(n, np.nan)
+    near = np.zeros(n, dtype=bool)
+    credit = e.passed.astype(float)
+    recent_k = np.zeros(n)
+    if e.kind == "compare":
+        op = e.extra["op"]
+        raw = (e.target - e.observed) if op.startswith(">") else (e.observed - e.target)
+        shortfall = _gap(raw, e.target, tt)
+    elif e.kind == "between":
+        lo, hi = e.extra["lo"], e.extra["hi"]
+        below = e.observed < lo + (0 if e.extra["ops"][0] == "<=" else 1e-12)
+        raw = np.where(below, lo - e.observed, e.observed - hi)
+        shortfall = _gap(raw, np.where(below, lo, hi), tt)
+    elif e.kind == "cross":
+        above = e.extra["dir"] == ">"
+        side = (e.observed > e.target) if above else (e.observed < e.target)
+        R = e.cond.recent_bars
+        crossed = e.passed
+        for k in range(1, R + 1):  # crossed k bars ago, nothing nearer, still on that side
+            hit = failing & side & (recent_k == 0) & np.r_[np.zeros(k, bool), crossed[:-k]] if k < n else np.zeros(n, bool)
+            recent_k[hit] = k
+        rec = recent_k > 0
+        near |= rec
+        credit = np.where(rec, np.minimum(NEAR_CAP, 1 - recent_k / (R + 1)), credit)
+        raw = (e.target - e.observed) if above else (e.observed - e.target)
+        not_yet = failing & ~side
+        shortfall = np.where(not_yet, _gap(raw, e.target, tt), np.nan)
+    if tt != "none" and e.kind in ("compare", "between", "cross"):
+        with np.errstate(invalid="ignore"):
+            inside = failing & ~near & np.isfinite(shortfall) & (shortfall < tol)
+        credit = np.where(inside, _near_credit(np.nan_to_num(shortfall), tol), credit)
+        near |= inside
+    if tt != "none" and e.kind == "boolean":
+        e.note += "; its tolerance is ignored"
+    e.status = np.where(~e.evaluable, "n/a", np.where(e.passed, "pass", np.where(near, "near", "fail"))).astype(object)
+    e.credit = np.where(e.evaluable, credit, 0.0)
+    e.shortfall = shortfall
+    e.extra["recent_k"] = recent_k
+
+
 def score(strategy: Strategy, evals: list[CondEval]) -> dict:
-    """Phase 1: pass/fail per condition; status and credit arrays for every bar."""
+    """Total = 100 x sum(weight x credit) / sum(weight), per bar."""
     for e in evals:
-        e.status = np.where(~e.evaluable, "n/a", np.where(e.passed, "pass", "fail")).astype(object)
-        e.credit = e.passed.astype(float)
-        e.shortfall = np.full(len(e.passed), np.nan)
+        measure(e)
     weights = np.array([e.cond.weight for e in evals], dtype=float)
     credit = np.vstack([e.credit for e in evals]) if evals else np.zeros((0, 0))
     total = 100 * (weights[:, None] * credit).sum(0) / weights.sum() if evals else np.zeros(0)
     return {"score": total}
+
+
+def _fmt(x) -> str:
+    if x is None or (isinstance(x, float) and not np.isfinite(x)):
+        return "n/a"
+    return f"{x:,.4g}" if abs(x) < 1e5 else f"{x:,.0f}"
+
+
+def explain(evals: list[CondEval], i: int) -> list[dict]:
+    """Condition-by-condition account of one bar, in plain English."""
+    total_w = sum(e.cond.weight for e in evals)
+    out = []
+    for e in evals:
+        c, st = e.cond, e.status[i]
+        pts = 100 * e.credit[i] * c.weight / total_w
+        full = 100 * c.weight / total_w
+        lhs = ast.unparse(parse(c.expression).body.left) if e.kind in ("compare",) else (
+            ast.unparse(parse(c.expression).body.comparators[0]) if e.kind == "between" else (
+                ast.unparse(parse(c.expression).body.args[0]) if e.kind == "cross" else c.expression))
+        unit = "%" if c.tolerance_type == "percent_distance" else ""
+        tol_txt = f"{c.tolerance:g}{unit}" if c.tolerance_type != "none" else "none"
+        obs = f"{lhs} = {_fmt(e.observed[i])}" if e.kind != "boolean" else c.expression
+        tgt = "" if e.kind in ("boolean", "between") else f" vs {_fmt(e.target[i])}"
+        if st == "n/a":
+            text = "not evaluable at this bar (indicator warm-up or missing data)"
+        elif e.kind == "boolean":
+            text = f"{'true' if st == 'pass' else 'false'} ({e.note})"
+        elif st == "pass":
+            text = f"{obs}{tgt}: rule {e.relation} holds"
+        elif st == "near" and e.kind == "cross" and e.extra["recent_k"][i]:
+            k = int(e.extra["recent_k"][i])
+            text = f"{obs}{tgt}: crossed {k} bar{'s' if k > 1 else ''} ago and is still on that side (recent)"
+        else:
+            sf = e.shortfall[i]
+            gap = f"{_fmt(sf)}{unit} from passing" if np.isfinite(sf) else "already past the level without a cross on this bar"
+            inside = "inside" if st == "near" else "outside"
+            text = f"{obs}{tgt}: rule {e.relation} fails by {gap}; {inside} the {tol_txt} tolerance" \
+                if c.tolerance_type != "none" or not np.isfinite(sf) else f"{obs}{tgt}: rule {e.relation} fails by {gap}; no tolerance set"
+        out.append({"id": c.id, "expression": c.expression, "required": c.required, "weight": c.weight,
+                    "kind": e.kind, "status": st, "observed": e.observed[i], "compared_with": e.target[i],
+                    "shortfall": e.shortfall[i], "tolerance": tol_txt, "credit": round(float(e.credit[i]), 4),
+                    "points": round(pts, 2), "max_points": round(full, 2),
+                    "explanation": f"{text} -> {st}, {pts:.1f} of {full:.1f} points"})
+    return out
 
 
 @dataclass
@@ -174,7 +286,18 @@ def classify(strategy: Strategy, symbol: str, bars: pd.DataFrame, in_range: np.n
 
 
 def _summary(evals: list[CondEval], i: int) -> str:
-    parts = [f"{e.cond.id} {e.status[i]}" for e in evals if e.status[i] != "pass"]
+    parts = []
+    for e in evals:
+        st = e.status[i]
+        if st == "pass":
+            continue
+        detail = ""
+        if e.kind in ("compare", "between", "cross") and np.isfinite(e.observed[i]):
+            if e.kind == "cross" and e.extra["recent_k"][i]:
+                detail = f" (crossed {int(e.extra['recent_k'][i])} bars ago)"
+            else:
+                detail = f" ({_fmt(e.observed[i])} vs {e.relation})"
+        parts.append(f"{e.cond.id} {st}{detail}")
     return "all conditions pass" if not parts else "; ".join(parts)
 
 
