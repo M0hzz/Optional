@@ -1,0 +1,37 @@
+# Trend pullback: in an hourly uptrend, price dips to the 20 EMA, holds, then reclaims VWAP on volume.
+historical_signal_search:
+  name: Trend pullback
+  description: 1-hour bars. A rising trend, a pullback that touches the 20 EMA, then a sequence that confirms the bounce.
+  symbols: [NVDA, AAPL, MSFT, AMZN]
+  timeframe: 1h
+  range:
+    start: 2025-01-02
+    end: 2026-10-16
+    timezone: America/New_York
+    market_hours_only: true
+  conditions:
+    - id: trend
+      expression: stayed_above(ema(20), ema(50), bars=10)
+      required: true
+      weight: 40
+    - id: not_extended
+      expression: distance_pct(close, ema(20)) < 3
+      required: false
+      weight: 20
+      tolerance: {type: absolute, value: 1}
+  sequence:
+    - id: pullback
+      expression: touched(low, ema(20), tolerance_pct=0.3)
+    - id: hold
+      expression: close > ema(20)
+      within_bars: 2
+    - id: confirm
+      expression: crosses_above(close, ago(highest(3), 1)) and rel_volume(20) > 1.2
+      within_bars: 4
+  sequence_weight: 40
+  matching:
+    minimum_score: 80
+    include_exact: true
+    include_near: true
+  output: {sort_by: timestamp, order: ascending, limit: 1000}
+  forward: {horizons: ["1", "3", "7", "1d", "5d"], dedupe_bars: 7}

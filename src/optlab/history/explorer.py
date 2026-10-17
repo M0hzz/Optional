@@ -98,21 +98,71 @@ def evaluate_condition(cond: Condition, ev: Evaluator, index) -> CondEval:
         lo, x, hi = (_numeric(ev.node(n), index) for n in (lo_node, x_node, hi_node))
         return CondEval(cond, "between", f"between {ast.unparse(lo_node)} and {ast.unparse(hi_node)}",
                         passed & evaluable, evaluable, x, nan.copy(), extra={"lo": lo, "hi": hi, "ops": ops})
+    if isinstance(body, ast.Call) and body.func.id == "between" and len(body.args) == 3:
+        x, lo, hi = (_numeric(ev.node(a), index) for a in body.args)
+        return CondEval(cond, "between", f"between {ast.unparse(body.args[1])} and {ast.unparse(body.args[2])}",
+                        passed & evaluable, evaluable, x, nan.copy(), extra={"lo": lo, "hi": hi, "ops": ["<=", "<="]})
     if isinstance(body, ast.Call) and body.func.id in CROSS_FUNCS and len(body.args) == 2:
         a, b = _numeric(ev.node(body.args[0]), index), _numeric(ev.node(body.args[1]), index)
         word = "above" if body.func.id == "crosses_above" else "below"
         return CondEval(cond, "cross", f"crosses {word} {ast.unparse(body.args[1])}", passed & evaluable,
                         evaluable, a, b, extra={"dir": CROSS_FUNCS[body.func.id]})
     why = ("combines several rules with and/or/not" if isinstance(body, (ast.BoolOp, ast.UnaryOp))
+           else "describes behaviour over several bars" if isinstance(body, ast.Call) and body.func.id in (
+               "rising", "falling", "increasing", "decreasing", "stayed_above", "stayed_below",
+               "crossed_above_within", "crossed_below_within", "touched")
            else "has no single measurable distance from passing")
     return CondEval(cond, "boolean", "is true", passed & evaluable, evaluable, nan.copy(), nan.copy(),
                     note=f"pass/fail only: it {why}")
 
 
+def evaluate_sequence(strategy: Strategy, ev: Evaluator, index) -> CondEval:
+    """Ordered steps. Step 1 starts a sequence at its bar; step k must then be true on a bar 0..within_bars
+    bars after step k-1's bar (the same bar counts). The sequence passes on its completion bar: the
+    first bar where the last step lands. Every path is considered, not just the earliest match per
+    step, and only bars up to the completion bar are used, so there's no look-ahead. When several
+    starts complete on the same bar, the latest start is reported (the tightest sequence)."""
+    n = len(index)
+    steps, settled = [], np.ones(n, bool)
+    for st in strategy.sequence:
+        v = ev(st.expression)
+        ok = _settled(parse(st.expression).body, ev, index)
+        settled &= ok
+        steps.append((v.fillna(0).astype(bool).to_numpy() if isinstance(v, pd.Series) else np.full(n, bool(v))) & ok)
+    complete = np.zeros(n, bool)
+    start_at = np.full(n, -1)
+    step_bars: dict[int, list[int]] = {}
+    for i in np.flatnonzero(steps[0]):
+        frontier = {int(i): [int(i)]}            # bar of the latest step -> bars of each step so far
+        for k, st in enumerate(strategy.sequence[1:], start=1):
+            nxt = {}
+            for pos, path in sorted(frontier.items()):
+                hits = np.flatnonzero(steps[k][pos:min(n, pos + st.within_bars + 1)]) + pos
+                for j in hits:
+                    nxt.setdefault(int(j), path + [int(j)])   # earliest path reaching j wins
+            frontier = nxt
+            if not frontier:
+                break
+        if frontier:
+            done = min(frontier)                 # first completion for this start
+            if not complete[done] or start_at[done] < i:
+                complete[done], start_at[done], step_bars[done] = True, i, frontier[done]
+    w = strategy.sequence_weight or (np.mean([c.weight for c in strategy.conditions]) if strategy.conditions else 1.0)
+    cond = Condition("sequence", " -> ".join(st.id for st in strategy.sequence), True, float(w))
+    nan = np.full(n, np.nan)
+    e = CondEval(cond, "sequence", "completes in order", complete, settled, nan, nan.copy(),
+                 note="pass/fail only: a sequence either completed on this bar or didn't")
+    e.extra.update({"start": start_at, "steps": step_bars})
+    return e
+
+
 def evaluate_symbol(strategy: Strategy, bars: pd.DataFrame) -> list[CondEval]:
     names, funcs = bar_functions(bars, strategy.timeframe)
     ev = Evaluator(names, funcs, memo={})  # each study computed once, shared by all conditions
-    return [evaluate_condition(c, ev, bars.index) for c in strategy.conditions]
+    evals = [evaluate_condition(c, ev, bars.index) for c in strategy.conditions]
+    if strategy.sequence:
+        evals.append(evaluate_sequence(strategy, ev, bars.index))
+    return evals
 
 
 def _near_credit(shortfall: np.ndarray, tol: float) -> np.ndarray:
@@ -177,7 +227,7 @@ def measure(e: CondEval) -> None:
             inside = failing & ~near & np.isfinite(shortfall) & (shortfall < tol)
         credit = np.where(inside, _near_credit(np.nan_to_num(shortfall), tol), credit)
         near |= inside
-    if tt != "none" and e.kind == "boolean":
+    if tt != "none" and e.kind in ("boolean", "sequence"):
         e.note += "; its tolerance is ignored"
     e.status = np.where(~e.evaluable, "n/a", np.where(e.passed, "pass", np.where(near, "near", "fail"))).astype(object)
     e.credit = np.where(e.evaluable, credit, 0.0)
@@ -216,8 +266,12 @@ def explain(evals: list[CondEval], i: int) -> list[dict]:
         tol_txt = f"{c.tolerance:g}{unit}" if c.tolerance_type != "none" else "none"
         obs = f"{lhs} = {_fmt(e.observed[i])}" if e.kind != "boolean" else c.expression
         tgt = "" if e.kind in ("boolean", "between") else f" vs {_fmt(e.target[i])}"
+        if e.kind == "sequence":
+            lhs, obs, tgt = c.expression, c.expression, ""
         if st == "n/a":
             text = "not evaluable at this bar (indicator warm-up or missing data)"
+        elif e.kind == "sequence":
+            text = ("completed on this bar" if st == "pass" else "didn't complete on this bar") + " (pass/fail only)"
         elif e.kind == "boolean":
             text = f"{'true' if st == 'pass' else 'false'} ({e.note})"
         elif st == "pass":
@@ -280,6 +334,10 @@ def classify(strategy: Strategy, symbol: str, bars: pd.DataFrame, in_range: np.n
         rows[e.cond.id] = e.status[idx]
         rows[f"{e.cond.id}_value"] = np.round(e.observed[idx], 4)
         rows[f"{e.cond.id}_score"] = np.round(100 * e.credit[idx] * e.cond.weight / sum(x.cond.weight for x in evals), 1)
+    for e in evals:
+        if e.kind == "sequence":
+            st = e.extra["start"][idx]
+            rows["sequence_start"] = pd.DatetimeIndex([bars.index[j] if j >= 0 else pd.NaT for j in st])
     out = pd.DataFrame(rows)
     out["explanation"] = [_summary(evals, i) for i in idx]
     return out

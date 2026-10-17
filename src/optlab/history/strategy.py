@@ -32,7 +32,7 @@ NOT_HISTORICAL = {
 }
 SYMBOL_RE = re.compile(r"^\^?[A-Z0-9][A-Z0-9.\-]{0,9}$")
 TOP_KEYS = {"name", "description", "symbols", "timeframe", "range", "warmup_bars", "data", "conditions",
-            "sequence", "matching", "output", "forward"}
+            "sequence", "sequence_weight", "matching", "output", "forward"}
 
 
 class _TextDates(yaml.SafeLoader):
@@ -97,6 +97,7 @@ class Strategy:
     horizons: list[str] = field(default_factory=lambda: ["1", "3", "5", "10"])
     dedupe_bars: int = 0
     description: str = ""
+    sequence_weight: float = 0.0  # 0 = weighted like an average condition
 
     @property
     def version(self) -> str:
@@ -127,6 +128,8 @@ class Strategy:
                "output": {"sort_by": self.sort_by, "order": self.order, "limit": self.limit},
                "forward": {"horizons": self.horizons, "dedupe_bars": self.dedupe_bars}}
         if self.sequence:
+            if self.sequence_weight:
+                out["sequence_weight"] = self.sequence_weight
             out["sequence"] = [{"id": s.id, "expression": s.expression,
                                 **({"within_bars": s.within_bars} if s.within_bars is not None else {})}
                                for s in self.sequence]
@@ -305,8 +308,10 @@ def parse_strategy(data: dict | str) -> Strategy:
         wb = st.get("within_bars")
         if i == 0 and wb is not None:
             p.append(f"{w}.within_bars: the first step starts the sequence; within_bars applies to later steps")
-        if i > 0:
-            wb = _num(wb if wb is not None else -1, f"{w}.within_bars", p, lo=0, integer=True)
+        if i > 0 and wb is None:
+            p.append(f"{w}.within_bars: required for every step after the first (bars allowed after the previous step)")
+        elif i > 0:
+            wb = _num(wb, f"{w}.within_bars", p, lo=0, integer=True)
         steps.append(Step(str(st.get("id") or f"step{i + 1}"), str(st["expression"]), wb if i > 0 else None))
     if not conds and not steps:
         p.append("conditions: add at least one condition (or a sequence)")
@@ -345,12 +350,15 @@ def parse_strategy(data: dict | str) -> Strategy:
             p.append(f"forward.horizons[{i}]: use a bar count like 5 or trading days like 1d (got {h!r})")
     dedupe = _num(fw.get("dedupe_bars", 0), "forward.dedupe_bars", p, lo=0, integer=True)
     warm = _num(d.get("warmup_bars", 0), "warmup_bars", p, lo=0, integer=True)
+    seq_w = _num(d.get("sequence_weight", 0), "sequence_weight", p, lo=0)
+    if d.get("sequence_weight") is not None and not steps:
+        p.append("sequence_weight: set only with a sequence")
 
     if p:
         raise StrategyError(p)
     s = Strategy(name, syms, tf, start, end, tz, bool(rng.get("market_hours_only", True)), warm or 0, source,
                  conds, steps, min_score, min_pass or 0, inc_exact, inc_near, req_mode, sort_by, order, limit,
-                 horizons, dedupe or 0, str(d.get("description", "")))
+                 horizons, dedupe or 0, str(d.get("description", "")), seq_w or 0.0)
     if not s.warmup_bars:
         s.warmup_bars = auto_warmup(s.expressions())
     return s

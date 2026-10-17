@@ -246,3 +246,95 @@ def test_sort_by_score():
     s = strat(c, matching={"include_near": True, "minimum_score": 0, "required_mode": "tolerant"},
               output={"sort_by": "score", "order": "descending"})
     assert search(s, bars).results["score"].tolist() == [100.0, 100.0, 80.0, 50.0]
+
+
+# ------------------------------------------------- behaviour and sequences
+SERIES = [1, 2, 3, 3, 4, 5, 6, 5, 4, 3, 3, 2]
+
+
+@pytest.mark.parametrize("expr,expected", [
+    ("rising(close, bars=2)", "..1..11....."),           # strict: the flat 3 -> 3 breaks it
+    ("increasing(close, bars=3)", "...1111....."),       # flat steps allowed, net rise required
+    ("falling(close, bars=2)", "........11.."),
+    ("decreasing(close, bars=3)", ".........111"),
+    ("stayed_above(close, 3.5, bars=3)", "......111..."),
+    ("stayed_below(close, 3.5, bars=2)", ".111......11"),    # close < 3.5 on bars 0-3 and 9-11
+    ("crossed_above_within(close, 3.5, bars=3)", "....111....."),
+    ("crossed_below_within(close, 4.5, bars=2)", "........11.."),
+    ("touched(close, 3.1, tolerance_pct=5)", "..11.....11."),  # |3 - 3.1| = 0.1 <= 0.155
+    ("between(close, 3, 4)", "..111...111."),            # both ends count
+    ("rising(close, 2)", "..1..11....."),                # positional bars works too
+])
+def test_behaviour_functions(expr, expected):
+    from optlab.live.expr import Evaluator
+    from optlab.live.indicators import bar_functions
+
+    ev = Evaluator(*bar_functions(daily(SERIES)))
+    assert "".join("1" if v else "." for v in ev(expr).tolist()) == expected
+
+
+def test_behaviour_functions_reject_lookahead_and_warm_up_is_false():
+    from optlab.live.expr import Evaluator, ExprError
+    from optlab.live.indicators import bar_functions
+
+    ev = Evaluator(*bar_functions(daily(SERIES)))
+    with pytest.raises(ExprError, match="whole number of bars"):
+        ev("rising(close, bars=0)")
+    assert not ev("stayed_above(close, sma(5), bars=3)").iloc[:6].any()      # sma(5) warm-up -> False
+
+
+def test_behaviour_functions_are_pass_fail_only_in_scoring():
+    e, _ = _one_bar_eval("rising(close, bars=2)", tol=("absolute", 1), closes=[1, 2, 2])
+    assert e.kind == "boolean" and "behaviour over several bars" in e.note and e.status[-1] == "fail"
+
+
+def test_between_function_is_measurable():
+    e, _ = _one_bar_eval("between(close, 40, 60)", tol=("absolute", 5), closes=[62])
+    assert e.kind == "between" and e.shortfall[-1] == pytest.approx(2) and e.status[-1] == "near"
+
+
+def _seq(steps, closes, volume=None, **kw):
+    s = strat([], sequence=steps, **kw)
+    return search(s, daily(closes, volume=volume))
+
+
+def test_sequence_completes_within_windows():
+    steps = [{"id": "up", "expression": "crosses_above(close, 10)"},
+             {"id": "high", "expression": "close > 12", "within_bars": 2},
+             {"id": "vol", "expression": "volume > 5", "within_bars": 1}]
+    closes = [9, 11, 11, 13, 13, 9, 11, 11, 11, 13]
+    vol = [1, 1, 1, 1, 9, 1, 1, 1, 1, 9]
+    res = _seq(steps, closes, vol)
+    got = res.results[["timestamp", "sequence_start"]].map(lambda t: t.strftime("%m-%d")).values.tolist()
+    # start bar 1 (cross), close > 12 on bar 3 (2 bars later), volume on bar 4 (1 later): completes bar 4.
+    # start bar 6: close > 12 first on bar 9 (3 bars later) -> too late, no completion.
+    assert got == [["01-09", "01-06"]]
+
+
+def test_sequence_same_bar_counts_and_all_paths_are_considered():
+    steps = [{"id": "a", "expression": "close >= 10"},
+             {"id": "b", "expression": "close >= 20", "within_bars": 3},
+             {"id": "c", "expression": "volume > 5", "within_bars": 1}]
+    # a on bar 0; b on bars 1 and 3; c only on bar 4 -> only the later b (bar 3) leads to completion
+    res = _seq(steps, [10, 20, 0, 20, 0], [1, 1, 1, 1, 9])
+    assert res.results["timestamp"].dt.strftime("%m-%d").tolist() == ["01-09"]
+    same = _seq([{"id": "a", "expression": "close >= 10"}, {"id": "b", "expression": "volume > 5", "within_bars": 0}],
+                [10, 10], [1, 9])
+    assert same.results["timestamp"].dt.strftime("%m-%d").tolist() == ["01-06"]   # a and b on the same bar
+
+
+def test_sequence_has_no_look_ahead():
+    steps = [{"id": "a", "expression": "crosses_above(close, 10)"},
+             {"id": "b", "expression": "close > 12", "within_bars": 3}]
+    closes = [9, 11, 11, 13, 9, 11, 13, 13]
+    full = _seq(steps, closes).evals["XYZ"][0]
+    for cut in range(2, len(closes)):
+        part = _seq(steps, closes[:cut]).evals["XYZ"][0]
+        assert (part.passed == full.passed[:cut]).all()
+
+
+def test_sequence_validation():
+    with pytest.raises(StrategyError, match=r"sequence\[1\].within_bars: required"):
+        strat([], sequence=[{"expression": "close > 1"}, {"expression": "close > 2"}])
+    with pytest.raises(StrategyError, match=r"sequence\[0\].within_bars"):
+        strat([], sequence=[{"expression": "close > 1", "within_bars": 2}])

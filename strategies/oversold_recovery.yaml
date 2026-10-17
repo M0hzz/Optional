@@ -1,0 +1,39 @@
+# Oversold recovery: a daily pullback inside a long-term uptrend that has started to turn up.
+historical_signal_search:
+  name: Oversold recovery
+  description: Daily bars where RSI has bounced from oversold, price touched the lower Bollinger Band recently and the long-term trend is still up.
+  symbols: [SPY, QQQ, AAPL, MSFT]
+  timeframe: 1d
+  range:
+    start: 2019-01-01
+    end: 2026-10-16
+    timezone: America/New_York
+  conditions:
+    - id: uptrend
+      expression: close > sma(200)
+      required: true
+      weight: 30
+      tolerance: {type: percent_distance, value: 2}
+    - id: rsi_bounce
+      expression: crosses_above(rsi(14), 35)
+      required: true
+      weight: 30
+      recent_bars: 2                     # crossed today, or up to 2 bars ago (partial credit)
+      tolerance: {type: absolute, value: 3}
+    - id: band_touch
+      expression: lowest(5) <= bb_lower() * 1.005
+      required: false
+      weight: 20
+      tolerance: {type: percent_distance, value: 1}
+    - id: turning_up
+      expression: increasing(close, bars=2)
+      required: false
+      weight: 20
+  matching:
+    minimum_score: 70
+    minimum_pass_count: 2
+    include_exact: true
+    include_near: true
+    required_mode: tolerant
+  output: {sort_by: timestamp, order: ascending, limit: 1000}
+  forward: {horizons: ["1", "5", "10", "20"], dedupe_bars: 10}

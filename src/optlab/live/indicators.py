@@ -87,6 +87,41 @@ def vwap(h, l, c, v, intraday: bool):
     return (tp * v).groupby(day).cumsum() / v.groupby(day).cumsum()
 
 
+# ------------------------------------------------------------ behaviour over several bars
+# Each returns a boolean Series. A window containing a missing value (warm-up) is False.
+# "bars=N" counts the current bar: stayed_above(a, b, bars=5) checks this bar and the 4 before.
+
+def _window_all(cond: pd.Series, valid: pd.Series, n: int) -> pd.Series:
+    x = cond.astype(float).where(valid)
+    return (x.rolling(n, min_periods=n).min() == 1)
+
+
+def _window_any(cond: pd.Series, valid: pd.Series, n: int) -> pd.Series:
+    x = cond.astype(float).where(valid)
+    return (x.rolling(n, min_periods=n).max() == 1)
+
+
+def rising(x: pd.Series, n: int) -> pd.Series:
+    """Strictly higher than the bar before on each of the last n steps: x[t] > x[t-1] > ... > x[t-n].
+    A flat step (equal values) breaks it."""
+    return _window_all(x > x.shift(), x.notna() & x.shift().notna(), n)
+
+
+def falling(x: pd.Series, n: int) -> pd.Series:
+    """Strictly lower than the bar before on each of the last n steps."""
+    return _window_all(x < x.shift(), x.notna() & x.shift().notna(), n)
+
+
+def increasing(x: pd.Series, n: int) -> pd.Series:
+    """Never lower on each of the last n steps (equal values allowed) and higher overall: x[t] > x[t-n]."""
+    return _window_all(x >= x.shift(), x.notna() & x.shift().notna(), n) & (x > x.shift(n))
+
+
+def decreasing(x: pd.Series, n: int) -> pd.Series:
+    """Never higher on each of the last n steps (equal values allowed) and lower overall: x[t] < x[t-n]."""
+    return _window_all(x <= x.shift(), x.notna() & x.shift().notna(), n) & (x < x.shift(n))
+
+
 def bar_functions(bars: pd.DataFrame, timeframe: str = "1d") -> tuple[dict, dict]:
     """(names, funcs) for the Evaluator, bound to one symbol's bars."""
     o, h, l, c, v = (bars[k].astype(float) for k in ("open", "high", "low", "close", "volume"))
@@ -139,6 +174,23 @@ def bar_functions(bars: pd.DataFrame, timeframe: str = "1d") -> tuple[dict, dict
         "ago": lambda x, n=1: _series(x, c).shift(_lookback(n, "ago", minimum=0)),
         "crosses_above": crosses_above,
         "crosses_below": crosses_below,
+        # behaviour across bars (see the functions above for exact definitions)
+        "rising": lambda x, bars=3: rising(_series(x, c), _lookback(bars, "rising")),
+        "falling": lambda x, bars=3: falling(_series(x, c), _lookback(bars, "falling")),
+        "increasing": lambda x, bars=3: increasing(_series(x, c), _lookback(bars, "increasing")),
+        "decreasing": lambda x, bars=3: decreasing(_series(x, c), _lookback(bars, "decreasing")),
+        "stayed_above": lambda a, b, bars=3: (lambda A, B: _window_all(A > B, A.notna() & B.notna(),
+                                                                       _lookback(bars, "stayed_above")))(_series(a, c), _series(b, c)),
+        "stayed_below": lambda a, b, bars=3: (lambda A, B: _window_all(A < B, A.notna() & B.notna(),
+                                                                       _lookback(bars, "stayed_below")))(_series(a, c), _series(b, c)),
+        "crossed_above_within": lambda a, b, bars=3: _window_any(crosses_above(a, b), pd.Series(True, index=c.index),
+                                                                 _lookback(bars, "crossed_above_within")),
+        "crossed_below_within": lambda a, b, bars=3: _window_any(crosses_below(a, b), pd.Series(True, index=c.index),
+                                                                 _lookback(bars, "crossed_below_within")),
+        "touched": lambda a, b, tolerance_pct=0.25: (lambda A, B: ((A - B).abs() <= abs(float(tolerance_pct)) / 100 * B.abs())
+                                                     & A.notna() & B.notna())(_series(a, c), _series(b, c)),
+        "between": lambda x, lower, upper: (lambda X, L, U: (X >= L) & (X <= U))(_series(x, c), _series(lower, c),
+                                                                                  _series(upper, c)),
         "abs": lambda x: x.abs() if isinstance(x, pd.Series) else abs(x),
         "min": lambda a, b: np.minimum(a, b),
         "max": lambda a, b: np.maximum(a, b),
@@ -175,5 +227,11 @@ STUDY_HELP = {
     "change_pct(n=1)": "% change over n bars", "distance_pct(a, b)": "% that a is above b",
     "avg_volume(n=20), rel_volume(n=20)": "average volume, volume vs average",
     "ago(x, n=1)": "value of x n bars ago", "crosses_above(a, b), crosses_below(a, b)": "crossover on the latest bar",
+    "rising(x, bars=3) / falling(x, bars=3)": "strictly up / down on each of the last N bars (a flat bar breaks it)",
+    "increasing(x, bars=3) / decreasing(x, bars=3)": "never down / never up for N bars, and higher / lower overall",
+    "stayed_above(a, b, bars=3) / stayed_below": "a > b (a < b) on each of the last N bars, current included",
+    "crossed_above_within(a, b, bars=3) / crossed_below_within": "a crossover on any of the last N bars",
+    "touched(a, b, tolerance_pct=0.25)": "|a - b| <= tolerance_pct % of b on this bar (equality counts)",
+    "between(x, lower, upper)": "lower <= x <= upper (both ends count)",
     "open, high, low, close, volume": "latest bar values",
 }
