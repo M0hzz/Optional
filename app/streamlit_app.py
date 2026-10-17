@@ -25,6 +25,10 @@ from optlab.pricing.engine import entry_cost, fill_entry_prices, price_position 
 from optlab.research import build_features, rank_candidates  # noqa: E402
 from optlab.risk import RiskLimits, allocate, check_limits, portfolio_report, size_position, stress_loss  # noqa: E402
 from optlab.strategies import STRATEGIES, max_loss  # noqa: E402
+import overlay_ui as ov  # noqa: E402
+from optlab.overlay import OverlayConfigError, frames_from_prices, load_overlay_config  # noqa: E402
+from optlab.overlay import scan as overlay_run  # noqa: E402
+from optlab.overlay.config import USER_PATH as OVERLAY_PATH, defaults as overlay_defaults, validate as overlay_validate  # noqa: E402
 
 st.set_page_config(page_title="optlab", page_icon="📈", layout="wide")
 CFG = load_config()
@@ -134,6 +138,13 @@ with st.sidebar:
     st.divider()
     st.markdown(f"📘 [User guide]({ui.GUIDE})", help="Step-by-step guide to every tab, with a sample market day.")
     st.caption("Each tab has a **How to use this tab** box at the top, and ⓘ icons explain every control.")
+    st.divider()
+    try:
+        OCFG = load_overlay_config()
+        ocfg_error = None
+    except OverlayConfigError as exc:   # a broken overlay.yaml never takes the dashboard down: defaults + a warning
+        OCFG, ocfg_error = overlay_validate(overlay_defaults()), exc
+    OF = ov.sidebar_controls(OCFG)
 
 spot_series = close_series(symbol)
 spot = float(spot_series.iloc[-1])
@@ -141,8 +152,41 @@ chain = load_chain(symbol)
 iv_atm = atm_iv(chain) or float(np.log(spot_series).diff().tail(20).std() * np.sqrt(252) * 1.1)
 
 earn_date = next_earnings(symbol)
+
+
+# ------------------------------------------------------------------ overlay console (above every tab)
+@st.cache_data(ttl=300, show_spinner="Running overlay rules...")
+def overlay_scan(cfg_json: str, data_key: str, minute: str):
+    """Cached on settings, database file time and the clock minute: data, settings or a new bar rescan."""
+    import json
+
+    cfg = overlay_validate(json.loads(cfg_json))
+    frames = frames_from_prices(load_prices().to_pandas())
+    return overlay_run(frames, cfg, pd.Timestamp.now(tz="America/New_York").to_pydatetime(), src_label)
+
+
+def overlay_now_key() -> tuple[str, str]:
+    import json
+
+    db = Path(CFG["data"]["db_path"])
+    return json.dumps(OCFG.raw, sort_keys=True, default=str), f"{db.stat().st_mtime:.0f}"
+
+
+OSCAN = overlay_scan(*overlay_now_key(), pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M")) \
+    if OF["on"] else None
+if ocfg_error is not None:
+    st.error("overlay.yaml has problems, so the built-in overlay defaults are in use:\n\n"
+             + "\n".join(f"- {p}" for p in ocfg_error.problems))
+if OSCAN is not None:
+    ov.console(OSCAN, OF)
+
+
+def overlay_on(key: str) -> bool:
+    return OSCAN is not None and OCFG.tab_on(key)
+
+
 tabs = st.tabs(["Scanner", "Chain & pricer", "Strategy lab", "Backtest", "Risk & sizing", "Insiders",
-                "Company", "Macro", "Option chain", "Monitor", "Signal explorer"])
+                "Company", "Macro", "Option chain", "Monitor", "Signal explorer", "Overlay"])
 
 # ------------------------------------------------------------------- scanner
 with tabs[0]:
@@ -159,6 +203,9 @@ with tabs[0]:
               "The charts below show the symbol picked in the sidebar: its price, and its realized volatility "
               "against today's implied volatility (dashed line)."],
              ["iv", "vol", "guide"])
+    if overlay_on("scanner"):
+        ov.scanner_panel(OSCAN)
+        st.divider()
     feats = build_features(load_prices().select(["symbol", "date", "close"]))
     ivs = {s: atm_iv(load_chain(s)) for s in symbols}
     ivs = {k: v for k, v in ivs.items() if v}
@@ -1054,3 +1101,40 @@ with tabs[10]:
     from signal_explorer import render as render_signal_explorer  # noqa: E402
 
     render_signal_explorer()
+
+# ------------------------------------------------------------------ overlay settings and data health
+with tabs[11]:
+    st.subheader("Overlay: data health, rules and settings")
+    ui.intro("The overlay highlights conditions across every tab using fixed, documented rules. No AI, machine "
+             "learning or language model is involved: the same data and settings always give the same result.",
+             ["**Data health** lists every check run on the data. Failed checks either block a calculation (shown as "
+              "Data error) or downgrade it (shown with a Stale data or similar flag).",
+              "**Rules** lists the rules from overlay.yaml with their conditions and confirmation requirements.",
+              "**Status guide** explains every status, colour and icon.",
+              "Edit overlay.yaml in the project folder to change rules and thresholds; this tab shows what is loaded."],
+             ["guide"])
+    if OSCAN is None:
+        st.info("The overlay is switched off in the sidebar.")
+    else:
+        t1, t2, t3 = st.tabs(["Data health", "Rules", "Status guide"])
+        with t1:
+            ov.data_health_panel(OSCAN)
+        with t2:
+            st.caption(f"Loaded from {'overlay.yaml + ' if OVERLAY_PATH.exists() else ''}built-in defaults · config "
+                       f"version {OCFG.version}")
+            for r in OCFG.rules:
+                with st.expander(f"{'✅' if r.enabled else '⏸️'} {r.name} · {r.direction} · {r.timeframe}"):
+                    st.markdown(f"Confirmation: score ≥ {r.minimum_score if r.minimum_score is not None else OCFG.thresholds['confirmed_match_score']:g}, "
+                                f"≥ {r.minimum_pass_count} passing, required conditions "
+                                f"{'must pass' if r.required_must_pass else 'may be near'}. Invalidation: "
+                                f"{', '.join(f'`{e}`' for e in r.invalidation) or 'none'}. Tabs: {', '.join(r.tab_scope)}.")
+                    ui.show(pd.DataFrame([{"id": c.id, "expression": c.expression, "required": c.required,
+                                           "weight": c.weight, "tolerance": "None" if c.tolerance_type == "none"
+                                           else f"{c.tolerance:g} ({c.tolerance_type.replace('_', ' ')})"}
+                                          for c in r.conditions]), rename={"id": "ID"}, width="stretch")
+        with t3:
+            from optlab.overlay.status import STATUSES as OST, COLORS as OCOL
+
+            ui.show(pd.DataFrame([{"status": f"{s.icon} {OCFG.labels.get(s.code, s.label)}", "colour": s.color.capitalize(),
+                                   "meaning": s.meaning} for s in OST.values()]), width="stretch")
+
