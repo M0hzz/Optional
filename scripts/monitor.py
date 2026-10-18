@@ -26,7 +26,10 @@ from optlab.config import load_config  # noqa: E402
 from optlab.live.expr import ExprError  # noqa: E402
 from optlab.live.feed import make_feed  # noqa: E402
 from optlab.live.monitor import AlertTracker, Schedule, notify, write_results  # noqa: E402
-from optlab.live.scanner import load_scan_config, run_pass  # noqa: E402
+from optlab.live.scanner import load_scan_config, run_pass, scan_symbols  # noqa: E402
+from optlab.overlay import OverlayConfigError, load_overlay_config, scan as overlay_scan  # noqa: E402
+from optlab.overlay.alerts import TransitionTracker, write_alerts  # noqa: E402
+from optlab.overlay.config import DAILY_TIMEFRAMES  # noqa: E402
 
 OUT = ROOT / "data" / "monitor"
 
@@ -80,6 +83,18 @@ def main() -> None:
                      chain_refresh=float(data.get("chain_refresh_seconds", 50)))
     tracker = AlertTracker(OUT / "alert_state.json", alerts_cfg.get("repeat_exit_minutes", 15),
                            alerts_cfg.get("rearm_minutes", 30), alerts_cfg.get("confirm_passes", 3))
+    try:
+        ocfg = load_overlay_config()
+    except OverlayConfigError as exc:
+        print(f"Overlay disabled: {exc}", flush=True)
+        ocfg = None
+    otrack = None
+    if ocfg is not None and ocfg.enabled:
+        al = ocfg.raw.get("alerts") or {}
+        otrack = TransitionTracker(OUT / "overlay_state.json", al.get("cooldown_minutes", 30), al.get("stacking_bars", 3))
+        osyms = sorted({s for sc in cfg["scans"] for s in scan_symbols(sc, cfg["watchlists"])}
+                       | set(ocfg.market["indexes"]) | {ocfg.market["benchmark"]})
+        intraday_tfs = sorted({r.timeframe for r in ocfg.rules if r.enabled and r.timeframe not in DAILY_TIMEFRAMES})
     if desktop and not notify("optlab monitor", "Notifications are working.", "low"):
         print("notify-send not found: alerts will print here only. On Ubuntu: sudo apt install libnotify-bin")
         desktop = False
@@ -96,9 +111,40 @@ def main() -> None:
                 notify(title, body, urgency)
         for e in result.errors:
             print(f"  ! {e}", flush=True)
+        if otrack is not None:
+            overlay_pass(now)
         if result.seconds > sched.every and not args.once:
             print(f"  ! pass took {result.seconds:.0f}s, longer than every_seconds={sched.every}; "
                   "shrink the watchlists or raise every_seconds", flush=True)
+
+    def overlay_pass(now):
+        """Overlay rules on completed bars: alerts only on state changes (deduplicated, with cooldown)."""
+        try:
+            daily = feed.bars(osyms, "1d", 500)
+            intra = {tf: feed.bars(osyms, tf) for tf in intraday_tfs} if source != "synthetic" else {}
+            osc = overlay_scan(daily, ocfg, now, source, intraday=intra or None)
+        except Exception as exc:
+            print(f"  ! overlay: {type(exc).__name__}: {exc}", flush=True)
+            return
+        oalerts = otrack.alerts(osc.results, now)
+        try:
+            from optlab.overlay import audit as oaudit
+
+            oaudit.append(osc)
+        except OSError:
+            pass
+        write_alerts(OUT, oalerts, now)
+        top = osc.highlights(limit=12)
+        (OUT / "overlay_latest.json").write_text(json.dumps({
+            "time": now.isoformat(timespec="seconds"), "seconds": round(osc.seconds, 2), "symbols": osc.n_symbols,
+            "rules": osc.n_rules, "bars": osc.n_bars, "skipped": osc.skipped,
+            "highlights": [{"status": r.status, "symbol": r.symbol, "rule": r.rule_name, "timeframe": r.timeframe,
+                            "bar": r.data_timestamp, "explanation": r.explanation, "flags": r.data_flags}
+                           for r in top]}, indent=1, default=str))
+        for a in oalerts:
+            print(f"  OVERLAY {a.title}: {a.body}", flush=True)
+            if desktop and (ocfg.raw.get("alerts") or {}).get("desktop", True):
+                notify(a.title, a.body, a.urgency)
 
     if args.once:
         one_pass()

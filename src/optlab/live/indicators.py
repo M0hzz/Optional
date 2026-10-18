@@ -164,6 +164,9 @@ def bar_functions(bars: pd.DataFrame, timeframe: str = "1d") -> tuple[dict, dict
             lambda x: np.abs(x - x.mean()).mean(), raw=True)))((h + l + c) / 3),
         "obv": lambda: (np.sign(c.diff()).fillna(0) * v).cumsum(),
         "vwap": lambda: vwap(h, l, c, v, intraday=timeframe not in ("1d", "1wk", "1mo")),
+        "rolling_vwap": lambda n=20: ((h + l + c) / 3 * v).rolling(_lookback(n, "rolling_vwap")).sum()
+        / v.rolling(_lookback(n, "rolling_vwap")).sum(),
+        "pct_rank": lambda x, n=252: 100 * _series(x, c).rolling(_lookback(n, "pct_rank", minimum=2)).rank(pct=True),
         "hv": lambda n=20: np.log(c / c.shift()).rolling(int(n)).std() * np.sqrt(per_year),
         "highest": lambda n, s=None: (h if s is None else s).rolling(int(n)).max(),
         "lowest": lambda n, s=None: (l if s is None else s).rolling(int(n)).min(),
@@ -223,6 +226,8 @@ STUDY_HELP = {
     "stoch_k / stoch_d (n=14)": "stochastic oscillator, 0-100", "williams_r(n=14)": "Williams %R, -100..0",
     "cci(n=20)": "commodity channel index", "obv()": "on-balance volume", "vwap()": "session VWAP (intraday)",
     "hv(n=20)": "historical (realized) volatility, annualized decimal",
+    "rolling_vwap(n=20)": "volume-weighted average price over the last n bars (useful on daily bars)",
+    "pct_rank(x, n=252)": "percentile rank 0-100 of x's latest value among its last n values (causal)",
     "highest(n) / lowest(n)": "highest high / lowest low over n bars",
     "change_pct(n=1)": "% change over n bars", "distance_pct(a, b)": "% that a is above b",
     "avg_volume(n=20), rel_volume(n=20)": "average volume, volume vs average",
