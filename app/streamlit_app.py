@@ -95,6 +95,28 @@ def load_financials() -> pl.DataFrame:
     return _table("financials", store().financials)
 
 
+def stored_quotes(symbol: str) -> pd.DataFrame | None:
+    """The stored chain in the overlay's column names, with liquidity flags (for leg quote checks)."""
+    ch = load_chain(symbol)
+    if ch.is_empty():
+        return None
+    from optlab.overlay.account import Profile
+    from optlab.overlay.options import contract_flags
+
+    df = with_dte(ch).to_pandas().rename(columns={"option_type": "type", "implied_vol": "iv"})
+    for col in ("delta", "theta", "gamma", "vega"):
+        if col not in df:
+            df[col] = np.nan
+    df["mid"] = (df["bid"] + df["ask"]) / 2
+    return contract_flags(df, OCFG.thresholds, Profile.from_config(OCFG.account))
+
+
+def snapshot_dates() -> list:
+    if not store().has_table("option_chains"):
+        return []
+    return store().query("SELECT DISTINCT snapshot_date FROM option_chains")["snapshot_date"].to_list()
+
+
 def next_earnings(symbol: str):
     f = load_fundamentals()
     if f.is_empty():
@@ -461,6 +483,12 @@ with tabs[2]:
     st.dataframe(sdf.style.format("{:+,.0f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-glim, vmax=glim,
                                                                   low=0.35, high=0.35, text_color_threshold=0),
                  width="stretch")
+    if overlay_on("strategy_lab"):
+        _px = load_prices().filter(pl.col("symbol") == symbol).to_pandas()
+        from optlab.live.indicators import atr as _atr
+
+        _atr_v = float(_atr(_px["high"], _px["low"], _px["close"], 14).iloc[-1]) if len(_px) > 20 else None
+        ov.strategy_panel(legs, spot, RATE, dte, iv_atm, OCFG, symbol, spot_series, _atr_v, stored_quotes(symbol), strat)
 
 # ------------------------------------------------------------------ backtest
 with tabs[3]:
@@ -534,6 +562,8 @@ with tabs[3]:
                           "return_pct": "P&L ÷ capital.", "iv": "Assumed implied volatility at entry."},
                     width="stretch")
 
+    if overlay_on("backtest"):
+        ov.backtest_panel(px, base, OCFG)
     SWEEP_METRICS = ["sharpe", "annual_return_%", "max_drawdown_%", "calmar"]
     if st.button("Run DTE × delta sweep",
                  help="Re-runs the backtest for 5 expiries × 6 deltas (30 runs) and shows the result as a heat map. "
@@ -1129,6 +1159,10 @@ with tabs[9]:
 # ------------------------------------------------------ historical signal explorer
 with tabs[10]:
     from signal_explorer import render as render_signal_explorer  # noqa: E402
+
+    if overlay_on("signal_explorer"):
+        with st.expander("🧭 Overlay: historical evidence for the overlay's rules", expanded=True):
+            ov.history_panel(OSCAN, OCFG, snapshot_dates())
 
     render_signal_explorer()
 

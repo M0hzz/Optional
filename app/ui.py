@@ -131,8 +131,14 @@ def _compact(v) -> str:
     return f"{'-' if v < 0 else ''}${a:,.2f}"
 
 
+def _money(decimals: int):
+    def f(v) -> str:
+        return f"{'−' if v < 0 else ''}${abs(v):,.{decimals}f}"
+    return f
+
+
 FMT = {
-    "money": "${:,.2f}", "money0": "${:,.0f}", "smoney0": "{:+,.0f}", "int": "{:,.0f}", "num": "{:,.2f}",
+    "money": _money(2), "money0": _money(0), "smoney0": "{:+,.0f}", "int": "{:,.0f}", "num": "{:,.2f}",
     "num1": "{:,.1f}", "num3": "{:,.3f}", "num4": "{:,.4f}", "signed": "{:+,.2f}", "ratio": "{:,.2f}×",
     "pct": "{:.1%}", "pct2": "{:.2%}", "spct": "{:+.1%}", "pts": "{:,.1f}%", "spts": "{:+,.1f}%",
     "date": _date, "text": str, "compact": _compact,

@@ -528,3 +528,97 @@ def test_liquidity_deterioration():
     ch.loc[ch["contract"] == "X100c", ["bid", "ask"]] = [0.0, 2.6]
     d = deterioration(a, contract_flags(ch, TH, P), TH)
     assert "X100c" in set(d["contract"]) and "bid disappeared" in d.set_index("contract").loc["X100c", "change"]
+
+
+# ---------------------------------------------------------------- phase 4
+from optlab.overlay import history_ev as hev  # noqa: E402
+from optlab.overlay.structure import analyze, assignment_scenario, breakevens, stress  # noqa: E402
+
+
+def test_similarity_formula():
+    feats = {"a": {"scale": 10, "weight": 1}, "b": {"scale": 1, "weight": 3}}
+    cur = pd.Series({"a": 50.0, "b": 1.0})
+    hist = pd.DataFrame({"a": [50.0, 55.0, 70.0], "b": [1.0, 1.5, 5.0]})
+    s = hev.similarity(cur, hist, feats)
+    # row 1: d = (0.5, 0.5) -> 100 * (1 - (0.5 + 1.5) / 4) = 50; row 2: (2, 4) -> clipped at 0
+    assert list(s.round(6)) == [100.0, 50.0, 0.0]
+
+
+def test_events_count_new_states_once():
+    st_ = np.array(["NOT_PRESENT", "NEAR_CONFIRMATION", "CONFIRMED", "CONFIRMED", "WATCH", "CONFIRMED"], dtype=object)
+    ex, nr = hev.events_from_states(st_)
+    assert list(ex) == [2, 5] and list(nr) == [1]
+
+
+def test_outcomes_signed_by_direction_and_first_excursion():
+    b = bars_from([100, 100, 104, 98, 110], spread=0.0)
+    up = hev.outcomes(b, np.array([0]), (4,), "bullish").iloc[0]
+    dn = hev.outcomes(b, np.array([0]), (4,), "bearish").iloc[0]
+    assert up["return_pct"] == pytest.approx(10.0) and dn["return_pct"] == pytest.approx(-10.0)
+    assert up["favorable_pct"] == pytest.approx(10.0) and up["adverse_pct"] == pytest.approx(-2.0)
+    assert up["first"] == "adverse"          # the low (bar 3) came before the high (bar 4)
+
+
+def test_small_historical_sample_flagged_and_regimes():
+    rng = np.random.default_rng(2)
+    b = bars_from(100 + np.cumsum(rng.normal(0.05, 1, 400)))
+    rule = {"id": "r", "name": "R", "direction": "bullish", "conditions": [{"expression": "close > ago(highest(60), 1)"}]}
+    cfg = cfg_with([rule], thresholds={"minimum_historical_samples": 500})
+    res = evaluate_rule(cfg.rules[0], b, make_evaluator(b, "1d"), "X", cfg.thresholds, {})
+    ev = hev.evidence(res, cfg.rules[0], b, None, cfg, 5)
+    assert ev.status == "LOW_SAMPLE_SIZE" and ev.summary_exact["low_sample"].all()
+    assert set(ev.regimes["regime"]) == {"Long-term trend", "Volatility"}        # no benchmark: not invented
+
+
+def test_parameter_sensitivity_detects_a_knife_edge_threshold():
+    closes = np.tile([54.0, 55.0], 30)       # crosses 54.5 every other bar: 30 confirmations, 1 or 0 one step away
+    rule = {"id": "r", "name": "R", "conditions": [{"id": "lvl", "expression": "close > 54.5"}]}
+    cfg = cfg_with([rule], thresholds={"parameter_sensitivity_drop": 0.5})
+    df = hev.sensitivity(cfg.rules[0], bars_from(closes), None, cfg.thresholds)
+    assert set(df["tested"]) == {53.5, 55.5} and df["sensitive"].all() and set(df["base_events"]) == {30}
+
+
+def test_structure_defined_risk_breakevens_and_leg_removal():
+    legs = [Leg("call", 100, 30, -1, 0.3, entry_price=3.0), Leg("call", 105, 30, 1, 0.3, entry_price=1.0)]
+    assert breakevens(legs, 100) == [pytest.approx(102.0, abs=0.01)]
+    a = analyze(legs, 100, 0.04, 30, 0.3, acc.Profile(), "X", None, 2.0, TH)
+    assert a["defined"] and a["max_loss"] == pytest.approx(300) and a["width"] == 5
+    kinds = [k for k, _ in a["risks"]]
+    assert "LEG_REMOVAL" in kinds and "ASSIGNMENT" in kinds        # dropping the long call leaves a naked call
+    naked = analyze(legs[:1], 100, 0.04, 30, 0.3, acc.Profile(), "X", None, 2.0, TH)
+    assert not naked["defined"] and naked["fit"].classification == "UNDEFINED RISK"
+
+
+def test_forecast_compatibility_and_assignment_text():
+    legs = [Leg("put", 95, 30, -1, 0.3, entry_price=1.5), Leg("put", 90, 30, 1, 0.3, entry_price=0.6)]
+    a = analyze(legs, 100, 0.04, 30, 0.3, acc.Profile(), "X", None, 2.0, TH,
+                {"direction": "Bearish", "range": (80, 90), "holding_days": 45, "volatility": "Rising"})
+    st_ = dict(zip(a["forecast"]["check"], a["forecast"]["status"]))
+    assert st_ == {"Direction": "fail", "Expected range": "fail", "Holding period": "fail", "Volatility outlook": "fail"}
+    txt = assignment_scenario(legs, 100, acc.Profile())
+    assert "buy 100 shares for $9,500" in txt[0] and "NOT covered" in txt[0]
+
+
+def test_stress_scenarios_cover_the_configured_set():
+    legs = [Leg("call", 100, 30, 1, 0.3, entry_price=3.5)]
+    s = stress(legs, 100, 0.04, 30, 0.3, 2.0, acc.Profile(), 350, [103.5])
+    names = set(s["scenario"])
+    for want in ("Underlying -2 ATR now", "Underlying +1 ATR now", "IV -25%", "IV +10%", "1 day pass", "7 days pass",
+                 "Expiration week (5 days left)", "100% of maximum loss"):
+        assert want in names
+    assert s.loc[s["scenario"] == "100% of maximum loss", "pnl"].iloc[0] == -350
+    assert s.loc[s["scenario"] == "Underlying +2 ATR now", "crosses_breakeven"].iloc[0]
+
+
+def test_backtest_diagnostics_flags():
+    from optlab.backtest import BTParams
+    from optlab.overlay.backtest_diag import diagnostics, longest_losing_streak
+    rng = np.random.default_rng(4)
+    px = pd.Series(100 * np.exp(np.cumsum(rng.normal(0.0003, 0.012, 900))), index=pd.bdate_range("2022-01-03", periods=900))
+    d = diagnostics(px, BTParams(strategy="put_write"), {**TH, "minimum_historical_samples": 10_000})
+    items = {i["check"]: i["status"] for i in d["items"]}
+    assert items["Sample size"] == "LOW_SAMPLE_SIZE" and items["Survivorship bias"] == "NEAR_CONFIRMATION"
+    assert items["Option fills"] == "REQUIRES_DATA_VALIDATION"
+    assert {"Out-of-sample confirmation", "Results after doubled costs", "Parameter robustness"} <= set(items)
+    assert len(d["robust"]) == 4 and list(d["is_oos"]["period"]) == ["In-sample (first 70%)", "Out-of-sample (last 30%)"]
+    assert longest_losing_streak(pd.Series([1, -1, -2, 0, 3, -1])) == 3

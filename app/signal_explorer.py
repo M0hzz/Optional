@@ -351,6 +351,19 @@ def _results(res) -> None:
                           "median_realized_vol_pct": "Annualized volatility of the bars in the window.",
                           "incomplete": "Signals too close to the end of the data to measure."},
                     width="stretch")
+            try:
+                from optlab.overlay import load_overlay_config
+
+                mins = int(load_overlay_config().thresholds["minimum_historical_samples"])
+            except Exception:
+                mins = 30
+            small = summ[(summ["group"] == "all") & (summ["signals"] < mins)]
+            if not small.empty:
+                st.warning(f"🔬 Low sample size: {', '.join(f'{_horizon(h)} has {n} signals' for h, n in zip(small['horizon'], small['signals']))}"
+                           f" (minimum {mins}, overlay.yaml → thresholds.minimum_historical_samples). Percentages from "
+                           "so few signals can swing widely.")
+            st.caption("Technical signal available. Historical options affordability cannot be verified because "
+                       "timestamped option quotes are unavailable.")
             note = f"{summ.attrs.get('deduped', 0):,} signals dropped by the spacing rule. " if dd else ""
             st.caption(note + "Incomplete = the horizon runs past the last available bar; left out of the statistics.")
             with st.expander("Per-signal forward behaviour"):
