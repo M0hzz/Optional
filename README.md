@@ -111,6 +111,20 @@ key with `obb.user.credentials`.
   strike, calls and puts side by side with Greeks, filters, CSV download.
 - **Monitor** — the live monitor's latest scan hits, position statuses and alerts;
   refreshes every 20 seconds.
+- **Signal explorer** — historical searches (see below).
+- **Overlay** — data health, the overlay's rules, a status guide, settings and the audit log.
+
+### The overlay (Mastermind console)
+
+A rules-based console sits above every tab and lists what deserves a look right now: confirmed
+conditions, near confirmations with exactly what they still need, fresh / stale / overextended /
+invalidated signals, market and sector context, historical sample quality, option liquidity,
+small-account fit (a $1,000 profile by default), assignment and event exposure, data problems and
+cross-tab confluence, each with a pointer to the tab that has the detail. Every tab gets its own
+overlay panel. **No AI is used anywhere:** every highlight comes from a rule in `overlay.yaml` or a
+documented formula, and the same data always gives the same result. It never trades.
+Rules, thresholds and every formula: [docs/OVERLAY.md](docs/OVERLAY.md). Change settings on the
+Overlay tab or in `overlay.yaml`; switch it off with **Show overlay** in the sidebar.
 
 ---
 
@@ -326,6 +340,12 @@ scans.yaml                live monitor settings, scans and positions
 src/optlab/history/       bars.py (archive, Yahoo, synthetic) · strategy.py (YAML validation) ·
                           explorer.py (evaluation, scoring) · forward.py · library.py (saved strategies/searches)
 app/signal_explorer.py    the Signal explorer tab
+src/optlab/overlay/       the deterministic overlay: config.py · rules.py · quality.py (data health) ·
+                          market.py · alerts.py · account.py · options.py · structure.py ·
+                          history_ev.py · backtest_diag.py · confluence.py · audit.py · defaults.yaml
+app/overlay_ui.py         the console and the overlay panels
+overlay.yaml              your overlay settings (optional; written by the Overlay tab)
+docs/OVERLAY.md           what the overlay does and every formula
 strategies/               historical-search strategies (YAML)
 watchlists/               symbol lists for scans
 integrations/             lean/ · qlib/ · nautilus/

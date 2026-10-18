@@ -197,7 +197,8 @@ def sensitivity(rule, bars: pd.DataFrame, bench, th: dict) -> pd.DataFrame:
         step = 1.0 if abs(val) >= 10 else max(abs(val) * 0.1, 0.01)
         for v in (val - step, val + step):
             r2 = copy.deepcopy(rule)
-            body = parse(r2.conditions[k].expression).body
+            # parse() results are cached and shared: edit a copy, never the cached tree
+            body = copy.deepcopy(parse(r2.conditions[k].expression).body)
             body.comparators[0] = ast.Constant(round(v, 6))
             r2.conditions[k].expression = ast.unparse(body)
             res = evaluate_rule(r2, bars, make_evaluator(bars, rule.timeframe, bench), "S", th, {})
@@ -278,7 +279,7 @@ def evidence(result, rule, bars: pd.DataFrame, bench: pd.DataFrame | None, cfg, 
             now = col.iloc[-1]
             cur.append({"condition": name, "current": float(now), "exact_median": float(hist.median()) if len(hist) else np.nan,
                         "percentile_among_exact": float(100 * (hist <= now).mean()) if len(hist) else np.nan})
-    n5 = s_ex.loc[s_ex["horizon"] == horizon, "events"]
+    n5 = s_ex.loc[s_ex["horizon"] == horizon, "events"] if not s_ex.empty else pd.Series(dtype=int)
     n5 = int(n5.iloc[0]) if len(n5) else 0
     status = "LOW_SAMPLE_SIZE" if n5 < mins else "INFO"
     notes = []

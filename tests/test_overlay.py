@@ -622,3 +622,119 @@ def test_backtest_diagnostics_flags():
     assert {"Out-of-sample confirmation", "Results after doubled costs", "Parameter robustness"} <= set(items)
     assert len(d["robust"]) == 4 and list(d["is_oos"]["period"]) == ["In-sample (first 70%)", "Out-of-sample (last 30%)"]
     assert longest_losing_streak(pd.Series([1, -1, -2, 0, 3, -1])) == 3
+
+
+# ---------------------------------------------------------------- phase 5
+from optlab.overlay import audit as oaudit  # noqa: E402
+from optlab.overlay import confluence as cf  # noqa: E402
+
+
+def test_composite_formula_and_contributions():
+    comp = {"market": 100, "sector": None, "technical": 80, "historical": None, "liquidity": None, "data_quality": 50}
+    w = {"market": 10, "sector": 10, "technical": 30, "historical": 20, "liquidity": 10, "data_quality": 10}
+    total, contrib = cf.composite(comp, w, False)
+    assert total == pytest.approx((10 * 100 + 30 * 80 + 10 * 50) / 50)
+    assert set(contrib) == {"market", "technical", "data_quality"} and sum(contrib.values()) == pytest.approx(total)
+    assert cf.composite(comp, w, True) == (None, {})          # a blocking data check withholds the composite
+
+
+def test_affordability_never_enters_confluence_scores():
+    assert "account" not in cf.COMPONENTS and "account_fit" not in cf.COMPONENTS
+
+
+def _scan_for_confluence():
+    rng = np.random.default_rng(9)
+    frames = {s: bars_from(100 + np.cumsum(rng.normal(0.1, 1, 400))) for s in ("SPY", "QQQ", "IWM", "AAA", "BBB")}
+    return scan(frames, validate(defaults()), NOW)
+
+
+def test_confluence_table_and_templates():
+    sc = _scan_for_confluence()
+    t = cf.table(sc, with_history=False)
+    assert set(t["symbol"]) == {"SPY", "QQQ", "IWM", "AAA", "BBB"}
+    ctx = cf.symbol_context(sc, "AAA", with_history=False)
+    tm = cf.templates(ctx, sc.config.thresholds)
+    a_items = {i["item"]: i["status"] for i in tm["bullish_continuation"][2]}
+    assert a_items["Strong sector"] == "n/a" and a_items["Defined-risk structure fits the account"] == "n/a"
+    assert tm["bullish_continuation"][1] in ("CONFIRMED", "NEAR_CONFIRMATION", "NOT_PRESENT", "INSUFFICIENT_DATA")
+    for r in sc.results:
+        if r.status == "NEAR_CONFIRMATION":
+            assert any(r.rule_name in x for x in tm["waiting"][2]) or r.symbol != "AAA"
+
+
+def test_waiting_for_confirmation_lists_exact_requirements():
+    rule = {"id": "w", "name": "Wait", "conditions": [
+        {"id": "vwap", "expression": "close > rolling_vwap(20)", "tolerance": {"type": "percent_distance", "value": 2}},
+        {"id": "up", "expression": "close > 1"}]}
+    sc = scan({"X": bars_from([100] * 25 + [99.5])}, cfg_with([rule]), NOW)
+    tm = cf.templates(cf.symbol_context(sc, "X", with_history=False), sc.config.thresholds)
+    assert tm["waiting"][1] == "NEAR_CONFIRMATION"
+    assert "1 of 2 conditions pass. Confirmation requires vwap: close is 99.5; the configured requirement is >" in tm["waiting"][2][0]
+
+
+def test_structure_template_e():
+    row = {"technical": "✅ Confirmed (Up)", "max_loss": 65.0, "account_status": "FITS_ACCOUNT",
+           "account_fit": "FITS CONFIGURED LIMITS", "max_spread_pct": 5.0, "min_oi": 500, "min_volume": 50, "assignment": 2100}
+    v, items = cf.structure_template(row, True, True, TH)
+    assert v == "CONFIRMED" and items[-1]["status"] == "pass"
+    v2, _ = cf.structure_template({**row, "account_status": "DOES_NOT_FIT_ACCOUNT"}, True, False, TH)
+    assert v2 == "NOT_PRESENT"
+
+
+def test_audit_records_are_reproducible_and_change_only(tmp_path):
+    sc = scan({"X": bars_from([99] * 30 + [101])}, cfg_with([simple()]), NOW)
+    path = tmp_path / "audit.jsonl"
+    assert oaudit.append(sc, path) == 1
+    assert oaudit.append(sc, path) == 0                        # same state again: nothing new
+    rec = oaudit.read(path).iloc[0]
+    assert rec["status"] == "CONFIRMED" and rec["inputs"]["level"]["observed"] == 101
+    assert set(rec["versions"]) == {"config", "indicators", "rule"} and "score = 100" in rec["formula"]
+    text = path.read_text().lower()
+    assert "identity" not in text and "@" not in text           # nothing from config.yaml (EDGAR identity)
+
+
+def test_overlay_uses_no_ai_or_ml_libraries():
+    root = Path(__file__).resolve().parents[1]
+    banned = ("openai", "anthropic", "google.generativeai", "ollama", "transformers", "sklearn", "torch", "tensorflow",
+              "langchain", "llama")
+    for f in list((root / "src" / "optlab" / "overlay").glob("*.py")) + [root / "app" / "overlay_ui.py"]:
+        src = f.read_text().lower()
+        for b in banned:
+            assert f"import {b}" not in src and f"from {b}" not in src, (f.name, b)
+
+
+def test_explanations_avoid_banned_words():
+    sc = _scan_for_confluence()
+    text = " ".join(r.explanation for r in sc.results).lower()
+    for w in BANNED_WORDS:
+        assert w not in text
+
+
+def test_backward_compatibility_with_strategies_and_scans():
+    from optlab.history.strategy import parse_strategy
+    from optlab.live.scanner import load_scan_config
+    root = Path(__file__).resolve().parents[1]
+    for f in (root / "strategies").glob("*.yaml"):
+        parse_strategy(f.read_text())                        # existing strategies still validate
+    assert load_scan_config(root / "scans.yaml")["scans"]   # scans.yaml unchanged and valid
+    # the new indicator functions are available to explorer strategies too
+    s = parse_strategy({"name": "x", "symbols": ["SPY"], "timeframe": "1d", "range": {"start": "2025-01-01", "end": "2025-06-01"},
+                        "conditions": [{"expression": "pct_rank(atr(14), 60) < 50"}, {"expression": "close > rolling_vwap(20)"}]})
+    assert len(s.conditions) == 2
+
+
+def test_relative_strength_of_the_benchmark_is_exactly_zero():
+    rng = np.random.default_rng(11)
+    b = bars_from(100 * np.exp(np.cumsum(rng.normal(0, 0.013, 300))))
+    rs = make_evaluator(b, "1d", b.copy())("rs(20)")
+    assert (rs.dropna() == 0).all()
+
+
+def test_sensitivity_never_mutates_cached_conditions():
+    from optlab.live.expr import parse
+    import ast as _ast
+    expr = "close > 54.5"
+    before = _ast.dump(parse(expr))
+    cfg = cfg_with([{"id": "r", "name": "R", "conditions": [{"expression": expr}]}])
+    hev.sensitivity(cfg.rules[0], bars_from(np.tile([54.0, 55.0], 30)), None, cfg.thresholds)
+    assert _ast.dump(parse(expr)) == before

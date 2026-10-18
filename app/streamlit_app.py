@@ -182,10 +182,24 @@ def overlay_scan(cfg_json: str, data_key: str, minute: str):
     """Cached on settings, database file time and the clock minute: data, settings or a new bar rescan."""
     import json
 
+    from optlab.overlay import audit as oaudit
+
     cfg = overlay_validate(json.loads(cfg_json))
     frames = frames_from_prices(load_prices().to_pandas())
-    return overlay_run(frames, cfg, pd.Timestamp.now(tz="America/New_York").to_pydatetime(), src_label,
-                       macro=load_macro().to_pandas() if not load_macro().is_empty() else None)
+    sc = overlay_run(frames, cfg, pd.Timestamp.now(tz="America/New_York").to_pydatetime(), src_label,
+                     macro=load_macro().to_pandas() if not load_macro().is_empty() else None)
+    try:
+        oaudit.append(sc)          # state changes only; nothing from config.yaml is written
+    except OSError:
+        pass
+    return sc
+
+
+@st.cache_data(ttl=300, show_spinner="Combining overlay states...")
+def overlay_confluence(cfg_json: str, data_key: str, minute: str):
+    from optlab.overlay import confluence as cf
+
+    return cf.table(overlay_scan(cfg_json, data_key, minute))
 
 
 def overlay_now_key() -> tuple[str, str]:
@@ -195,13 +209,14 @@ def overlay_now_key() -> tuple[str, str]:
     return json.dumps(OCFG.raw, sort_keys=True, default=str), f"{db.stat().st_mtime:.0f}"
 
 
-OSCAN = overlay_scan(*overlay_now_key(), pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M")) \
-    if OF["on"] else None
+_OKEY = (*overlay_now_key(), pd.Timestamp.now(tz="America/New_York").strftime("%Y-%m-%d %H:%M"))
+OSCAN = overlay_scan(*_OKEY) if OF["on"] else None
+OCONF = overlay_confluence(*_OKEY) if OF["on"] else None
 if ocfg_error is not None:
     st.error("overlay.yaml has problems, so the built-in overlay defaults are in use:\n\n"
              + "\n".join(f"- {p}" for p in ocfg_error.problems))
 if OSCAN is not None:
-    ov.console(OSCAN, OF, ov.market_chips(OSCAN) + [ov.account_chip(OCFG)])
+    ov.console(OSCAN, OF, ov.market_chips(OSCAN) + [ov.account_chip(OCFG)] + ov.confluence_chips(OCONF))
 
 
 def overlay_on(key: str) -> bool:
@@ -228,6 +243,7 @@ with tabs[0]:
              ["iv", "vol", "guide"])
     if overlay_on("scanner"):
         ov.scanner_panel(OSCAN)
+        ov.confluence_panel(OSCAN, OCONF)
         st.divider()
     feats = build_features(load_prices().select(["symbol", "date", "close"]))
     ivs = {s: atm_iv(load_chain(s)) for s in symbols}
@@ -1175,12 +1191,15 @@ with tabs[11]:
               "Data error) or downgrade it (shown with a Stale data or similar flag).",
               "**Rules** lists the rules from overlay.yaml with their conditions and confirmation requirements.",
               "**Status guide** explains every status, colour and icon.",
-              "Edit overlay.yaml in the project folder to change rules and thresholds; this tab shows what is loaded."],
+              "**Settings** changes thresholds, the small-account profile, which tabs show an overlay, confluence "
+              "weights and status labels. Saving validates everything first and writes overlay.yaml.",
+              "**Audit log** lists every state change with the versions, inputs and formula that produced it.",
+              "Rules themselves are edited in overlay.yaml (see docs/OVERLAY.md for the format and every formula)."],
              ["guide"])
     if OSCAN is None:
         st.info("The overlay is switched off in the sidebar.")
     else:
-        t1, t2, t3 = st.tabs(["Data health", "Rules", "Status guide"])
+        t1, t2, t3, t4, t5 = st.tabs(["Data health", "Rules", "Status guide", "Settings", "Audit log"])
         with t1:
             ov.data_health_panel(OSCAN)
         with t2:
@@ -1192,6 +1211,8 @@ with tabs[11]:
                                 f"≥ {r.minimum_pass_count} passing, required conditions "
                                 f"{'must pass' if r.required_must_pass else 'may be near'}. Invalidation: "
                                 f"{', '.join(f'`{e}`' for e in r.invalidation) or 'none'}. Tabs: {', '.join(r.tab_scope)}.")
+                    if r.timeframe not in ("1d", "1wk"):
+                        st.caption("Intraday rule: evaluated by the live monitor (python scripts/monitor.py).")
                     ui.show(pd.DataFrame([{"id": c.id, "expression": c.expression, "required": c.required,
                                            "weight": c.weight, "tolerance": "None" if c.tolerance_type == "none"
                                            else f"{c.tolerance:g} ({c.tolerance_type.replace('_', ' ')})"}
@@ -1201,4 +1222,10 @@ with tabs[11]:
 
             ui.show(pd.DataFrame([{"status": f"{s.icon} {OCFG.labels.get(s.code, s.label)}", "colour": s.color.capitalize(),
                                    "meaning": s.meaning} for s in OST.values()]), width="stretch")
+        with t4:
+            from optlab.overlay.config import save_user_overrides
+
+            ov.settings_panel(OCFG, save_user_overrides, OVERLAY_PATH)
+        with t5:
+            ov.audit_panel()
 

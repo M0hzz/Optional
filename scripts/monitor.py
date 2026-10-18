@@ -127,6 +127,12 @@ def main() -> None:
             print(f"  ! overlay: {type(exc).__name__}: {exc}", flush=True)
             return
         oalerts = otrack.alerts(osc.results, now)
+        try:
+            from optlab.overlay import audit as oaudit
+
+            oaudit.append(osc)
+        except OSError:
+            pass
         write_alerts(OUT, oalerts, now)
         top = osc.highlights(limit=12)
         (OUT / "overlay_latest.json").write_text(json.dumps({

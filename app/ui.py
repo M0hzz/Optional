@@ -99,7 +99,7 @@ LABELS = {
     "return_pct": "Return", "weight": "Weight", "root": "Root",
 }
 _WORDS = {"iv": "IV", "dte": "DTE", "oi": "OI", "pnl": "P&L", "atm": "ATM", "yoy": "YoY", "rv": "RV", "otm": "OTM",
-          "pct": "%", "id": "ID", "eps": "EPS", "us": "US"}
+          "pct": "%", "id": "ID", "eps": "EPS", "us": "US", "atr": "ATR", "bp": "BP"}
 
 
 def label(col) -> str:

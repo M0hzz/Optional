@@ -75,6 +75,8 @@ def console(sc: OverlayScan, f: dict, extra_chips: list | None = None) -> None:
                      "INSUFFICIENT_DATA"):
             if counts.get(code):
                 items.append((code, f"{STATUSES[code].icon} {ui.fmt(counts[code], 'int')} {cfg.labels.get(code, STATUSES[code].label).lower()}"))
+        if sc.n_symbols * max(sc.n_rules, 1) > 400:
+            items.append(("FITS_BP_EXCEEDS_RISK", f"⚠️ Large scan: {sc.n_symbols:,} symbols × {sc.n_rules:,} rules"))
         items += extra_chips or []
         chips(items)
         hl = sc.highlights(f["statuses"], min_severity=f["min_severity"], limit=int(cfg.raw.get("console_items", 8)))
@@ -513,6 +515,9 @@ def structures_panel(df: pd.DataFrame, ticker: str, sc, cfg, p: Profile) -> None
     i = st.selectbox("Inspect a structure", range(len(s)), key="ovl_st_pick",
                      format_func=lambda i: f"{s.iloc[i]['strategy']} {s.iloc[i]['strikes']} · {ui.fmt(s.iloc[i]['expiration'], 'date')}")
     r = s.iloc[i]
+    tech_ok = "Confirmed" in str(r["technical"]) or "Overextended" in str(r["technical"]) or "Stale" in str(r["technical"])
+    fresh = not bool(df["flag_stale"].any())
+    e_verdict, e_items = cf.structure_template(r.to_dict(), tech_ok, fresh, th)
     with st.container(border=True):
         st.markdown(f"**{r['strategy']} {r['strikes']}**, expiring {ui.fmt(r['expiration'], 'date')} ({r['dte']} days)")
         st.markdown(md(f"- **Formula:** {r['formula']}\n- **Account fit:** {fit_badge(r['account_fit'])}"
@@ -521,6 +526,10 @@ def structures_panel(df: pd.DataFrame, ticker: str, sc, cfg, p: Profile) -> None
                     + (f"\n- **Assignment and legs:** {r['notes']}" if r["notes"] else "")
                     + ("\n- **Events:** earnings fall before this expiration." if r["earnings"] else "")
                     + "\n- **Dividends:** no dividend calendar is loaded, so ex-dividend assignment risk isn't checked."))
+        st.markdown(f"**Affordable-and-liquid confluence (template E):** {badge(e_verdict)}")
+        ui.show(pd.DataFrame(e_items).assign(status=lambda x: x["status"].map({"pass": "Pass", "fail": "Fail", "n/a": "N/A"})),
+                rename={"item": "Condition", "value": "Observed"}, styler=ui.status_styler(["Status"], ui.STATUS_COLORS),
+                width="stretch")
 
 
 
@@ -788,3 +797,175 @@ def history_panel(sc: OverlayScan, cfg, snapshot_dates=()) -> None:
                     rename={"tested": "Tested value", "base_events": "Events at the configured value",
                             "change_pct": "Change in events", "sensitive": "Sensitive"}, width="stretch")
     st.info(options_history_status(list(ev.per_event["time"]) if not ev.per_event.empty else [], snapshot_dates)[1])
+
+
+# ------------------------------------------------------------------ phase 5: confluence, audit, settings
+from optlab.overlay import audit as oaudit  # noqa: E402
+from optlab.overlay import confluence as cf  # noqa: E402
+from optlab.overlay.config import THRESHOLD_LIMITS  # noqa: E402
+
+TEMPLATE_NAMES = {"bullish_continuation": "Bullish continuation", "bearish_rejection": "Bearish rejection",
+                  "compression_expansion": "Compression → expansion", "historical_analogue": "Historical analogue",
+                  "waiting": "Waiting for confirmation"}
+
+
+def confluence_chips(table: pd.DataFrame) -> list:
+    if table is None or table.empty:
+        return []
+    out = []
+    for key in ("bullish_continuation", "bearish_rejection", "compression_expansion", "historical_analogue"):
+        syms = table.loc[table[key] == "CONFIRMED", "symbol"].tolist()
+        if syms:
+            out.append(("CONFIRMED", f"🧩 {TEMPLATE_NAMES[key]}: {', '.join(syms)}"))
+    return out
+
+
+def confluence_panel(sc: OverlayScan, table: pd.DataFrame) -> None:
+    cfg = sc.config
+    st.markdown("### 🧩 Overlay: cross-tab confluence",
+                help="Independent states (market, sector, technical rules, history, data quality) combined by fixed "
+                     "templates. Account fit and event risk stay separate statuses and never raise a score.")
+    if table.empty:
+        st.caption("No symbols to combine.")
+        return
+    view = table[["symbol"] + list(TEMPLATE_NAMES)].copy()
+    for k in TEMPLATE_NAMES:
+        view[k] = view[k].map(badge)
+    rev = {badge(c): c for c in STATUSES}
+    ui.show(view, rename=TEMPLATE_NAMES, width="stretch",
+            styler=lambda s: s.map(lambda v: css(rev[v]) if v in rev else "", subset=list(TEMPLATE_NAMES.values())))
+    c = st.columns([1, 1, 2])
+    sym = c[0].selectbox("Symbol", table["symbol"].tolist(), key="ovl_cf_sym")
+    d = c[1].radio("Direction", ["Bullish", "Bearish"], horizontal=True, key="ovl_cf_dir").lower()
+    ctx = cf.symbol_context(sc, sym)
+    comp = cf.components(ctx, d)
+    total, contrib = cf.composite(comp, cfg.raw["confluence"]["weights"], ctx["blocked"])
+    rows = pd.DataFrame([{"component": k.replace("_", " ").capitalize(), "score": v,
+                          "weight": cfg.raw["confluence"]["weights"].get(k, 0),
+                          "contribution": contrib.get(k)} for k, v in comp.items()])
+    with c[2]:
+        ui.show(rows, formats={"score": "num1", "weight": "num1", "contribution": "num1"},
+                help={"score": "0-100; '—' when the data can't support it (never guessed).",
+                      "contribution": "weight × score ÷ Σ weights of the available components."}, width="stretch")
+        if cfg.raw["confluence"].get("show_composite"):
+            st.metric("Composite (optional)", "—" if total is None else f"{total:.0f}",
+                      help="Σ(weight × score) ÷ Σ(weight) over available components. Withheld when a data check blocks "
+                           "the symbol. Edit the weights on the Overlay tab → Settings.")
+        else:
+            st.caption("The composite score is off (Overlay tab → Settings → show composite). Components are always shown.")
+    t = cf.templates(ctx, cfg.thresholds)
+    for key, (name, verdict, items) in t.items():
+        with st.expander(f"{STATUSES[verdict].icon} {name}: {VERDICT_TEXT.get(verdict, verdict)}", expanded=key == "waiting" and bool(items)):
+            if key == "waiting":
+                st.markdown(md("\n".join(f"- {x}" for x in items)) if items else "No near confirmations right now.")
+                continue
+            df = pd.DataFrame(items).assign(status=lambda x: x["status"].map({"pass": "Pass", "fail": "Fail", "n/a": "N/A"}))
+            ui.show(df, rename={"item": "Condition", "value": "Observed"}, styler=ui.status_styler(["Status"], ui.STATUS_COLORS),
+                    width="stretch")
+
+
+def audit_panel() -> None:
+    df = oaudit.read()
+    st.caption(f"Append-only log of state changes at {oaudit.AUDIT_PATH.relative_to(oaudit.AUDIT_PATH.parents[2])}. "
+               "Each record has the rule, configuration and indicator versions, data source and timestamp, inputs, "
+               "outputs, formula and reason code. No credentials are written.")
+    if df.empty:
+        st.info("No audit records yet: they are written when the overlay scans.")
+        return
+    c = st.columns(3)
+    syms = c[0].multiselect("Symbols", sorted(df["symbol"].unique()), key="ovl_au_s", placeholder="All")
+    rules = c[1].multiselect("Rules", sorted(df["rule_name"].unique()), key="ovl_au_r", placeholder="All")
+    stt = c[2].multiselect("Statuses", sorted(df["status"].unique()), key="ovl_au_st", placeholder="All",
+                           format_func=lambda x: badge(x) if x in STATUSES else x)
+    v = df
+    if syms:
+        v = v[v["symbol"].isin(syms)]
+    if rules:
+        v = v[v["rule_name"].isin(rules)]
+    if stt:
+        v = v[v["status"].isin(stt)]
+    v = v.iloc[::-1].reset_index(drop=True)
+    show = v.assign(status=v["status"].map(lambda x: badge(x) if x in STATUSES else x),
+                    config=v["versions"].map(lambda d: d.get("config")), rule_version=v["versions"].map(lambda d: d.get("rule")))
+    ui.show(show[["scan_time", "symbol", "rule_name", "bar", "status", "score", "reason_code", "config", "rule_version"]],
+            formats={"score": "num1", "scan_time": "text", "bar": "text"}, styler=status_cells, width="stretch", height=320)
+    if len(v):
+        i = st.number_input("Record to inspect (row number above, 0 = newest)", 0, len(v) - 1, 0, key="ovl_au_i")
+        rec = {k: (None if isinstance(x, float) and x != x else x) for k, x in v.iloc[int(i)].to_dict().items()}
+        st.code(json.dumps(rec, indent=1, default=str, ensure_ascii=False), language="json")
+
+
+def settings_panel(cfg, save_fn, path) -> None:
+    """Edit thresholds, the account profile, labels, tab switches and confluence weights. Saved to overlay.yaml
+    only after validation."""
+    th, ap, raw = cfg.thresholds, cfg.account, cfg.raw
+    with st.form("ovl_settings"):
+        st.markdown("**General**")
+        g = st.columns(4)
+        enabled = g[0].checkbox("Overlay enabled", raw["enabled"])
+        compact = g[1].checkbox("Compact console", raw["compact"])
+        completed = g[2].checkbox("Completed bars only", raw["completed_bars_only"])
+        items = g[3].number_input("Console highlights", 1, 50, int(raw["console_items"]))
+        st.markdown("**Thresholds**")
+        new_th = {}
+        keys = list(th)
+        cols = st.columns(4)
+        for n, k in enumerate(keys):
+            v = th[k]
+            whole_ = THRESHOLD_LIMITS[k][2] or float(v).is_integer() and float(v) >= 5
+            new_th[k] = cols[n % 4].number_input(ui.label(k), value=float(v), step=1.0 if float(v) >= 5 else 0.05,
+                                                 format="%.0f" if whole_ else "%.2f", key=f"ovl_set_{k}")
+        st.markdown("**Account profile (Small Account Mode)**")
+        cols = st.columns(4)
+        new_ap = {}
+        nums = ["total_buying_power", "settled_cash", "reserve_cash", "max_capital_per_idea", "max_loss_per_idea",
+                "max_account_risk_pct", "max_contracts", "contract_multiplier"]
+        for n, k in enumerate(nums):
+            new_ap[k] = cols[n % 4].number_input(ui.label(k), value=float(ap[k]), step=1.0, format="%.0f",
+                                                 key=f"ovl_ap_{k}")
+        flags = ["small_account_mode", "defined_risk_only", "naked_options_allowed", "unlimited_risk_allowed",
+                 "require_assignment_capacity"]
+        cols = st.columns(5)
+        for n, k in enumerate(flags):
+            new_ap[k] = cols[n].checkbox(k.replace("_", " ").capitalize(), bool(ap[k]), key=f"ovl_apf_{k}")
+        new_ap["account_type"] = st.radio("Account type", ["cash", "margin"], index=0 if ap["account_type"] == "cash" else 1,
+                                          horizontal=True, format_func=str.capitalize)
+        st.markdown("**Tabs with an overlay panel**")
+        cols = st.columns(6)
+        tabs = {k: cols[n % 6].checkbox(k.replace("_", " ").capitalize(), bool(v), key=f"ovl_tab_{k}")
+                for n, (k, v) in enumerate(raw["tabs"].items())}
+        st.markdown("**Confluence**")
+        cols = st.columns(7)
+        show_comp = cols[0].checkbox("Show composite", bool(raw["confluence"].get("show_composite")))
+        weights = {k: cols[n + 1].number_input(k.replace("_", " ").capitalize(), value=float(v), step=1.0, key=f"ovl_w_{k}")
+                   for n, (k, v) in enumerate(raw["confluence"]["weights"].items())}
+        st.markdown("**Display labels** (rename a status without changing its meaning; blank = default)")
+        cols = st.columns(4)
+        labels = {}
+        for n, code in enumerate(STATUSES):
+            val = cols[n % 4].text_input(STATUSES[code].label, value=cfg.labels.get(code, ""), key=f"ovl_lbl_{code}")
+            if val.strip():
+                labels[code] = val.strip()
+        save = st.form_submit_button("Save to overlay.yaml", type="primary")
+    if save:
+        whole = {k for k, (_, _, w) in THRESHOLD_LIMITS.items() if w}
+        new_th = {k: int(v) if k in whole else v for k, v in new_th.items()}
+        new_ap["max_contracts"], new_ap["contract_multiplier"] = int(new_ap["max_contracts"]), int(new_ap["contract_multiplier"])
+        change = {"enabled": enabled, "compact": compact, "completed_bars_only": completed, "console_items": int(items),
+                  "thresholds": new_th, "account_profile": new_ap, "tabs": tabs, "labels": labels,
+                  "confluence": {"show_composite": show_comp, "weights": weights}}
+        try:
+            p = save_fn(change)
+            st.success(f"Saved to {p.name}. The overlay rescans with the new settings.")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as exc:
+            problems = getattr(exc, "problems", [str(exc)])
+            st.error("Not saved; fix these first:\n\n" + "\n".join(f"- {x}" for x in problems))
+    if path.exists():
+        with st.expander("Reset to the built-in defaults"):
+            sure = st.checkbox("I want to delete my overlay.yaml settings", key="ovl_reset_ok")
+            if st.button("Delete overlay.yaml", disabled=not sure, key="ovl_reset"):
+                path.unlink()
+                st.cache_data.clear()
+                st.rerun()

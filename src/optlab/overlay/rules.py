@@ -40,7 +40,7 @@ import pandas as pd
 
 from ..history.explorer import CondEval, _fmt, evaluate_condition, explain, measure
 from ..live.expr import Evaluator, ExprError, parse
-from ..live.indicators import atr, bar_functions, ema, sma
+from ..live.indicators import bar_functions, ema, sma
 from .config import Rule
 
 SCORE_FORMULA = ("score = 100 × Σ(weight × credit) / Σ(weight); credit = 1 pass, 1 − shortfall ÷ tolerance "
@@ -61,11 +61,8 @@ def to_weekly(bars: pd.DataFrame, last_session) -> pd.DataFrame:
     """Weekly bars (week ending Friday) from daily bars; a week not yet finished is dropped."""
     if bars.empty:
         return bars
-    idx = pd.DatetimeIndex(bars.index)
-    g = bars.groupby(idx.to_period("W-FRI"))
-    wk = pd.DataFrame({"open": g["open"].first(), "high": g["high"].max(), "low": g["low"].min(),
-                       "close": g["close"].last(), "volume": g["volume"].sum()})
-    wk.index = pd.DatetimeIndex([p.end_time.normalize() for p in wk.index])
+    wk = bars.resample("W-FRI").agg({"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"})
+    wk = wk.dropna(subset=["close"])
     if len(wk) and wk.index[-1].date() > last_session:
         wk = wk.iloc[:-1]
     return wk
@@ -212,7 +209,7 @@ def evaluate_rule(rule: Rule, bars: pd.DataFrame, ev: Evaluator, symbol: str, th
     base = states[i]
     status, reason = base, base.lower()
     c = bars["close"].astype(float).to_numpy()
-    a = atr(bars["high"].astype(float), bars["low"].astype(float), bars["close"].astype(float), 14).to_numpy()
+    a = np.asarray(ev("atr(14)"), float)          # memoised: computed once per symbol, shared by every rule
     try:
         ref = np.asarray(ev(rule.reference_average), float) if rule.reference_average else np.full(n, np.nan)
     except ExprError:
