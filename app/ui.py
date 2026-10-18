@@ -65,9 +65,9 @@ def links(*keys: str) -> str:
 
 
 def intro(summary: str, steps: list[str], learn: list[str] | tuple = ()) -> None:
-    """One line under the tab title, plus a collapsible how-to with links for the details."""
+    """One line under the view title, plus a collapsible how-to with links for the details."""
     st.caption(summary)
-    with st.expander("How to use this tab"):
+    with st.expander("How to use this view"):
         st.markdown("\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1)))
         if learn:
             st.markdown("**Learn more:** " + links(*learn))

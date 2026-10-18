@@ -1,6 +1,6 @@
 # The overlay (Mastermind console)
 
-The overlay scans the data the app already has and highlights what is worth looking at on every tab:
+The overlay scans the data the app already has and highlights what is worth looking at on every view:
 confirmed technical conditions, near confirmations and exactly what they still need, fresh vs stale vs
 overextended signals, invalidations, market and sector alignment, historical sample quality,
 option liquidity and data problems, small-account fit, assignment and event exposure, and cross-tab
@@ -19,28 +19,28 @@ signal just because no option structure fits the account.
 
 ## Where it appears
 
+The dashboard has two sections: **Live** (market hours) and **Research** (backtests and analysis).
+
 | Place | What the overlay adds |
 |---|---|
-| **Console** (above every tab) | Status summary chips, the highlights worth looking at (most important first) with a pointer to the tab that has the detail, and an evidence view for each one. |
-| **Scanner** | Every rule on every symbol: status, score, passes, what's missing, freshness, ATR extension, timeframe alignment, audit record; cross-tab confluence. |
-| **Chain & pricer** | Checks on the stored chain snapshot (age, crossed markets, Greeks). |
-| **Strategy lab** | Defined-risk test, account fit, breakevens vs expected and historical moves, hidden-risk warnings, leg-removal effects, outlook check, model vs quotes, stress scenarios, assignment scenarios. |
-| **Backtest** | Diagnostics: sample size, stability, out-of-sample, costs, neighbouring settings, regimes, biases. |
-| **Risk & sizing** | Small-account check of the sized strategy. |
-| **Macro** | Market overview: indexes, breadth, VIX, volatility regime, sectors, regime checklists. |
-| **Option chain** | Per-contract liquidity, quality flags and account fit; IV context; defined-risk structure scanner; liquidity deterioration. |
-| **Monitor** | Overlay alert timeline from the live monitor; liquidity and fit columns on option hits. |
-| **Signal explorer** | Historical evidence for any overlay rule; low-sample warnings on explorer results. |
-| **Overlay tab** | Data health, rules, status guide, settings editor, audit log. |
+| **Console** (above every view) | Status summary chips, the highlights worth looking at (most important first) with a pointer to the view that has the detail, and an evidence view for each one. Open in Live; folded to a one-line summary in Research (click to open). |
+| **Live › Watchlist** | Every rule on every symbol: status, score, passes, what's missing, freshness, ATR extension, timeframe alignment, audit record; cross-tab confluence. |
+| **Live › Market** | Market overview: indexes, breadth, VIX, volatility regime, sectors, regime checklists. |
+| **Live › Option chain** | Per-contract liquidity, quality flags and account fit; IV context; defined-risk structure scanner; liquidity deterioration. |
+| **Live › Trade builder** | Defined-risk test, account fit, breakevens vs expected and historical moves, hidden-risk warnings, leg-removal effects, outlook check, model vs quotes, stress scenarios, assignment scenarios; small-account check of the sized trade. |
+| **Live › Monitor** | Overlay alert timeline from the live monitor; liquidity and fit columns on option hits. |
+| **Research › Backtest** | Diagnostics: sample size, stability, out-of-sample, costs, neighbouring settings, regimes, biases. |
+| **Research › Signal explorer** | Historical evidence for any overlay rule; low-sample warnings on explorer results. |
+| **Research › Volatility & pricing** | Checks on the stored chain snapshot (age, crossed markets, Greeks). |
+| **Research › Overlay setup** | Data health, rules, status guide, settings editor, audit log. |
 
-Switch it all off with **Show overlay** in the sidebar, or per tab in Overlay → Settings.
+Switch it all off with **Show overlay** in the sidebar, or per view in Overlay setup → Settings.
 The console can be compacted (one line per highlight) and filtered by status and severity.
 
-The tab mapping: the spec's *Market overview* lives on the Macro tab, *Watchlist / technical
-scanner* on the Scanner tab, *Strategy builder* and *Simulator* on the Strategy lab, *Options
-scanner* on the Option chain tab (structure scanner) and the Monitor tab (option scan hits), and
-*Data health / settings* on the Overlay tab. The project has no trade journal, so the journal
-overlay (spec section 16) does not apply.
+The spec's *Market overview* is Live › Market, *Watchlist / technical scanner* is Live › Watchlist,
+*Strategy builder* and *Simulator* are Live › Trade builder, *Options scanner* is Live › Option chain
+(structure scanner) and Live › Monitor (option scan hits), and *Data health / settings* is Research ›
+Overlay setup. The project has no trade journal, so the journal overlay (spec section 16) does not apply.
 
 ---
 
@@ -69,7 +69,7 @@ Every status has a colour **and** an icon **and** text, so nothing depends on co
 | Volatility expansion | 🌀 | purple | Volatility moved from compressed to expanding. |
 | Requires data validation | 🔎 | amber | A quote is inconsistent with its neighbours. A data question, never an opportunity. |
 
-Display labels can be renamed (Overlay → Settings → Display labels, or `labels:` in overlay.yaml)
+Display labels can be renamed (Overlay setup → Settings → Display labels, or `labels:` in overlay.yaml)
 without changing what a status means. The words *guaranteed, safe, certain, best trade, winning
 trade* and *free money* never appear (a test checks every label and explanation).
 
@@ -179,7 +179,7 @@ data-quality score = 100 − 40 × blocking failures − 10 × downgrading failu
 
 ---
 
-## Market overview (Macro tab)
+## Market overview (Live › Market)
 
 From the stored daily bars and the macro table's VIX series:
 
@@ -253,7 +253,7 @@ Technical signals stay visible whether or not anything fits the account.
 
 ---
 
-## Options overlay (Option chain tab)
+## Options overlay (Live › Option chain)
 
 Per contract: spread in $ and % of mid, debit per contract, % of account at risk, buying power left,
 cash to exercise, liquidity, account fit, quality flags and data validation.
@@ -281,7 +281,7 @@ minimum, quote went stale).
 
 ---
 
-## Strategy lab and simulator
+## Trade builder and simulator
 
 ```
 breakevens       zero crossings of the expiry payoff (0.02% grid, linear interpolation)
@@ -306,7 +306,7 @@ theta/gamma path to 7 and 2 days left and assignment scenarios against the accou
 
 ---
 
-## Historical evidence (Signal explorer tab)
+## Historical evidence (Research › Signal explorer)
 
 ```
 events      new CONFIRMED (exact) or new NEAR states, so a long run counts once
@@ -333,7 +333,7 @@ signals.
 
 ---
 
-## Backtest diagnostics (Backtest tab)
+## Backtest diagnostics (Research › Backtest)
 
 ```
 profit factor  Σ winning P&L ÷ |Σ losing P&L|        expectancy  mean P&L per trade
@@ -350,7 +350,7 @@ parameter_sensitivity_drop or below zero); regimes represented; look-ahead; surv
 
 ---
 
-## Cross-tab confluence (Scanner tab)
+## Cross-tab confluence (Live › Watchlist)
 
 Component scores (0-100; "—" when the data can't support them):
 
@@ -371,7 +371,7 @@ withheld when a data check blocks the symbol. Weights are editable in Settings.
 
 Templates (each a checklist; present when every available item passes): **A** bullish continuation,
 **B** bearish rejection, **C** compression to expansion, **D** historical-analogue alignment, **E**
-affordable and liquid structure (Option chain tab → inspect a structure), **F** waiting for
+affordable and liquid structure (Live › Option chain → inspect a structure), **F** waiting for
 confirmation, e.g. *"NEAR CONFIRMATION (Trend pullback): 4 of 6 conditions pass. Confirmation requires
 at_support: distance_pct(low, ema(21)) is 1.4; the configured requirement is <= 1."*
 
@@ -379,11 +379,11 @@ at_support: distance_pct(low, ema(21)) is 1.4; the configured requirement is <= 
 
 ## Auditing a result
 
-- Expand **Evidence** in the console or **Inspect a result** on the Scanner tab: every condition with its
+- Open **Evidence** in the console or **Inspect a result** in Live › Watchlist: every condition with its
   observed value, requirement, status, distance, tolerance and points, the formula, freshness numbers,
   data source and timestamp, and the versions.
 - **Audit record (JSON)** shows exactly what was calculated.
-- Overlay tab → **Audit log** lists every state change from `data/overlay/audit.jsonl` with rule,
+- Research › Overlay setup → **Audit log** lists every state change from `data/overlay/audit.jsonl` with rule,
   configuration and indicator versions, data source and timestamp, scan time, inputs, outputs, formula and
   reason code. Only state changes are appended. Nothing from config.yaml is written, so credentials
   never reach the log.
@@ -410,5 +410,5 @@ and rules, and warns above 400 symbol-rule pairs. Nothing is truncated or downsa
 - Daily rules confirm on the daily close; intraday rules run only in the live monitor.
 - Premarket and opening-range levels need intraday bars and are not part of the daily rules.
 - IV rank needs a stored daily IV history the free data doesn't provide.
-- Strategy-lab values are modeled; compare with the Option chain tab's quotes before relying on them.
+- Trade-builder values are modeled; compare with Live › Option chain quotes before relying on them.
 - The quick backtest's option fills are modeled, never real bid/ask.
