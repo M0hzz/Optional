@@ -179,7 +179,7 @@ if ocfg_error is not None:
     st.error("overlay.yaml has problems, so the built-in overlay defaults are in use:\n\n"
              + "\n".join(f"- {p}" for p in ocfg_error.problems))
 if OSCAN is not None:
-    ov.console(OSCAN, OF, ov.market_chips(OSCAN))
+    ov.console(OSCAN, OF, ov.market_chips(OSCAN) + [ov.account_chip(OCFG)])
 
 
 def overlay_on(key: str) -> bool:
@@ -296,6 +296,15 @@ with tabs[1]:
                    "costs more than upside, which is normal for stocks.")
     c4.metric("Chain snapshot", ui.fmt(chain["snapshot_date"][0], "date") if not chain.is_empty() else "None",
               help="Date the stored chain was captured by scripts/ingest.py.")
+    if overlay_on("chain_pricer") and not chain.is_empty():
+        from optlab.overlay.quality import chain_health
+
+        _hc = chain_health(symbol, chain.to_pandas().rename(columns={"option_type": "type", "implied_vol": "iv"}), None,
+                           pd.Timestamp.now(tz="America/New_York").to_pydatetime(), OCFG.thresholds, "stored snapshot")
+        _bad = [c for c in _hc if not c.passed and c.effect != "none"]
+        ov.chips([("STALE_DATA", f"🕰️ Stored chain is old: {c.detail} {c.action}") if c.id == "quote_age" else
+                  ("DATA_ERROR", f"❌ {c.name} failed: {c.detail} {c.action}")
+                  for c in _bad] or [("INFO", "🩺 Stored chain passed its data checks")])
 
     if not chain.is_empty():
         ch = with_dte(chain).to_pandas()
@@ -367,7 +376,7 @@ with tabs[1]:
         col.metric(name, f.format(val), help=tip)
     if mkt > 0:
         iv = implied_vol(mkt, spec)
-        st.info(f"Implied volatility at ${mkt:,.2f}: **{iv:.2%}**" if np.isfinite(iv) else "No volatility reproduces that price.")
+        st.info(f"Implied volatility at \\${mkt:,.2f}: **{iv:.2%}**" if np.isfinite(iv) else "No volatility reproduces that price.")
 
 # -------------------------------------------------------------- strategy lab
 with tabs[2]:
@@ -583,9 +592,11 @@ with tabs[4]:
     m[2].metric("Total max loss", f"${sz['total_max_loss']:,.0f}", help="Worst-case loss for all contracts together.")
     m[3].metric("Capital used", f"${sz['total_capital']:,.0f}", help="Cash or margin the position ties up.")
     if sz["contracts"] == 0:
-        st.info(f"Even one contract (max loss ${worst:,.0f}) is above your per-trade limit of "
-                f"{limits.max_risk_per_trade_pct:g}% of equity (${equity * limits.max_risk_per_trade_pct / 100:,.0f}). "
+        st.info(f"Even one contract (max loss \\${worst:,.0f}) is above your per-trade limit of "
+                f"{limits.max_risk_per_trade_pct:g}% of equity (\\${equity * limits.max_risk_per_trade_pct / 100:,.0f}). "
                 "Try a narrower wing width, a lower delta, or raise the limit in config.yaml.")
+    if overlay_on("risk"):
+        ov.risk_panel(OCFG, rlegs, spot, symbol, rs)
 
     st.subheader("Book check")
     st.caption("Edit your open positions; Greeks are recomputed and checked against limits. Use the + under the "
@@ -884,7 +895,7 @@ def live_feed(kind: str):
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_chain(ticker: str, source: str) -> tuple[pd.DataFrame, str]:
     feed = live_feed("synthetic" if source == "synthetic" else "live")
-    return feed.chain(ticker, None if source == "synthetic" else source), pd.Timestamp.now().strftime("%H:%M:%S")
+    return feed.chain(ticker, None if source == "synthetic" else source), pd.Timestamp.now(tz="America/New_York").isoformat()
 
 
 CHAIN_HELP = {"bid": "Highest price a buyer is offering. What you get if you sell now.",
@@ -942,7 +953,8 @@ with tabs[8]:
                         help="Implied volatility of at-the-money options about a month out.")
             m[4].metric("Put/call OI", f"{stats_['put_call_oi']:.2f}" if stats_["put_call_oi"] == stats_["put_call_oi"] else "—",
                         help="Open interest in puts ÷ calls. Above 1 = more puts outstanding, often a cautious mood.")
-            m[5].metric("Fetched", fetched, help="Time the chain was downloaded. It refreshes after 60 seconds.")
+            m[5].metric("Fetched", pd.Timestamp(fetched).strftime("%H:%M:%S") if fetched else "—",
+                        help="Time the chain was downloaded (New York time). It refreshes after 60 seconds.")
 
             f1, f2, f3, f4 = st.columns([2, 2, 1, 1])
             exps = sorted(ch["expiration"].unique())
@@ -1000,6 +1012,15 @@ with tabs[8]:
             st.download_button("Download CSV", view.assign(iv=view["iv"] / 100).to_csv(index=False).encode(),
                                f"{ticker}_chain.csv", "text/csv",
                                help="Saves the contracts currently shown, with every column, as a spreadsheet file.")
+            if overlay_on("option_chain"):
+                st.divider()
+                fetched_at = pd.Timestamp(fetched).to_pydatetime() if fetched else None
+                hv = None
+                if ticker in symbols:
+                    _c = close_series(ticker)
+                    hv = float(np.log(_c).diff().tail(20).std() * np.sqrt(252))
+                ov.chain_panel(ch, view, ticker, source, fetched_at, OSCAN, OCFG,
+                               next_earnings(ticker) if ticker in symbols else None, hv)
 
 # -------------------------------------------------------------------- monitor
 MON = ROOT / "data" / "monitor"
@@ -1049,6 +1070,8 @@ def monitor_panel():
                 styler=ui.status_styler(["Status"], ui.STATUS_COLORS), width="stretch")
     st.markdown("**Scan hits**", help="Symbols and contracts that passed every condition in a scan on the last pass.")
     hits = pd.read_parquet(hits_file) if hits_file.exists() else pd.DataFrame()
+    if not hits.empty and overlay_on("monitor"):
+        hits = ov.hits_overlay(hits, OCFG)
     if hits.empty:
         st.caption("Nothing passes right now.")
     else:
@@ -1063,7 +1086,8 @@ def monitor_panel():
                                 "expiration": "date"},
                     help={**CHAIN_HELP, "prob_otm": "Model chance the option expires worthless (out of the money).",
                           "details": "Indicator values behind the hit."},
-                    width="stretch")
+                    rename={"quality_flags": "Quality flags", "account_fit": "Account fit"},
+                    styler=lambda s_: ov._cell_colors(s_, ["Liquidity", "Account fit"]), width="stretch")
     alerts_file = MON / "alerts.csv"
     if alerts_file.exists():
         with st.expander("Recent alerts"):

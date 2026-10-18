@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -16,6 +17,11 @@ from optlab.overlay.status import STATUSES, badge, chip_html, css
 HIGHLIGHT_STATUSES = ["CONFIRMED", "NEAR_CONFIRMATION", "INVALIDATED", "OVEREXTENDED", "STALE", "CONFLICTING",
                       "INSUFFICIENT_DATA", "DATA_ERROR", "WATCH"]
 SEVERITY = {0: "Information and up", 1: "Caution and up", 2: "Serious and up", 3: "Blocking only"}
+
+
+def md(text: str) -> str:
+    """Escape $ so amounts like $700 ... $100 aren't rendered as Markdown maths."""
+    return str(text).replace("$", "\\$")
 
 
 def chips(items: list[tuple[str, str | None]]) -> None:
@@ -83,7 +89,7 @@ def console(sc: OverlayScan, f: dict, extra_chips: list | None = None) -> None:
             lines.append(f"<div style='margin:2px 0 8px 0'>{ch}{flags}<b>{r.symbol}</b> · {r.rule_name}{move} "
                          f"<span style='opacity:0.65'>→ {pointer(r)}</span>{body}</div>")
         box = st.container(height=None if f["compact"] or len(lines) <= 3 else 330, border=False)
-        box.markdown("".join(lines), unsafe_allow_html=True)
+        box.markdown("".join(lines).replace("$", "&#36;"), unsafe_allow_html=True)
         if hl:
             with st.expander("Evidence for these highlights"):
                 pick = st.selectbox("Highlight", range(len(hl)), key="ovl_ev_pick",
@@ -95,7 +101,7 @@ def console(sc: OverlayScan, f: dict, extra_chips: list | None = None) -> None:
 def evidence(r: RuleResult, sc: OverlayScan | None = None) -> None:
     """Condition checklist plus the audit record of one result."""
     st.markdown(f"**{badge(r.status)}** · {r.symbol} · {r.rule_name} · {r.timeframe} · bar {r.data_timestamp or '—'}")
-    st.write(r.explanation)
+    st.markdown(md(r.explanation))
     if r.conditions:
         rows = pd.DataFrame([{"condition": c["id"], "expression": c["expression"], "required": c["required"],
                               "status": c["status"].upper() if c["status"] == "n/a" else c["status"].capitalize(),
@@ -108,7 +114,7 @@ def evidence(r: RuleResult, sc: OverlayScan | None = None) -> None:
                       "points": "Score points earned: 100 × weight × credit ÷ total weight."},
                 styler=ui.status_styler(["Status"], ui.STATUS_COLORS), width="stretch")
     if r.missing and r.status != "CONFIRMED":
-        st.markdown("**Missing confirmation:** " + "; ".join(r.missing))
+        st.markdown(md("**Missing confirmation:** " + "; ".join(r.missing)))
     facts = {"Score": f"{r.score:.1f} (previous bar {r.prev_score:.1f})" if r.prev_score == r.prev_score else f"{r.score:.1f}",
              "Confirmation needs": f"score ≥ {r.minimum_score:g}, ≥ {r.minimum_pass_count} passing, required conditions pass",
              "Bars since trigger": "—" if r.bars_since is None else f"{r.bars_since}",
@@ -122,7 +128,7 @@ def evidence(r: RuleResult, sc: OverlayScan | None = None) -> None:
     if sc is not None and r.symbol in sc.alignment:
         a = sc.alignment[r.symbol]
         facts["Timeframes"] = f"higher {a['higher']} · intermediate {a['intermediate']} · trigger {a['lower']} → {a['agreement']}"
-    st.markdown("\n".join(f"- **{k}:** {v}" for k, v in facts.items()))
+    st.markdown(md("\n".join(f"- **{k}:** {v}" for k, v in facts.items())))
     with st.popover("Audit record (JSON)", help="Exactly what was calculated: inputs, outputs, versions."):
         st.code(json.dumps(r.as_dict(), indent=1, default=str)[:20000], language="json")
 
@@ -308,3 +314,249 @@ def monitor_overlay_panel(mon_dir) -> None:
     ui.show(al[["time", "status", "symbol", "bar", "title", "body"]], rename={"bar": "Bar", "title": "Alert",
                                                                             "body": "Details"},
             styler=status_cells, width="stretch", height=320)
+
+
+# ------------------------------------------------------------------ phase 3: options and account
+from optlab.overlay.account import Profile, legs_fit  # noqa: E402
+from optlab.overlay.options import contract_flags, deterioration, iv_context, neighbour_iv, structures  # noqa: E402
+from optlab.overlay.quality import chain_health  # noqa: E402
+
+FIT_STATUS = {"FITS CONFIGURED LIMITS": "FITS_ACCOUNT", "FITS BUYING POWER BUT EXCEEDS PREFERRED RISK": "FITS_BP_EXCEEDS_RISK",
+              "INSUFFICIENT DATA": "INSUFFICIENT_DATA"}
+
+
+def fit_badge(cls: str) -> str:
+    code = FIT_STATUS.get(cls, "DOES_NOT_FIT_ACCOUNT")
+    return f"{STATUSES[code].icon} {cls.capitalize()}"
+
+
+def liq_badge(v: str) -> str:
+    return "💧 Poor liquidity" if v == "POOR_LIQUIDITY" else "✔️ Usable"
+
+
+def _cell_colors(sty, cols):
+    def color(v):
+        s = str(v)
+        if s.startswith("💧") or s.startswith("🚫") or s.startswith("🛑"):
+            return css("POOR_LIQUIDITY")
+        if s.startswith("⚠️") or s.startswith("🔎"):
+            return css("FITS_BP_EXCEEDS_RISK")
+        if s.startswith("🧾") or s.startswith("✔️"):
+            return css("FITS_ACCOUNT")
+        if s.startswith("❔"):
+            return css("INSUFFICIENT_DATA")
+        return ""
+    return sty.map(color, subset=[c for c in cols if c in sty.data.columns])
+
+
+def account_chip(cfg) -> tuple:
+    p = Profile.from_config(cfg.account)
+    mode = "Small account" if cfg.account.get("small_account_mode", True) else "Account"
+    return ("FITS_ACCOUNT", f"🧾 {mode}: ${p.allocatable:,.0f} allocatable · max loss ${p.max_loss_per_idea:,.0f}/idea")
+
+
+def technical_status(sc: OverlayScan | None, symbol: str) -> dict:
+    """Best standing rule status per direction for a symbol, from the daily overlay scan."""
+    out = {"bullish": "No rule standing", "bearish": "No rule standing", "available": False}
+    if sc is None:
+        return out
+    res = [r for r in sc.results if r.symbol == symbol and r.rule_id != "conflict"]
+    if not res:
+        out["bullish"] = out["bearish"] = f"No daily bars for {symbol} in the database"
+        return out
+    out["available"] = True
+    order = ["CONFIRMED", "OVEREXTENDED", "STALE", "NEAR_CONFIRMATION", "INVALIDATED"]
+    for d in ("bullish", "bearish"):
+        cand = [r for r in res if r.direction == d and r.status in order]
+        if cand:
+            r = min(cand, key=lambda r: order.index(r.status))
+            out[d] = f"{badge(r.status)} ({r.rule_name})"
+    return out
+
+
+def chain_panel(ch: pd.DataFrame, view: pd.DataFrame, ticker: str, source: str, fetched_at, sc, cfg, earnings=None,
+                hv20=None) -> None:
+    """Overlay for the Option chain tab: quote quality, account fit, IV context and the structure scanner."""
+    th = cfg.thresholds
+    p = Profile.from_config(cfg.account)
+    now = pd.Timestamp.now(tz="America/New_York").to_pydatetime()
+    delay = 15 if source == "cboe" else 0
+    checks = chain_health(ticker, ch, fetched_at, now, th, source, delay)
+    fresh = next((c.passed for c in checks if c.id == "quote_age"), True)
+    df = contract_flags(ch, th, p, fresh, earnings)
+    df["iv_vs_neighbours"] = neighbour_iv(df)
+    st.markdown("### 🧭 Overlay: contract quality and account fit",
+                help="Every contract checked against fixed liquidity thresholds and the account profile in overlay.yaml. "
+                     "Affordability and quality are separate: a cheap contract is never marked good for being cheap.")
+    usable = int((df["liquidity"] == "USABLE").sum())
+    fits = int((df["account_status"] == "FITS_ACCOUNT").sum())
+    items = [("FITS_ACCOUNT" if usable else "POOR_LIQUIDITY", f"✔️ {usable:,} usable quotes"),
+             ("POOR_LIQUIDITY", f"💧 {len(df) - usable:,} poor liquidity"),
+             ("FITS_ACCOUNT", f"🧾 {fits:,} long options fit the account"),
+             ("REQUIRES_DATA_VALIDATION", f"🔎 {int((df['anomaly'] != '').sum()):,} quotes need validation")]
+    if delay:
+        items.append(("INFO", f"ℹ️ Quotes delayed about {delay} min"))
+    for c in checks:
+        if not c.passed and c.effect != "none":
+            items.append(("STALE_DATA", f"🕰️ Stale quotes: {c.detail}") if c.id == "quote_age"
+                         else ("DATA_ERROR", f"❌ {c.name} failed: {c.detail}"))
+    chips(items)
+    key = f"ovl_prev_{ticker}_{source}"
+    prev = st.session_state.get(key)
+    det = deterioration(prev, df, th)
+    st.session_state[key] = df[["contract", "liquidity", "spread_pct_mid", "bid", "volume", "flag_low_volume", "flag_stale"]]
+    if not det.empty:
+        chips([("POOR_LIQUIDITY", f"💧 Liquidity deteriorated since the last load: {len(det)} contract(s)")])
+        ui.show(det, width="stretch")
+    sel = df[df["contract"].isin(view["contract"])] if "contract" in view else df
+    t1, t2, t3 = st.tabs(["Contracts", "Implied volatility", "Defined-risk structures"])
+    with t1:
+        only = st.toggle("Only contracts that fit the account", value=False, key="ovl_ch_fit",
+                         help="Fit is about cost and risk only; check the liquidity and flags columns too.")
+        tv = sel[sel["account_status"] == "FITS_ACCOUNT"] if only else sel
+        out = tv.assign(liquidity=tv["liquidity"].map(liq_badge), account_fit=tv["account_fit"].map(fit_badge),
+                        type=tv["type"].str.capitalize(), iv=tv["iv"] * 100 if tv["iv"].max() < 10 else tv["iv"],
+                        validation=tv["anomaly"].map(lambda a: f"🔎 {a}" if a else "—"))
+        cols = ["contract", "type", "expiration", "dte", "strike", "bid", "ask", "spread_usd", "spread_pct_mid", "volume",
+                "open_interest", "iv", "iv_vs_neighbours", "delta", "cost_per_contract", "account_risk_pct", "bp_remaining",
+                "liquidity", "account_fit", "flags", "validation", "exercise_cash"]
+        ui.show(out[cols], formats={"bid": "money", "ask": "money", "spread_usd": "money", "spread_pct_mid": "pts",
+                                    "volume": "int", "open_interest": "int", "iv": "pts", "iv_vs_neighbours": "spts",
+                                    "delta": "signed", "cost_per_contract": "money", "account_risk_pct": "pts",
+                                    "bp_remaining": "money", "strike": "money", "dte": "int", "exercise_cash": "money0",
+                                    "expiration": "date"},
+                rename={"spread_usd": "Spread ($)", "spread_pct_mid": "Spread % of mid", "iv_vs_neighbours": "IV vs neighbours",
+                        "cost_per_contract": "Debit per contract", "account_risk_pct": "% of account at risk",
+                        "bp_remaining": "Buying power left", "account_fit": "Account fit", "flags": "Quality flags",
+                        "validation": "Data validation", "exercise_cash": "Cash to exercise (calls)"},
+                help={"spread_pct_mid": f"(ask − bid) ÷ mid. Above {th['maximum_bid_ask_pct']}% is flagged.",
+                      "iv_vs_neighbours": "IV ÷ median IV of the two strikes either side − 1.",
+                      "cost_per_contract": "Ask × 100: the maximum loss of a long option.",
+                      "account_risk_pct": "Debit ÷ total buying power.",
+                      "bp_remaining": "Allocatable capital (buying power − reserve) minus the debit.",
+                      "liquidity": "Usable only if fresh, bid > 0, not crossed, spread, open interest and volume all pass.",
+                      "account_fit": "Small-account classification for buying one contract."},
+                styler=lambda s: _cell_colors(s, ["Liquidity", "Account fit", "Data validation"]), width="stretch",
+                height=420)
+        st.caption(md(f"{len(tv):,} contracts · natural prices (you pay the ask) · limits: allocatable "
+                      f"${p.allocatable:,.0f}, max loss ${p.max_loss_per_idea:,.0f} per idea, account risk "
+                      f"{p.max_account_risk_pct:g}% (${p.risk_limit:,.0f})."))
+    with t2:
+        ivc = iv_context(df, hv20)
+        c = st.columns(3)
+        c[0].metric("~30-day ATM IV", f"{ivc['atm_iv']:.1%}" if np.isfinite(ivc["atm_iv"]) else "—")
+        c[1].metric("20-day realized vol", f"{hv20:.1%}" if hv20 else "—",
+                    help="From the stored daily bars; unavailable when the symbol isn't in the database.")
+        c[2].metric("IV ÷ realized", f"{ivc['iv_rv']:.2f}×" if np.isfinite(ivc["iv_rv"]) else "—",
+                    help="Above 1: options price more movement than the stock has shown recently.")
+        st.caption(ivc["history_note"])
+        if not ivc["term"].empty:
+            ui.show(ivc["term"], formats={"atm_iv": "pct", "vs_adjacent_pct": "spts", "dte": "int", "expiration": "date"},
+                    rename={"atm_iv": "ATM IV", "vs_adjacent_pct": "vs adjacent expirations"},
+                    help={"vs_adjacent_pct": "This expiration's ATM IV vs the average of the expirations either side."},
+                    width="stretch")
+    with t3:
+        structures_panel(df, ticker, sc, cfg, p)
+
+
+def structures_panel(df: pd.DataFrame, ticker: str, sc, cfg, p: Profile) -> None:
+    th = cfg.thresholds
+    exps = sorted(df["expiration"].unique())
+    default = [e for e in exps if 7 <= int(df.loc[df["expiration"] == e, "dte"].iloc[0]) <= 60][:2] or exps[:1]
+    c = st.columns([3, 1, 1, 2])
+    pick = c[0].multiselect("Expirations", exps, default=default, key="ovl_st_exp", format_func=lambda d: ui.fmt(d, "date"),
+                            help="Structures are built for these expirations only.")
+    steps = c[1].slider("Max width (strikes)", 1, 5, 2, key="ovl_st_w", help="Verticals up to this many strikes wide.")
+    band = c[2].slider("Strikes within ±%", 2, 30, 10, key="ovl_st_band", help="Only strikes this close to the price.")
+    direction = c[3].radio("Direction", ["All", "Bullish", "Bearish"], horizontal=True, key="ovl_st_dir")
+    only = st.toggle("Only structures that fit the account", value=False, key="ovl_st_fit",
+                     help="Technical signals stay visible elsewhere even when nothing fits.")
+    if not pick:
+        st.caption("Pick at least one expiration.")
+        return
+    s = structures(df, p, th, pick, steps, band, ticker)
+    if s.empty:
+        st.caption("No structures in this range.")
+        return
+    tech = technical_status(sc, ticker)
+    s["technical"] = s["direction"].map(lambda d: tech.get(d, "—"))
+    if direction != "All":
+        s = s[s["direction"] == direction.lower()]
+    if only:
+        s = s[s["account_status"] == "FITS_ACCOUNT"]
+    st.caption("Status columns are kept separate on purpose: technical, liquidity, account fit and data validation are "
+               "never merged into one score. Every figure uses natural prices; the mid column is shown for reference "
+               "and is not an expected fill.")
+    out = s.assign(liquidity=s["liquidity"].map(liq_badge), account_fit=s["account_fit"].map(fit_badge),
+                   validation=s["validation"].map(lambda v: f"🔎 Requires data validation: {v}" if v else "—"),
+                   earnings=s["earnings"].map({True: "⚠️ Before expiry", False: "—"}),
+                   direction=s["direction"].str.capitalize())
+    cols = ["strategy", "direction", "expiration", "dte", "strikes", "width", "net_natural", "net_mid", "max_profit",
+            "max_loss", "capital", "account_risk_pct", "assignment", "technical", "liquidity", "account_fit",
+            "validation", "earnings", "min_oi", "max_spread_pct", "delta", "theta"]
+    ui.show(out[cols], formats={"net_natural": "signed", "net_mid": "signed", "max_profit": "money", "max_loss": "money",
+                                "capital": "money", "account_risk_pct": "pts", "assignment": "money0", "width": "money",
+                                "min_oi": "int", "max_spread_pct": "pts", "delta": "signed", "theta": "signed",
+                                "dte": "int", "expiration": "date"},
+            rename={"capital": "Capital required", "max_profit": "Max profit", "max_loss": "Max loss",
+                    "net_natural": "Net (natural, + debit)", "net_mid": "Net at mid (reference)",
+                    "account_risk_pct": "% of account", "assignment": "Assignment obligation",
+                    "technical": "Technical (underlying)", "account_fit": "Account fit", "validation": "Data validation",
+                    "earnings": "Earnings", "min_oi": "Lowest OI", "max_spread_pct": "Widest leg spread"},
+            help={"net_natural": "Per share: debit = long ask − short bid; credit (negative) = short bid − long ask.",
+                  "max_loss": "Debit × 100, or (width − credit) × 100.",
+                  "assignment": "Short strike × 100: cash or shares an assignment could require before the long leg helps.",
+                  "technical": "Best standing overlay rule on the underlying's daily bars, for this direction."},
+            styler=lambda st_: _cell_colors(st_, ["Liquidity", "Account fit", "Data validation", "Earnings"]),
+            width="stretch", height=420)
+    st.caption(f"{len(s):,} structures · {int((s['account_status'] == 'FITS_ACCOUNT').sum()):,} fit the account profile.")
+    i = st.selectbox("Inspect a structure", range(len(s)), key="ovl_st_pick",
+                     format_func=lambda i: f"{s.iloc[i]['strategy']} {s.iloc[i]['strikes']} · {ui.fmt(s.iloc[i]['expiration'], 'date')}")
+    r = s.iloc[i]
+    with st.container(border=True):
+        st.markdown(f"**{r['strategy']} {r['strikes']}**, expiring {ui.fmt(r['expiration'], 'date')} ({r['dte']} days)")
+        st.markdown(md(f"- **Formula:** {r['formula']}\n- **Account fit:** {fit_badge(r['account_fit'])}"
+                    + (f" — {r['reasons']}" if r["reasons"] else "") + f"\n- **Liquidity:** {liq_badge(r['liquidity'])}"
+                    + (f" — {r['leg_flags']}" if r["leg_flags"] else "") + f"\n- **Technical:** {r['technical']}"
+                    + (f"\n- **Assignment and legs:** {r['notes']}" if r["notes"] else "")
+                    + ("\n- **Events:** earnings fall before this expiration." if r["earnings"] else "")
+                    + "\n- **Dividends:** no dividend calendar is loaded, so ex-dividend assignment risk isn't checked."))
+
+
+
+def risk_panel(cfg, legs, spot: float, symbol: str, name: str) -> None:
+    p = Profile.from_config(cfg.account)
+    st.markdown("### 🧭 Overlay: small-account check",
+                help="Account profile from overlay.yaml (Small Account Mode by default), separate from the account equity "
+                     "above. Change it on the Overlay tab.")
+    c = st.columns(5)
+    c[0].metric("Buying power", f"${p.total_buying_power:,.0f}")
+    c[1].metric("Reserve", f"${p.reserve_cash:,.0f}")
+    c[2].metric("Allocatable", f"${p.allocatable:,.0f}", help="min(settled cash − reserve, buying power − reserve)")
+    c[3].metric("Max loss per idea", f"${p.max_loss_per_idea:,.0f}")
+    c[4].metric("Account-risk limit", f"{p.max_account_risk_pct:g}% (${p.risk_limit:,.0f})")
+    f = legs_fit(p, legs, spot, symbol, name)
+    chips([(f.status, f"{STATUSES[f.status].icon} {f.classification.capitalize()}")])
+    st.markdown(md(f"One unit of **{name}** on {symbol}, at modeled (Black-Scholes) prices, not quotes: capital "
+                f"{ui.fmt(f.capital_required, 'money')}, maximum loss {ui.fmt(f.max_loss, 'money')}, assignment obligation "
+                f"{ui.fmt(f.assignment_obligation, 'money0')}." + (f" Reasons: {'; '.join(f.reasons)}." if f.reasons else "")))
+    if f.notes:
+        st.caption(md(" ".join(f.notes)))
+
+
+def hits_overlay(hits: pd.DataFrame, cfg) -> pd.DataFrame:
+    """Liquidity and account-fit columns for option rows of the monitor's scan hits."""
+    if hits.empty or "contract" not in hits or hits["contract"].isna().all():
+        return hits
+    h = hits[hits["contract"].notna()].copy()
+    h["underlying_price"] = h["price"]
+    for col in ("theta", "gamma", "vega", "last"):
+        if col not in h:
+            h[col] = np.nan
+    h["expiration"] = pd.to_datetime(h["expiration"]).dt.date
+    f = contract_flags(h.assign(type=h["type"].str.lower()), cfg.thresholds, Profile.from_config(cfg.account))
+    out = hits.copy()
+    out.loc[f.index, "liquidity"] = f["liquidity"].map(liq_badge)
+    out.loc[f.index, "account_fit"] = f["account_fit"].map(fit_badge)
+    out.loc[f.index, "quality_flags"] = f["flags"].str.replace("high theta vs premium, ", "", regex=False)
+    return out

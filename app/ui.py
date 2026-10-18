@@ -198,9 +198,11 @@ def show(df: pd.DataFrame, formats: dict | None = None, gradient: dict | None = 
     data = data.rename(columns=names)
     if big:  # Styler is too slow for very large tables; let the grid format numbers with separators
         for c, k in kinds.items():
-            if c not in gappy and k in ("int", "num", "num1", "num3", "num4", "money", "money0"):
-                config[names[c]] = st.column_config.NumberColumn(
-                    format={"num3": "%.3f", "num4": "%.4f"}.get(k, "localized"), help=help.get(c))
+            fmt_ = {"int": "localized", "num": "localized", "num1": "%.1f", "num3": "%.3f", "num4": "%.4f",
+                    "money": "dollar", "money0": "dollar", "pct": "percent", "pts": "%.1f%%", "spts": "%+.1f%%",
+                    "signed": "%+.2f", "smoney0": "%+.0f"}.get(k)
+            if c not in gappy and fmt_:
+                config[names[c]] = st.column_config.NumberColumn(format=fmt_, help=help.get(c))
         return st.dataframe(data, column_config={**config, **user_config} or None, **opts)
     gappy = {names[c] for c in gappy}
     sty = data.style.format({names[c]: FMT[k] for c, k in kinds.items()

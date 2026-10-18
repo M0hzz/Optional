@@ -96,6 +96,6 @@ def css(code: str) -> str:
 
 def chip_html(code: str, text: str | None = None, overrides: dict | None = None) -> str:
     bg, fg = COLORS[STATUSES[code].color]
-    body = text if text is not None else badge(code, overrides)
+    body = (text if text is not None else badge(code, overrides)).replace("$", "&#36;")  # no Markdown maths
     return (f"<span style='background:{bg};color:{fg};border-radius:6px;padding:2px 8px;margin:0 4px 4px 0;"
             f"display:inline-block;font-size:0.85rem;white-space:nowrap'>{body}</span>")

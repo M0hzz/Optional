@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -381,3 +381,150 @@ def test_intraday_rules_skipped_without_intraday_data():
     r["timeframe"] = "5m"
     sc = scan({"X": bars_from([99] * 30 + [101])}, cfg_with([r]), NOW)
     assert sc.results == [] and "live monitor" in sc.skipped[0][1]
+
+
+# ---------------------------------------------------------------- phase 3: small account and options
+from optlab.overlay import account as acc  # noqa: E402
+from optlab.overlay.options import anomalies, contract_flags, deterioration, structures  # noqa: E402
+from optlab.pricing.engine import Leg  # noqa: E402
+
+P = acc.Profile()            # the default $1,000 small-account profile
+
+
+def test_allocatable_capital_and_reserve():
+    assert P.allocatable == 700 and P.risk_limit == 100
+    assert acc.Profile(settled_cash=600).allocatable == 300           # unsettled cash isn't allocatable
+
+
+def test_case1_fifty_dollar_option_fails():
+    f = acc.long_option(P, 50.0, 500, "call")
+    assert f.capital_required == 5000 and f.max_loss == 5000 and f.classification == "EXCEEDS CAPITAL LIMIT"
+    assert f.status == "DOES_NOT_FIT_ACCOUNT"
+
+
+def test_case2_fifty_cent_option():
+    f = acc.long_option(P, 0.50, 20, "call")
+    assert f.capital_required == 50 and f.max_loss == 50 and f.classification == "FITS CONFIGURED LIMITS"
+    assert f.status == "FITS_ACCOUNT" and f.account_risk_pct == 5.0 and f.buying_power_remaining == 650
+
+
+def test_case3_debit_spread():
+    f = acc.debit_spread(acc.Profile(require_assignment_capacity=False), 0.90, 0.25, 1.0, 21, "call")
+    assert f.capital_required == 65 and f.max_loss == 65 and f.max_profit == 35
+    assert f.classification == "FITS CONFIGURED LIMITS"
+
+
+def test_case4_credit_spread():
+    f = acc.credit_spread(acc.Profile(require_assignment_capacity=False), 0.55, 0.25, 1.0, 9, "put")
+    assert f.max_loss == 70 and f.max_profit == 30 and f.classification == "FITS CONFIGURED LIMITS"
+
+
+def test_case5_cash_secured_put_over_1000():
+    f = acc.cash_secured_put(P, 50, 1.20)
+    assert f.capital_required == 4880 and f.assignment_obligation == 5000
+    assert f.classification == "EXCEEDS CAPITAL LIMIT"
+    assert any("assignment could require $5,000" in r for r in f.reasons)
+
+
+def test_case6_covered_call_needs_shares():
+    f = acc.covered_call(P, "AAPL", 200, 2.0, 210)
+    assert f.capital_required == 19800 and f.classification == "EXCEEDS CAPITAL LIMIT"
+    owned = acc.covered_call(acc.Profile(owned_shares={"AAPL": 100}), "AAPL", 200, 2.0, 210)
+    assert owned.capital_required == 0 and "already recorded" in owned.notes[0]
+
+
+def test_case7_naked_call_unlimited():
+    f = acc.naked_call(P)
+    assert f.classification == "UNDEFINED RISK" and not f.defined_risk and f.max_loss is None
+    legs = [Leg("call", 100, 30, -1, 0.3, entry_price=2.0)]
+    assert acc.legs_fit(P, legs, 100).classification == "UNDEFINED RISK"
+
+
+def test_case8_fits_buying_power_but_exceeds_preferred_risk():
+    p = acc.Profile(max_capital_per_idea=150, max_loss_per_idea=250, max_account_risk_pct=30,
+                    require_assignment_capacity=False)
+    f = acc.debit_spread(p, 2.40, 0.40, 5.0, 105, "call")
+    assert f.capital_required == 200 and f.classification == "FITS BUYING POWER BUT EXCEEDS PREFERRED RISK"
+    assert f.status == "FITS_BP_EXCEEDS_RISK"
+
+
+def test_case9_reserved_cash_reduces_buying_power():
+    f = acc.long_option(acc.Profile(reserve_cash=950, max_capital_per_idea=1000), 0.60, 10, "call")
+    assert P.allocatable == 700 and f.classification == "EXCEEDS CAPITAL LIMIT" and "allocatable $50.00" in f.reasons[0]
+
+
+def test_case10_spread_assignment_exceeds_account():
+    f = acc.credit_spread(P, 0.55, 0.25, 1.0, 50, "put")
+    assert f.max_loss == 70 and f.assignment_obligation == 5000
+    assert f.classification == "ASSIGNMENT OBLIGATION EXCEEDS CAPACITY"
+    assert any("must buy 100 shares at $50.00" in n for n in f.notes)
+
+
+def test_case11_missing_historical_option_quotes():
+    from optlab.overlay.history_ev import options_history_status
+    st_, msg = options_history_status(signal_dates=[pd.Timestamp("2025-06-02")], snapshot_dates=[])
+    assert st_ == "INSUFFICIENT_DATA" and "timestamped option quotes are unavailable" in msg
+
+
+def test_case12_boundary_exactly_1000():
+    p = acc.Profile(reserve_cash=0, max_capital_per_idea=1000, max_loss_per_idea=1000, max_account_risk_pct=100)
+    assert acc.long_option(p, 10.00, 50, "call").classification == "FITS CONFIGURED LIMITS"
+    assert acc.long_option(p, 10.01, 50, "call").classification == "EXCEEDS CAPITAL LIMIT"
+
+
+def test_affordability_never_marks_quality_green():
+    from optlab.overlay.status import STATUSES as S
+    assert S["FITS_ACCOUNT"].color != "green" and S["CONFIRMED"].color == "green"
+
+
+def _chain():
+    rows = []
+    for k, cb, ca, pb, pa in ((95, 6.0, 6.2, 0.9, 1.0), (100, 2.4, 2.5, 2.3, 2.45), (105, 0.0, 0.3, 6.0, 6.3),
+                              (110, 0.5, 0.4, 10.0, 10.4)):
+        for t, b, a, d in (("call", cb, ca, 0.6), ("put", pb, pa, -0.4)):
+            rows.append({"contract": f"X{k}{t[0]}", "expiration": date(2026, 4, 17), "dte": 30, "strike": k, "type": t,
+                         "bid": b, "ask": a, "mid": (b + a) / 2, "last": a, "volume": 50, "open_interest": 500,
+                         "iv": 0.3, "delta": d, "gamma": 0.05, "theta": -0.03, "vega": 0.1, "underlying_price": 100.0})
+    return pd.DataFrame(rows)
+
+
+def test_contract_quality_flags():
+    df = contract_flags(_chain(), TH, P)
+    zero = df[df["contract"] == "X105c"].iloc[0]
+    crossed = df[df["contract"] == "X110c"].iloc[0]
+    assert "zero bid" in zero["flags"] and zero["liquidity"] == "POOR_LIQUIDITY"
+    assert "crossed market" in crossed["flags"]
+    good = df[df["contract"] == "X100c"].iloc[0]
+    assert good["liquidity"] == "USABLE" and good["cost_per_contract"] == 250
+    stale = contract_flags(_chain(), TH, P, quotes_fresh=False)
+    assert (stale["liquidity"] == "POOR_LIQUIDITY").all() and stale["flags"].str.contains("stale quote").all()
+    nog = _chain().assign(delta=np.nan)
+    assert contract_flags(nog, TH, P)["flags"].str.contains("missing Greeks").all()
+    wide = contract_flags(_chain().assign(ask=lambda d: d["bid"] * 1.5 + 0.1), TH, P)
+    assert wide["flags"].str.contains("wide spread").all()
+
+
+def test_earnings_before_expiration_flag():
+    df = contract_flags(_chain(), TH, P, earnings=date(2026, 4, 1))
+    assert df["flags"].str.contains("earnings before expiration").all()
+
+
+def test_anomalies_and_structure_validation():
+    ch = _chain()
+    ch.loc[ch["contract"] == "X105c", ["bid", "ask"]] = [3.0, 3.1]     # 105 call priced above the 100 call
+    reasons = anomalies(ch)
+    assert reasons[ch["contract"] == "X105c"].iloc[0] == "price out of order with the neighbouring strike"
+    df = contract_flags(ch, TH, P)
+    s = structures(df, acc.Profile(require_assignment_capacity=False), TH, [date(2026, 4, 17)], 1, 20, "X")
+    flagged = s[s["validation"] != ""]
+    assert not flagged.empty and set(s["strategy"]) >= {"Long call", "Bull call debit spread", "Bull put credit spread"}
+    d = s[(s["strategy"] == "Bull call debit spread") & (s["strikes"] == "95/100")].iloc[0]
+    assert d["net_natural"] == pytest.approx(6.2 - 2.4) and d["max_loss"] == pytest.approx(380)
+
+
+def test_liquidity_deterioration():
+    a = contract_flags(_chain(), TH, P)
+    ch = _chain()
+    ch.loc[ch["contract"] == "X100c", ["bid", "ask"]] = [0.0, 2.6]
+    d = deterioration(a, contract_flags(ch, TH, P), TH)
+    assert "X100c" in set(d["contract"]) and "bid disappeared" in d.set_index("contract").loc["X100c", "change"]
