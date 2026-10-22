@@ -1,5 +1,5 @@
-"""Dashboard pieces of the deterministic overlay: the console that sits above every tab, the
-per-tab panels and the evidence view. Everything shown comes from optlab.overlay: fixed rules,
+"""Dashboard pieces of the deterministic overlay: the console that sits above every view, the
+per-view panels and the evidence view. Everything shown comes from optlab.overlay: fixed rules,
 fixed formulas and fixed sentence templates. No AI is involved anywhere."""
 from __future__ import annotations
 
@@ -14,6 +14,12 @@ from optlab.overlay.engine import TRANSITION_TEXT, OverlayScan, results_frame
 from optlab.overlay.rules import RuleResult
 from optlab.overlay.status import STATUSES, badge, chip_html, css
 
+# overlay panel keys (overlay.yaml → tabs) and where each panel now lives
+PANEL_NAMES = {"scanner": "Live › Watchlist", "macro": "Live › Market", "option_chain": "Live › Option chain",
+               "strategy_lab": "Live › Trade builder (strategy)", "risk": "Live › Trade builder (sizing)",
+               "monitor": "Live › Monitor", "backtest": "Research › Backtest", "signal_explorer": "Research › Signal explorer",
+               "chain_pricer": "Research › Volatility & pricing", "company": "Research › Company & insiders (company)",
+               "insiders": "Research › Company & insiders (insiders)"}
 HIGHLIGHT_STATUSES = ["CONFIRMED", "NEAR_CONFIRMATION", "INVALIDATED", "OVEREXTENDED", "STALE", "CONFLICTING",
                       "INSUFFICIENT_DATA", "DATA_ERROR", "WATCH"]
 SEVERITY = {0: "Information and up", 1: "Caution and up", 2: "Serious and up", 3: "Blocking only"}
@@ -29,11 +35,11 @@ def chips(items: list[tuple[str, str | None]]) -> None:
 
 
 def sidebar_controls(cfg) -> dict:
-    """Overlay switches and filters (session only; persistent settings live on the Overlay tab)."""
-    st.markdown("**Overlay**", help="Rules-based highlights across every tab. Fixed formulas and thresholds from "
-                                   "overlay.yaml; no AI or machine learning. Change thresholds on the Overlay tab.")
+    """Overlay switches and filters (session only; persistent settings live in Research › Overlay setup)."""
+    st.markdown("**Overlay**", help="Rules-based highlights across every view. Fixed formulas and thresholds from "
+                                   "overlay.yaml; no AI or machine learning. Change thresholds in Research › Overlay setup.")
     on = st.toggle("Show overlay", value=cfg.enabled, key="ovl_on",
-                   help="Turns the console and every tab's overlay panel on or off for this session.")
+                   help="Turns the console and every view's overlay panel on or off for this session.")
     compact = st.toggle("Compact console", value=bool(cfg.raw.get("compact")), key="ovl_compact",
                         help="One line per highlight instead of a line plus its explanation.")
     statuses = st.multiselect("Show statuses", HIGHLIGHT_STATUSES, default=HIGHLIGHT_STATUSES[:-1], key="ovl_status",
@@ -47,17 +53,27 @@ def sidebar_controls(cfg) -> dict:
 
 def pointer(r: RuleResult) -> str:
     if r.status in ("DATA_ERROR",) or "DATA_ERROR" in r.data_flags:
-        return "Overlay tab → Data health"
-    return "Scanner tab → Overlay table" + (" · Signal explorer for history" if r.rule_id != "conflict" else "")
+        return "Research › Overlay setup → Data health"
+    return "Live › Watchlist" + (" · Research › Signal explorer for history" if r.rule_id != "conflict" else "")
 
 
-def console(sc: OverlayScan, f: dict, extra_chips: list | None = None) -> None:
-    """The always-visible strip above the tabs: status summary, the things worth looking at, evidence."""
+def console_summary(sc: OverlayScan) -> str:
+    """One line for the console's folded header: the counts that matter most."""
+    c = sc.counts()
+    parts = [f"{STATUSES[k].icon} {c[k]} {sc.config.labels.get(k, STATUSES[k].label).lower()}"
+             for k in ("CONFIRMED", "NEAR_CONFIRMATION", "INVALIDATED", "CONFLICTING", "DATA_ERROR") if c.get(k)]
+    regime = (sc.market or {}).get("regime")
+    return " · ".join(parts + ([f"market {regime.lower()}"] if regime else [])) or "nothing to flag"
+
+
+def console(sc: OverlayScan, f: dict, extra_chips: list | None = None, expanded: bool = True) -> None:
+    """The strip above every view: status summary, the things worth looking at, evidence. It folds to one line
+    (it never disappears); open by default in Live, folded in Research."""
     cfg = sc.config
-    with st.container(border=True):
+    with st.expander(f"🧭 Mastermind console — {console_summary(sc)}", expanded=expanded):
         top = st.columns([3, 2])
-        top[0].markdown("#### 🧭 Mastermind console", help="Deterministic highlights: every item comes from a rule in "
-                        "overlay.yaml evaluated on the latest completed bar. No AI, no predictions, no trading.")
+        top[0].caption("Deterministic highlights: every item comes from a rule in overlay.yaml evaluated on the "
+                       "latest completed bar. No AI, no predictions, no trading.")
         top[1].caption(f"Scanned {sc.now:%H:%M:%S} in {sc.seconds:,.2f} s · {sc.n_symbols:,} symbols · "
                        f"{sc.n_bars:,} bars · {sc.n_rules:,} rules · config {sc.versions.get('config', '')}")
         fails = sc.failed_checks()
@@ -93,14 +109,14 @@ def console(sc: OverlayScan, f: dict, extra_chips: list | None = None) -> None:
         box = st.container(height=None if f["compact"] or len(lines) <= 3 else 330, border=False)
         box.markdown("".join(lines).replace("$", "&#36;"), unsafe_allow_html=True)
         if hl:
-            with st.expander("Evidence for these highlights"):
+            with st.popover("Evidence for these highlights", use_container_width=True):
                 pick = st.selectbox("Highlight", range(len(hl)), key="ovl_ev_pick",
                                     format_func=lambda i: f"{hl[i].symbol} · {hl[i].rule_name} · {badge(hl[i].status, cfg.labels)}",
                                     help="Pick a highlight to see every condition, the formula and the versions behind it.")
-                evidence(hl[pick], sc)
+                evidence(hl[pick], sc, "console")
 
 
-def evidence(r: RuleResult, sc: OverlayScan | None = None) -> None:
+def evidence(r: RuleResult, sc: OverlayScan | None = None, where: str = "panel") -> None:
     """Condition checklist plus the audit record of one result."""
     st.markdown(f"**{badge(r.status)}** · {r.symbol} · {r.rule_name} · {r.timeframe} · bar {r.data_timestamp or '—'}")
     st.markdown(md(r.explanation))
@@ -131,8 +147,9 @@ def evidence(r: RuleResult, sc: OverlayScan | None = None) -> None:
         a = sc.alignment[r.symbol]
         facts["Timeframes"] = f"higher {a['higher']} · intermediate {a['intermediate']} · trigger {a['lower']} → {a['agreement']}"
     st.markdown(md("\n".join(f"- **{k}:** {v}" for k, v in facts.items())))
-    with st.popover("Audit record (JSON)", help="Exactly what was calculated: inputs, outputs, versions."):
-        st.code(json.dumps(r.as_dict(), indent=1, default=str)[:20000], language="json")
+    if st.toggle("Show the audit record (JSON)", key=f"ovl_aud_{where}",
+                 help="Exactly what was calculated: inputs, outputs, versions."):
+        st.code(json.dumps(r.as_dict(), indent=1, default=str, ensure_ascii=False)[:20000], language="json")
 
 
 def status_cells(sty, col="Status"):
@@ -146,7 +163,7 @@ def scanner_panel(sc: OverlayScan) -> None:
                 help="Each row is one rule from overlay.yaml evaluated on the symbol's latest completed daily bar.")
     res = sc.for_tab("scanner")
     if not res:
-        st.caption("No overlay rules apply to this tab.")
+        st.caption("No overlay rules apply to this view.")
         return
     df = results_frame(res)
     c = st.columns([2, 2, 2])
@@ -174,7 +191,7 @@ def scanner_panel(sc: OverlayScan) -> None:
             rename={"bars_since": "Bars since trigger", "move_since_pct": "Move since trigger", "atr_move": "ATR move",
                     "ref_distance_atr": "ATR from average", "change": "Change on latest bar", "data": "Data flags",
                     "bar": "Latest bar"},
-            help={"status": "Overlay status. Hover the Overlay tab's status guide for definitions.",
+            help={"status": "Overlay status. Research › Overlay setup → Status guide has the definitions.",
                   "score": "100 × Σ(weight × credit) ÷ Σ(weight).", "unavailable": "Conditions with no value (warm-up "
                   "or missing data). They score 0; nothing is substituted.",
                   "bars_since": "Bars since the current confirmed run began.",
@@ -196,7 +213,7 @@ def scanner_panel(sc: OverlayScan) -> None:
                      format_func=lambda i: f"{pool[i].symbol} · {pool[i].rule_name} · {badge(pool[i].status)}",
                      help="Full checklist and audit record for one rule on one symbol.")
     with st.container(border=True):
-        evidence(pool[i], sc)
+        evidence(pool[i], sc, "watchlist")
 
 
 def data_health_panel(sc: OverlayScan) -> None:
@@ -378,7 +395,7 @@ def technical_status(sc: OverlayScan | None, symbol: str) -> dict:
 
 def chain_panel(ch: pd.DataFrame, view: pd.DataFrame, ticker: str, source: str, fetched_at, sc, cfg, earnings=None,
                 hv20=None) -> None:
-    """Overlay for the Option chain tab: quote quality, account fit, IV context and the structure scanner."""
+    """Overlay for Live › Option chain: quote quality, account fit, IV context and the structure scanner."""
     th = cfg.thresholds
     p = Profile.from_config(cfg.account)
     now = pd.Timestamp.now(tz="America/New_York").to_pydatetime()
@@ -537,7 +554,7 @@ def risk_panel(cfg, legs, spot: float, symbol: str, name: str) -> None:
     p = Profile.from_config(cfg.account)
     st.markdown("### 🧭 Overlay: small-account check",
                 help="Account profile from overlay.yaml (Small Account Mode by default), separate from the account equity "
-                     "above. Change it on the Overlay tab.")
+                     "above. Change it in Research › Overlay setup.")
     c = st.columns(5)
     c[0].metric("Buying power", f"${p.total_buying_power:,.0f}")
     c[1].metric("Reserve", f"${p.reserve_cash:,.0f}")
@@ -654,7 +671,7 @@ def strategy_panel(legs, spot, rate, dte, iv, cfg, symbol, close, atr_val, quote
                     rename={"model_vs_mid_pct": "Model vs mid"}, styler=lambda s: _cell_colors(s, ["Liquidity"]),
                     width="stretch")
         else:
-            st.caption("No stored chain for this symbol, so leg quote quality can't be checked here (use the Option chain tab).")
+            st.caption("No stored chain for this symbol, so leg quote quality can't be checked here (use Live › Option chain).")
     with t3:
         s = stress(legs, spot, rate, dte, iv, atr_val, p, a["max_loss"], a["breakevens"]["breakeven"].tolist()
                    if not a["breakevens"].empty else [])
@@ -822,7 +839,7 @@ def confluence_chips(table: pd.DataFrame) -> list:
 
 def confluence_panel(sc: OverlayScan, table: pd.DataFrame) -> None:
     cfg = sc.config
-    st.markdown("### 🧩 Overlay: cross-tab confluence",
+    st.markdown("### 🧩 Overlay: confluence",
                 help="Independent states (market, sector, technical rules, history, data quality) combined by fixed "
                      "templates. Account fit and event risk stay separate statuses and never raise a score.")
     if table.empty:
@@ -850,9 +867,9 @@ def confluence_panel(sc: OverlayScan, table: pd.DataFrame) -> None:
         if cfg.raw["confluence"].get("show_composite"):
             st.metric("Composite (optional)", "—" if total is None else f"{total:.0f}",
                       help="Σ(weight × score) ÷ Σ(weight) over available components. Withheld when a data check blocks "
-                           "the symbol. Edit the weights on the Overlay tab → Settings.")
+                           "the symbol. Edit the weights in Research › Overlay setup → Settings.")
         else:
-            st.caption("The composite score is off (Overlay tab → Settings → show composite). Components are always shown.")
+            st.caption("The composite score is off (Research › Overlay setup → Settings → show composite). Components are always shown.")
     t = cf.templates(ctx, cfg.thresholds)
     for key, (name, verdict, items) in t.items():
         with st.expander(f"{STATUSES[verdict].icon} {name}: {VERDICT_TEXT.get(verdict, verdict)}", expanded=key == "waiting" and bool(items)):
@@ -930,9 +947,9 @@ def settings_panel(cfg, save_fn, path) -> None:
             new_ap[k] = cols[n].checkbox(k.replace("_", " ").capitalize(), bool(ap[k]), key=f"ovl_apf_{k}")
         new_ap["account_type"] = st.radio("Account type", ["cash", "margin"], index=0 if ap["account_type"] == "cash" else 1,
                                           horizontal=True, format_func=str.capitalize)
-        st.markdown("**Tabs with an overlay panel**")
-        cols = st.columns(6)
-        tabs = {k: cols[n % 6].checkbox(k.replace("_", " ").capitalize(), bool(v), key=f"ovl_tab_{k}")
+        st.markdown("**Views with an overlay panel**")
+        cols = st.columns(4)
+        tabs = {k: cols[n % 4].checkbox(PANEL_NAMES.get(k, k), bool(v), key=f"ovl_tab_{k}")
                 for n, (k, v) in enumerate(raw["tabs"].items())}
         st.markdown("**Confluence**")
         cols = st.columns(7)

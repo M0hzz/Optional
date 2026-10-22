@@ -37,11 +37,22 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 96 tests
+python -m pytest                   # 170 tests
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
 streamlit run app/streamlit_app.py # the dashboard
 python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
 ```
+
+### Open it from anywhere
+
+Keep optlab running on your own computer and open the dashboard from your phone or laptop
+through a private Tailscale link (only your signed-in devices can reach it):
+
+```bash
+bash scripts/setup_remote.sh       # Linux: link + services for the dashboard, monitor and nightly refresh
+```
+
+Steps for macOS and Windows, daily commands and troubleshooting: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
 
 ### Real data
 
@@ -89,42 +100,43 @@ key with `obb.user.credentials`.
 
 ## The dashboard
 
-- **Scanner** — ranks the universe for premium selling: IV vs realized vol
-  (from the latest chain), whether vol is already calming, vol-of-vol, insider
-  score, plus Qlib predictions if you've trained the model. Also shows days to
-  the next earnings report and counts of filing / financial red flags. Price and
-  realized-vol charts with today's ATM IV overlaid.
-- **Chain & pricer** — volatility smile per expiry, put-IV surface, raw quotes,
-  and a QuantLib calculator (price, Greeks, implied vol from a market price).
-- **Strategy lab** — pick a strategy, DTE, delta and wings; see credit, max loss,
-  position Greeks, payoff at expiry and halfway, and a spot × IV scenario table.
-  Warns when an earnings report falls before expiry.
-- **Backtest** — vectorbt run vs buy-and-hold, trade log, win rate, and a
-  DTE × delta heatmap of Sharpe / return / drawdown.
-- **Risk & sizing** — contracts allowed for a trade, an editable book checked
-  against your limits, and a skfolio allocation across symbols × strategies.
-- **Insiders** — Form 4 summary and transactions.
-- **Company** — fundamentals and next earnings date, quarterly financials vs a year
-  earlier, red flags across the universe, and recent filings with links to EDGAR.
-- **Macro** — Treasury curve and its history, 10Y−2Y slope, and the VIX.
-- **Option chain** — the full chain of any optionable symbol: every expiration and
-  strike, calls and puts side by side with Greeks, filters, CSV download.
-- **Monitor** — the live monitor's latest scan hits, position statuses and alerts;
-  refreshes every 20 seconds.
-- **Signal explorer** — historical searches (see below).
-- **Overlay** — data health, the overlay's rules, a status guide, settings and the audit log.
+Two sections, picked at the top of the page. The app opens in **Live** while the NYSE is open and in
+**Research** otherwise; switch any time. Only the view you pick runs, so pages load faster.
+
+**🟢 Live** — what you use while the market is open:
+- **Watchlist** — ranks the universe for premium selling (IV vs realized vol, vol calming, vol-of-vol,
+  insider score, Qlib predictions if trained, days to earnings, red-flag counts) with price and
+  realized-vol charts, the overlay's rule status for every symbol, and cross-tab confluence.
+- **Market** — the overlay's market overview (indexes, breadth, volatility regime, sectors, regime
+  checklists), the Treasury curve and its history, the 10Y−2Y slope and the VIX.
+- **Option chain** — the full chain of any optionable symbol (every expiration and strike, calls and puts
+  side by side, Greeks, filters, CSV) with contract quality, account fit, IV context and a defined-risk
+  structure scanner.
+- **Trade builder** — pick a strategy, DTE, delta and wings: credit, max loss, Greeks, payoff, spot × IV
+  scenarios, structure checks and stress tests; then size it against your limits and check your open book.
+- **Monitor** — the live monitor's scan hits, position statuses and alerts (refreshes every 20 seconds).
+
+**🔬 Research** — backtests and everything that looks back:
+- **Backtest** — vectorbt run vs buy-and-hold, trade log, DTE × delta sweep and the overlay's diagnostics.
+- **Signal explorer** — historical searches (see below) and historical evidence for the overlay's rules.
+- **Volatility & pricing** — the stored chain's smile, put-IV surface, raw quotes and a QuantLib calculator.
+- **Company & insiders** — fundamentals, financial changes, red flags, filings, and Form 4 insider trades.
+- **Portfolio allocation** — a skfolio allocation across symbols × strategies.
+- **Overlay setup** — data health, the overlay's rules, status guide, settings and audit log.
+
+Links keep the view: `?view=chain` opens Live › Option chain directly (`?section=research` for a section).
 
 ### The overlay (Mastermind console)
 
-A rules-based console sits above every tab and lists what deserves a look right now: confirmed
+A rules-based console sits above every view and lists what deserves a look right now: confirmed
 conditions, near confirmations with exactly what they still need, fresh / stale / overextended /
 invalidated signals, market and sector context, historical sample quality, option liquidity,
 small-account fit (a $1,000 profile by default), assignment and event exposure, data problems and
-cross-tab confluence, each with a pointer to the tab that has the detail. Every tab gets its own
-overlay panel. **No AI is used anywhere:** every highlight comes from a rule in `overlay.yaml` or a
+cross-tab confluence, each with a pointer to the view that has the detail. It sits above every view,
+open in Live and folded to a one-line summary in Research. Every view gets its own overlay panel. **No AI is used anywhere:** every highlight comes from a rule in `overlay.yaml` or a
 documented formula, and the same data always gives the same result. It never trades.
-Rules, thresholds and every formula: [docs/OVERLAY.md](docs/OVERLAY.md). Change settings on the
-Overlay tab or in `overlay.yaml`; switch it off with **Show overlay** in the sidebar.
+Rules, thresholds and every formula: [docs/OVERLAY.md](docs/OVERLAY.md). Change settings in
+Research › Overlay setup or in `overlay.yaml`; switch it off with **Show overlay** in the sidebar.
 
 ---
 
@@ -202,7 +214,7 @@ python scripts/explore.py strategies/oversold_recovery.yaml --csv out.csv
 python scripts/explore.py my.yaml --source synthetic --symbols AAPL MSFT --start 2026-01-01
 ```
 
-Or use the **Signal explorer** dashboard tab: pick or edit a strategy, press **Search**,
+Or use Research › **Signal explorer** in the dashboard: pick or edit a strategy, press **Search**,
 filter the results, select one for its explanation and chart, and read the forward
 behaviour table. Strategies live in `strategies/*.yaml` (three examples ship:
 momentum breakout, oversold recovery, trend pullback).
@@ -333,19 +345,21 @@ src/optlab/
   risk/        sizing.py (limits + skfolio)
   research/    features.py (Polars features, scanner, Qlib export)
 app/streamlit_app.py      dashboard
-scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py · explore.py
+scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py · explore.py ·
+                          setup_remote.sh (private link + services)
 src/optlab/live/          expr.py (conditions) · indicators.py · feed.py (chains, bars) ·
                           scanner.py · monitor.py (schedule, alerts) · replay.py (simulated day)
 scans.yaml                live monitor settings, scans and positions
 src/optlab/history/       bars.py (archive, Yahoo, synthetic) · strategy.py (YAML validation) ·
                           explorer.py (evaluation, scoring) · forward.py · library.py (saved strategies/searches)
-app/signal_explorer.py    the Signal explorer tab
+app/signal_explorer.py    the Signal explorer view
 src/optlab/overlay/       the deterministic overlay: config.py · rules.py · quality.py (data health) ·
                           market.py · alerts.py · account.py · options.py · structure.py ·
                           history_ev.py · backtest_diag.py · confluence.py · audit.py · defaults.yaml
 app/overlay_ui.py         the console and the overlay panels
-overlay.yaml              your overlay settings (optional; written by the Overlay tab)
+overlay.yaml              your overlay settings (optional; written by Research › Overlay setup)
 docs/OVERLAY.md           what the overlay does and every formula
+docs/REMOTE_ACCESS.md     opening the dashboard from other devices
 strategies/               historical-search strategies (YAML)
 watchlists/               symbol lists for scans
 integrations/             lean/ · qlib/ · nautilus/

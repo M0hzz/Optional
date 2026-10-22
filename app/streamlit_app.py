@@ -50,49 +50,51 @@ STRAT_HELP = ("Covered call: own 100 shares, sell a call above. Cash-secured put
 
 
 # ---------------------------------------------------------------- data access
-@st.cache_resource
-def store() -> Store:
-    return Store(CFG["data"]["db_path"], read_only=True)
+def db(read):
+    """Run one read on a connection opened for it and closed after, so scripts/ingest.py can
+    write while the dashboard stays open (DuckDB allows no writer while any reader holds the file)."""
+    with Store(CFG["data"]["db_path"], read_only=True, wait_seconds=60) as s:
+        return read(s)
 
 
 @st.cache_data(ttl=600)
 def load_prices() -> pl.DataFrame:
-    return store().query("SELECT symbol, date, open, high, low, close, volume FROM prices ORDER BY symbol, date")
+    return db(lambda s: s.query("SELECT symbol, date, open, high, low, close, volume FROM prices ORDER BY symbol, date"))
 
 
 @st.cache_data(ttl=600)
 def load_chain(symbol: str) -> pl.DataFrame:
-    return store().latest_chain(symbol)
+    return db(lambda s: s.latest_chain(symbol))
 
 
 @st.cache_data(ttl=600)
 def load_insiders() -> pl.DataFrame:
-    return store().insider_trades()
+    return db(lambda s: s.insider_trades())
 
 
 def _table(name: str, reader) -> pl.DataFrame:
     # databases built before a table existed lack it until ingest.py is re-run
-    return reader() if store().has_table(name) else pl.DataFrame()
+    return db(lambda s: reader(s) if s.has_table(name) else pl.DataFrame())
 
 
 @st.cache_data(ttl=600)
 def load_fundamentals() -> pl.DataFrame:
-    return _table("fundamentals", store().latest_fundamentals)
+    return _table("fundamentals", Store.latest_fundamentals)
 
 
 @st.cache_data(ttl=600)
 def load_macro() -> pl.DataFrame:
-    return _table("macro", store().macro)
+    return _table("macro", Store.macro)
 
 
 @st.cache_data(ttl=600)
 def load_filings() -> pl.DataFrame:
-    return _table("filings", store().filings)
+    return _table("filings", Store.filings)
 
 
 @st.cache_data(ttl=600)
 def load_financials() -> pl.DataFrame:
-    return _table("financials", store().financials)
+    return _table("financials", Store.financials)
 
 
 def stored_quotes(symbol: str) -> pd.DataFrame | None:
@@ -112,9 +114,8 @@ def stored_quotes(symbol: str) -> pd.DataFrame | None:
 
 
 def snapshot_dates() -> list:
-    if not store().has_table("option_chains"):
-        return []
-    return store().query("SELECT DISTINCT snapshot_date FROM option_chains")["snapshot_date"].to_list()
+    return db(lambda s: s.query("SELECT DISTINCT snapshot_date FROM option_chains")["snapshot_date"].to_list()
+              if s.has_table("option_chains") else [])
 
 
 def next_earnings(symbol: str):
@@ -134,8 +135,7 @@ if not Path(CFG["data"]["db_path"]).exists():
     st.error("No database yet. Run `python scripts/ingest.py` first.")
     st.stop()
 
-symbols = store().symbols()
-RATE = risk_free_rate(store(), CFG)
+symbols, RATE = db(lambda s: (s.symbols(), risk_free_rate(s, CFG)))
 src_label = CFG["data"]["source"]
 
 # ------------------------------------------------------------------- sidebar
@@ -144,11 +144,11 @@ with st.sidebar:
     st.caption(f"Data source: **{src_label.capitalize()}**"
                + (" (illustrative numbers, not real markets)" if src_label == "synthetic" else ""))
     symbol = st.selectbox("Underlying", symbols, index=symbols.index("SPY") if "SPY" in symbols else 0,
-                          help="The stock or ETF every tab looks at. The Option chain tab can also load any other "
+                          help="The stock or ETF every view looks at. Live › Option chain can also load any other "
                                "symbol.")
     st.divider()
     equity = st.number_input("Account equity ($)", value=float(CFG["account"]["equity"]), step=5000.0, format="%.0f",
-                             help="Your account size. Position sizing and risk limits on the Risk & sizing tab are "
+                             help="Your account size. Position sizing and risk limits in Live › Trade builder are "
                                   "measured against it. The default comes from config.yaml → account.equity.")
     st.caption(f"= **{ui.fmt(equity, 'money0')}**")
     limits = RiskLimits(**{**CFG["account"], "equity": equity})
@@ -158,8 +158,8 @@ with st.sidebar:
                if rate_src in SERIES_NAMES else f"Risk-free rate: **{RATE:.2%}** ({rate_src})",
                help="Used in every option price. It comes from the latest Treasury bill yield in the Macro data.")
     st.divider()
-    st.markdown(f"📘 [User guide]({ui.GUIDE})", help="Step-by-step guide to every tab, with a sample market day.")
-    st.caption("Each tab has a **How to use this tab** box at the top, and ⓘ icons explain every control.")
+    st.markdown(f"📘 [User guide]({ui.GUIDE})", help="Step-by-step guide to every view, with a sample market day.")
+    st.caption("Two sections: **Live** for market hours, **Research** for backtests and analysis. Each view has a **How to use this view** box, and ⓘ icons explain every control.")
     st.divider()
     try:
         OCFG = load_overlay_config()
@@ -176,7 +176,7 @@ iv_atm = atm_iv(chain) or float(np.log(spot_series).diff().tail(20).std() * np.s
 earn_date = next_earnings(symbol)
 
 
-# ------------------------------------------------------------------ overlay console (above every tab)
+# ------------------------------------------------------------------ overlay console (above every view)
 @st.cache_data(ttl=300, show_spinner="Running overlay rules...")
 def overlay_scan(cfg_json: str, data_key: str, minute: str):
     """Cached on settings, database file time and the clock minute: data, settings or a new bar rescan."""
@@ -215,19 +215,68 @@ OCONF = overlay_confluence(*_OKEY) if OF["on"] else None
 if ocfg_error is not None:
     st.error("overlay.yaml has problems, so the built-in overlay defaults are in use:\n\n"
              + "\n".join(f"- {p}" for p in ocfg_error.problems))
-if OSCAN is not None:
-    ov.console(OSCAN, OF, ov.market_chips(OSCAN) + [ov.account_chip(OCFG)] + ov.confluence_chips(OCONF))
 
 
 def overlay_on(key: str) -> bool:
     return OSCAN is not None and OCFG.tab_on(key)
 
 
-tabs = st.tabs(["Scanner", "Chain & pricer", "Strategy lab", "Backtest", "Risk & sizing", "Insiders",
-                "Company", "Macro", "Option chain", "Monitor", "Signal explorer", "Overlay"])
+# ------------------------------------------------------------------ navigation: two sections
+# Live: what you use while the market is open. Research: backtests and everything that looks back.
+SECTIONS = {
+    "live": ("🟢 Live", [("watchlist", "Watchlist"), ("market", "Market"), ("chain", "Option chain"),
+                        ("trade", "Trade builder"), ("monitor", "Monitor")]),
+    "research": ("🔬 Research", [("backtest", "Backtest"), ("explorer", "Signal explorer"),
+                                ("pricing", "Volatility & pricing"), ("company", "Company & insiders"),
+                                ("allocation", "Portfolio allocation"), ("overlay", "Overlay setup")]),
+}
+VIEW_HELP = {
+    "watchlist": "Today's ranking of every symbol, the overlay's rule status for each, and cross-tab confluence.",
+    "market": "Market regime, breadth, volatility and sectors, plus Treasury rates and the VIX.",
+    "chain": "Full live option chain for any symbol, with quote quality, account fit and a defined-risk structure scanner.",
+    "trade": "Build a strategy, see its payoff, stress tests and risks, then size it and check it against your book.",
+    "monitor": "What the live monitor (scripts/monitor.py) found on its latest pass, and its alerts.",
+    "backtest": "Replay a strategy over history, with diagnostics on how far to trust the result.",
+    "explorer": "When did a set of conditions match in the past, and what happened next.",
+    "pricing": "The stored chain's volatility smile and surface, and a QuantLib option calculator.",
+    "company": "Fundamentals, financial changes, red-flag filings and insider trading.",
+    "allocation": "How to split capital across strategy return streams (skfolio).",
+    "overlay": "The overlay's data checks, rules, status guide, settings and audit log.",
+}
+VIEW_SECTION = {k: sec for sec, (_, views) in SECTIONS.items() for k, _ in views}
+
+
+def market_open_now() -> bool:
+    from optlab.history.bars import nyse_business_days
+
+    t = pd.Timestamp.now(tz="America/New_York")
+    return bool(nyse_business_days(t.date(), t.date())) and pd.Timestamp("09:30").time() <= t.time() < pd.Timestamp("16:00").time()
+
+
+MARKET_OPEN = market_open_now()
+_qp_view = st.query_params.get("view")
+_default_sec = VIEW_SECTION.get(_qp_view) or st.query_params.get("section") or ("live" if MARKET_OPEN else "research")
+nav = st.columns([2, 5])
+SECTION = nav[0].segmented_control(
+    "Section", list(SECTIONS), format_func=lambda k: SECTIONS[k][0], key="nav_section",
+    default=_default_sec if _default_sec in SECTIONS else "live", label_visibility="collapsed",
+    help="Live: use while the market is open (watchlist, market, chains, building and sizing trades, the monitor). "
+         "Research: backtests, historical searches, pricing studies, company data, allocation and overlay setup.") or "live"
+nav[1].caption(("🟢 Market open (New York)" if MARKET_OPEN else "⚪ Market closed: live quotes show the last session")
+               + " · " + VIEW_HELP.get(st.session_state.get(f"nav_view_{SECTION}") or SECTIONS[SECTION][1][0][0], ""))
+_views = SECTIONS[SECTION][1]
+_default_view = _qp_view if _qp_view in dict(_views) else _views[0][0]
+VIEW = st.segmented_control("View", [k for k, _ in _views], format_func=dict(_views).get, key=f"nav_view_{SECTION}",
+                            default=_default_view, label_visibility="collapsed") or _views[0][0]
+st.query_params.update({"section": SECTION, "view": VIEW})
+SHOW = {k: k == VIEW for k in VIEW_SECTION}
+if OSCAN is not None:          # the overlay console stays above every view in both sections
+    ov.console(OSCAN, OF, ov.market_chips(OSCAN) + [ov.account_chip(OCFG)] + ov.confluence_chips(OCONF),
+               expanded=SECTION == "live")
+st.divider()
 
 # ------------------------------------------------------------------- scanner
-with tabs[0]:
+if SHOW["watchlist"]:
     st.subheader("Where is premium rich?")
     ui.intro("Ranks every symbol by how attractive it looks for selling options today. Higher score = better "
              "candidate.",
@@ -237,7 +286,7 @@ with tabs[0]:
               "Hover any column header for what it means.",
               "Check **Days to earnings**: if it is shorter than the expiry you plan to trade, the trade holds "
               "through an earnings gap.",
-              "Non-zero **flags** columns mean red-flag filings or worsening financials; see the Company tab.",
+              "Non-zero **flags** columns mean red-flag filings or worsening financials; see Research › Company & insiders.",
               "The charts below show the symbol picked in the sidebar: its price, and its realized volatility "
               "against today's implied volatility (dashed line)."],
              ["iv", "vol", "guide"])
@@ -285,10 +334,10 @@ with tabs[0]:
                   "vol_of_vol": "How much realized vol itself jumps around. Lower is steadier and safer for sellers.",
                   "ret20": "Price change over the last 20 trading days.",
                   "drawdown": "How far the price is below its 1-year high.",
-                  "insider": "Insider buying score from −1 (heavy selling) to +1 (heavy buying). See the Insiders tab.",
+                  "insider": "Insider buying score from −1 (heavy selling) to +1 (heavy buying). See Research › Company & insiders.",
                   "days_to_earnings": "Calendar days until the next earnings report.",
-                  "n_financial_flags": "Count of worsening financial metrics (see the Company tab).",
-                  "n_filing_flags": "Count of red-flag 8-K filings in the last 90 days (see the Company tab).",
+                  "n_financial_flags": "Count of worsening financial metrics (see Research › Company & insiders).",
+                  "n_filing_flags": "Count of red-flag 8-K filings in the last 90 days (see Research › Company & insiders).",
                   "qlib_fwd_vol_change": "Qlib model's forecast of the change in volatility over the next month."},
             width="stretch")
     st.caption("Higher score = better candidate for selling options. "
@@ -313,7 +362,8 @@ with tabs[0]:
                                                    height=260), width="stretch")
 
 # ------------------------------------------------------------ chain & pricer
-with tabs[1]:
+if SHOW["pricing"]:
+    st.subheader("Volatility smile and surface")
     ui.intro("The stored option chain for the sidebar symbol, and a calculator that prices any single option.",
              ["The top row summarises the chain: price, at-the-money implied volatility, and skew (how much more "
               "downside puts cost than upside calls).",
@@ -322,7 +372,7 @@ with tabs[1]:
               "The heat map shows put IV across every expiry and strike. Brighter = more expensive.",
               "In **QuantLib pricer**, enter a strike, days and volatility to get a fair price and Greeks. Type a "
               "market price to back out the implied volatility it implies.",
-              "For every contract with live quotes, use the **Option chain** tab instead."],
+              "For every contract with live quotes, use **Live › Option chain** instead."],
              ["iv", "smile", "greeks", "bs", "style", "quantlib"])
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Spot", ui.fmt(spot, "money"), help="Latest closing price of the underlying.")
@@ -417,7 +467,8 @@ with tabs[1]:
         st.info(f"Implied volatility at \\${mkt:,.2f}: **{iv:.2%}**" if np.isfinite(iv) else "No volatility reproduces that price.")
 
 # -------------------------------------------------------------- strategy lab
-with tabs[2]:
+if SHOW["trade"]:
+    st.subheader("Build a strategy")
     ui.intro("Build a standard options strategy on the sidebar symbol and see what it costs, what it can lose, and "
              "how it behaves if the price or volatility moves.",
              ["Pick a **Strategy**, then set days to expiry (**DTE**), how far out the short option sits (**Short "
@@ -507,7 +558,7 @@ with tabs[2]:
         ov.strategy_panel(legs, spot, RATE, dte, iv_atm, OCFG, symbol, spot_series, _atr_v, stored_quotes(symbol), strat)
 
 # ------------------------------------------------------------------ backtest
-with tabs[3]:
+if SHOW["backtest"]:
     st.subheader("Quick backtest (vectorbt)")
     ui.intro("Replays a strategy over the symbol's price history to see how it would have done versus simply "
              "holding the stock.",
@@ -602,7 +653,8 @@ with tabs[3]:
                    "settings above; press the button again after changing them.")
 
 # -------------------------------------------------------------- risk & sizing
-with tabs[4]:
+if SHOW["trade"]:
+    st.divider()
     st.subheader("Size this trade")
     ui.intro("How many contracts you can trade within your risk limits, a check of your whole book, and how to "
              "split capital across strategies.",
@@ -691,6 +743,7 @@ with tabs[4]:
         for b in chk.breaches:
             st.error(b)
 
+if SHOW["allocation"]:
     st.subheader("Allocate across strategies (skfolio)")
     method = st.selectbox("Method", ["min_cvar", "risk_parity", "hrp", "max_sharpe"], format_func=ALLOC_NAMES.get,
                           help="Minimum CVaR: smallest average loss on the worst 5% of days. Risk parity: each "
@@ -727,45 +780,8 @@ with tabs[4]:
     except Exception as exc:
         st.warning(f"Optimizer failed: {exc}")
 
-# ------------------------------------------------------------------ insiders
-with tabs[5]:
-    st.subheader("Insider activity (SEC Form 4)")
-    ui.intro("Company officers and directors must report their own trades on SEC Form 4. Insiders buying with "
-             "their own money is one of the more reliable bullish signals.",
-             ["The first table summarises the last 90 days for every symbol. **Score** runs from −1 (heavy "
-              "selling) to +1 (heavy buying).",
-              "Purchases count 5× more than sales, because insiders sell for many reasons (taxes, diversifying) "
-              "but buy for one. Several different buyers boost the score further.",
-              "The second table lists every reported trade for the sidebar symbol. Code **P** = open-market "
-              "purchase, **S** = sale.",
-              "A positive score favours selling puts (you would be happy to own the stock) over calls."],
-             ["form4", "insider", "edgar"])
-    trades = load_insiders()
-    if trades.is_empty():
-        st.info("No insider data. Set edgar.identity in config.yaml and run `python scripts/ingest.py --source openbb`.")
-    else:
-        sig = insider_signal(trades)
-        ui.show(sig.to_pandas(), formats={"buy_value": "money0", "sell_value": "money0", "buyers": "int", "score": "signed"},
-                gradient={"score": (-1, 1)},
-                help={"buy_value": "Dollar value of open-market purchases in the last 90 days.",
-                      "sell_value": "Dollar value of open-market sales in the last 90 days.",
-                      "buyers": "Number of different insiders who bought.",
-                      "score": "−1 = heavy selling, +1 = heavy buying."},
-                width="stretch")
-        st.markdown(f"**Every reported trade for {symbol}**")
-        ui.show(trades.filter(pl.col("symbol") == symbol).to_pandas(),
-                formats={"filing_date": "date", "transaction_date": "date", "shares": "int", "price": "money",
-                         "value": "money0"},
-                rename={"insider": "Insider"},
-                help={"filing_date": "Date the Form 4 reached the SEC.", "transaction_date": "Date of the trade.",
-                      "code": "P = open-market purchase, S = sale, A = award, M = option exercise, F = tax withholding.",
-                      "value": "Shares × price."},
-                width="stretch")
-        if src_label == "synthetic":
-            st.caption("Synthetic insider records for demonstration.")
-
 # ------------------------------------------------------------------- company
-with tabs[6]:
+if SHOW["company"]:
     st.subheader(f"{symbol}: fundamentals, financials and filings")
     ui.intro("Business health checks before you sell options on a company: valuation, the latest quarter versus "
              "a year earlier, and recent SEC filings that can signal trouble.",
@@ -869,9 +885,47 @@ with tabs[6]:
     if src_label == "synthetic":
         st.caption("Synthetic fundamentals, financials and filings for demonstration.")
 
+# ------------------------------------------------------------------ insiders
+if SHOW["company"]:
+    st.divider()
+    st.subheader("Insider activity (SEC Form 4)")
+    ui.intro("Company officers and directors must report their own trades on SEC Form 4. Insiders buying with "
+             "their own money is one of the more reliable bullish signals.",
+             ["The first table summarises the last 90 days for every symbol. **Score** runs from −1 (heavy "
+              "selling) to +1 (heavy buying).",
+              "Purchases count 5× more than sales, because insiders sell for many reasons (taxes, diversifying) "
+              "but buy for one. Several different buyers boost the score further.",
+              "The second table lists every reported trade for the sidebar symbol. Code **P** = open-market "
+              "purchase, **S** = sale.",
+              "A positive score favours selling puts (you would be happy to own the stock) over calls."],
+             ["form4", "insider", "edgar"])
+    trades = load_insiders()
+    if trades.is_empty():
+        st.info("No insider data. Set edgar.identity in config.yaml and run `python scripts/ingest.py --source openbb`.")
+    else:
+        sig = insider_signal(trades)
+        ui.show(sig.to_pandas(), formats={"buy_value": "money0", "sell_value": "money0", "buyers": "int", "score": "signed"},
+                gradient={"score": (-1, 1)},
+                help={"buy_value": "Dollar value of open-market purchases in the last 90 days.",
+                      "sell_value": "Dollar value of open-market sales in the last 90 days.",
+                      "buyers": "Number of different insiders who bought.",
+                      "score": "−1 = heavy selling, +1 = heavy buying."},
+                width="stretch")
+        st.markdown(f"**Every reported trade for {symbol}**")
+        ui.show(trades.filter(pl.col("symbol") == symbol).to_pandas(),
+                formats={"filing_date": "date", "transaction_date": "date", "shares": "int", "price": "money",
+                         "value": "money0"},
+                rename={"insider": "Insider"},
+                help={"filing_date": "Date the Form 4 reached the SEC.", "transaction_date": "Date of the trade.",
+                      "code": "P = open-market purchase, S = sale, A = award, M = option exercise, F = tax withholding.",
+                      "value": "Shares × price."},
+                width="stretch")
+        if src_label == "synthetic":
+            st.caption("Synthetic insider records for demonstration.")
+
 # --------------------------------------------------------------------- macro
-with tabs[7]:
-    st.subheader("Rates and market volatility")
+if SHOW["market"]:
+    st.subheader("Market overview, rates and volatility")
     ui.intro("Interest rates feed every option price, and the VIX shows how nervous the whole market is.",
              ["The top row shows today's Treasury yields from 1 month to 10 years, plus the VIX.",
               "**Treasury curve today** plots those yields by maturity. When short rates sit above long rates "
@@ -958,7 +1012,7 @@ CHAIN_HELP = {"bid": "Highest price a buyer is offering. What you get if you sel
               "annualized_yield": "Premium ÷ strike, annualized: the yield from selling it if it expires worthless.",
               "dte": "Days to expiry.", "contract": "OCC contract symbol.", "strike": "Strike price."}
 
-with tabs[8]:
+if SHOW["chain"]:
     st.subheader("Full option chain")
     ui.intro("Every listed call and put for any optionable symbol, with quotes and Greeks.",
              ["Type a symbol (stocks, ETFs or indexes like SPX) and pick a **Source**. Cboe is free and 15 minutes "
@@ -1142,7 +1196,7 @@ def monitor_panel():
             ui.show(al, formats={"time": "text"}, rename={"title": "Alert"}, width="stretch")
 
 
-with tabs[9]:
+if SHOW["monitor"]:
     st.subheader("Live monitor")
     ui.intro("Shows what `python scripts/monitor.py` found on its latest pass. The monitor runs in a terminal, scans "
              "on the schedule in scans.yaml and sends desktop notifications. Nothing is ever traded.",
@@ -1152,7 +1206,7 @@ with tabs[9]:
               "**Open positions** are coloured green (Hold), yellow (Watch) and red (Exit).",
               "**Scan hits** groups results by scan. Option scans list the matching contracts.",
               "Edit scans.yaml to change symbols, indicators, conditions and the schedule. The scans currently "
-              "loaded are listed at the bottom of this tab."],
+              "loaded are listed at the bottom of this view."],
              ["rsi", "ma", "macd", "bb", "atr", "guide"])
     monitor_panel()
     if overlay_on("monitor"):
@@ -1173,7 +1227,7 @@ with tabs[9]:
             st.error(f"scans.yaml: {exc}")
 
 # ------------------------------------------------------ historical signal explorer
-with tabs[10]:
+if SHOW["explorer"]:
     from signal_explorer import render as render_signal_explorer  # noqa: E402
 
     if overlay_on("signal_explorer"):
@@ -1183,9 +1237,9 @@ with tabs[10]:
     render_signal_explorer()
 
 # ------------------------------------------------------------------ overlay settings and data health
-with tabs[11]:
+if SHOW["overlay"]:
     st.subheader("Overlay: data health, rules and settings")
-    ui.intro("The overlay highlights conditions across every tab using fixed, documented rules. No AI, machine "
+    ui.intro("The overlay highlights conditions across every view using fixed, documented rules. No AI, machine "
              "learning or language model is involved: the same data and settings always give the same result.",
              ["**Data health** lists every check run on the data. Failed checks either block a calculation (shown as "
               "Data error) or downgrade it (shown with a Stale data or similar flag).",
@@ -1210,7 +1264,8 @@ with tabs[11]:
                     st.markdown(f"Confirmation: score ≥ {r.minimum_score if r.minimum_score is not None else OCFG.thresholds['confirmed_match_score']:g}, "
                                 f"≥ {r.minimum_pass_count} passing, required conditions "
                                 f"{'must pass' if r.required_must_pass else 'may be near'}. Invalidation: "
-                                f"{', '.join(f'`{e}`' for e in r.invalidation) or 'none'}. Tabs: {', '.join(r.tab_scope)}.")
+                                f"{', '.join(f'`{e}`' for e in r.invalidation) or 'none'}. Shown in: "
+                                f"{', '.join(ov.PANEL_NAMES.get(t, t) for t in r.tab_scope)}.")
                     if r.timeframe not in ("1d", "1wk"):
                         st.caption("Intraday rule: evaluated by the live monitor (python scripts/monitor.py).")
                     ui.show(pd.DataFrame([{"id": c.id, "expression": c.expression, "required": c.required,

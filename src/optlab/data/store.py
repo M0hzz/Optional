@@ -12,9 +12,14 @@ fundamentals    symbol, as_of, market_cap, pe_ratio, forward_pe, dividend_yield,
 macro           date, series, value      (treasury_1m ... treasury_10y as decimals, vix)
 filings         symbol, filing_date, form, accession_no, items, description, url
 financials      symbol, metric, period_end, value, fiscal_period
+
+DuckDB lets one process write only while no other process has the file open, so readers
+(the dashboard) open it per read and close it again, and both sides wait briefly
+(`wait_seconds`) when the other holds the lock.
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import duckdb
@@ -65,11 +70,19 @@ KEYS = {
 
 
 class Store:
-    def __init__(self, db_path: str | Path, read_only: bool = False):
+    def __init__(self, db_path: str | Path, read_only: bool = False, wait_seconds: float = 0.0):
         self.db_path = str(db_path)
         if self.db_path != ":memory:":
             Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
-        self.con = duckdb.connect(self.db_path, read_only=read_only)
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                self.con = duckdb.connect(self.db_path, read_only=read_only)
+                break
+            except duckdb.IOException as exc:   # another process holds the file lock
+                if "lock" not in str(exc).lower() or time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.5)
         if not read_only:
             for ddl in SCHEMA.values():
                 self.con.execute(ddl)
