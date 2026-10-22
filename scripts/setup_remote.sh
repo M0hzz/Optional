@@ -4,12 +4,14 @@
 #   bash scripts/setup_remote.sh             set everything up (Linux with systemd)
 #   bash scripts/setup_remote.sh --dry-run   print what it would do, change nothing
 #   bash scripts/setup_remote.sh --no-monitor --no-ingest   dashboard only
+#   bash scripts/setup_remote.sh --port 8520 use another port (default 8517)
 #   bash scripts/setup_remote.sh --uninstall remove the services and the Tailscale link
 #
 # What it does:
 #   1. reads this computer's Tailscale name (e.g. mybox.tail1234.ts.net)
 #   2. writes .streamlit/config.toml: the dashboard listens on this computer only (127.0.0.1)
-#      and accepts the browser coming through that name
+#      on its own port, 8517 (not Streamlit's usual 8501, which another Streamlit project on
+#      this computer may already use), and accepts the browser coming through that name
 #   3. installs systemd user services that start at boot and restart after a crash:
 #        optlab-dashboard   streamlit run app/streamlit_app.py
 #        optlab-monitor     python scripts/monitor.py (waits for market hours by itself)
@@ -22,17 +24,19 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-PORT=8501
+PORT=8517
 DRY=0 MONITOR=1 INGEST=1 UNINSTALL=0
-for a in "$@"; do
-  case "$a" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY=1 ;;
     --no-monitor) MONITOR=0 ;;
     --no-ingest) INGEST=0 ;;
     --uninstall) UNINSTALL=1 ;;
-    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
-    *) echo "Unknown option: $a (see --help)"; exit 2 ;;
+    --port) PORT="${2:?--port needs a number}"; shift ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    *) echo "Unknown option: $1 (see --help)"; exit 2 ;;
   esac
+  shift
 done
 
 run() { if [ "$DRY" = 1 ]; then echo "  would run: $*"; else "$@"; fi; }
@@ -68,6 +72,14 @@ NAME="$(tailscale status --json 2>/dev/null | "$ROOT/.venv/bin/python" -c \
   'import json, sys; print(json.load(sys.stdin).get("Self", {}).get("DNSName", "").rstrip("."))' || true)"
 [ -n "$NAME" ] || die "Tailscale is installed but not signed in. Run: sudo tailscale up"
 say "This computer's Tailscale name: $NAME"
+
+# The port must be free, or already ours: otherwise the link would show whatever app holds it.
+if "$ROOT/.venv/bin/python" -c "import socket, sys; sys.exit(socket.socket().connect_ex(('127.0.0.1', $PORT)) != 0)"; then
+  if ! systemctl --user is-active --quiet optlab-dashboard.service; then
+    command -v ss >/dev/null && ss -Hltnp "sport = :$PORT" 2>/dev/null | sed 's/^/    /'
+    die "Port $PORT is already used by another program. Stop it, or pick a free port: bash scripts/setup_remote.sh --port 8520"
+  fi
+fi
 
 # ---------------------------------------------------------------- streamlit config
 say "Writing .streamlit/config.toml"
@@ -146,13 +158,32 @@ EOF
 fi
 
 run systemctl --user daemon-reload
-run systemctl --user enable --now "${ENABLE[@]}"
+run systemctl --user enable "${ENABLE[@]}"
+# restart, not just start: a dashboard left running from an earlier setup must pick up the new config
+run systemctl --user restart optlab-dashboard.service
+[ "$MONITOR" = 1 ] && run systemctl --user restart optlab-monitor.service
+[ "$INGEST" = 1 ] && run systemctl --user start optlab-ingest.timer
 # keep the services running after a reboot, before anyone logs in
 run loginctl enable-linger "${USER:-$(id -un)}" || say "Could not enable lingering; the services start when you log in instead"
 
 # ---------------------------------------------------------------- tailscale link
 say "Linking https://$NAME/ to the dashboard (Tailscale may ask you to enable HTTPS once)"
 run sudo tailscale serve --bg "$PORT"
+
+if [ "$DRY" = 0 ]; then
+  say "Waiting for the dashboard on 127.0.0.1:$PORT"
+  for _ in $(seq 1 60); do
+    curl -fsS "http://127.0.0.1:$PORT/_stcore/health" >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if ! systemctl --user is-active --quiet optlab-dashboard.service \
+     || ! curl -fsS "http://127.0.0.1:$PORT/_stcore/health" >/dev/null 2>&1; then
+    journalctl --user -u optlab-dashboard -n 20 --no-pager || true
+    die "The dashboard did not start on port $PORT (log above)."
+  fi
+  say "What the link points to:"
+  tailscale serve status 2>/dev/null | sed 's/^/    /' || true
+fi
 
 cat <<EOF
 

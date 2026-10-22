@@ -50,6 +50,8 @@ data yourself), `--uninstall` (remove the services and the link).
 | Is everything running? | `systemctl --user status optlab-dashboard optlab-monitor optlab-ingest.timer` |
 | When does the next refresh run? | `systemctl --user list-timers optlab-ingest.timer` |
 | Dashboard log | `journalctl --user -u optlab-dashboard -f` |
+| Where does the link point? | `tailscale serve status` (should show `http://127.0.0.1:8517`) |
+| Open it on this computer | `http://localhost:8517` |
 | Monitor log (scan passes, alerts) | `journalctl --user -u optlab-monitor -f` |
 | Last data refresh | `journalctl --user -u optlab-ingest -n 50` |
 | Refresh data now | `systemctl --user start optlab-ingest` |
@@ -73,13 +75,13 @@ The script needs systemd, so on a Mac or Windows PC do the same by hand:
    ```toml
    [server]
    address = "127.0.0.1"
-   port = 8501
+   port = 8517   # its own port: another Streamlit project may already use 8501
    headless = true
    corsAllowedOrigins = ["https://mybox.tail1234.ts.net"]
    ```
 
 3. Start the dashboard: `streamlit run app/streamlit_app.py`
-4. In another terminal: `tailscale serve --bg 8501`
+4. In another terminal: `tailscale serve --bg 8517`
 5. Open `https://<your-name>/` on any of your devices.
 
 Keep the dashboard and the monitor running in terminals (or use launchd / Task Scheduler to
@@ -89,7 +91,7 @@ start them at login), and schedule `python scripts/ingest.py` for after the clos
 
 - Only devices signed in to your Tailscale account can open the link. Anyone you add to your
   tailnet can open it too, so don't share your tailnet with people who shouldn't see your account settings.
-- The dashboard has no login of its own. Don't expose port 8501 another way (router port
+- The dashboard has no login of its own. Don't expose its port (8517) another way (router port
   forwarding, `tailscale funnel`, a public tunnel): anyone who can reach it can change overlay
   settings and see your positions.
 - Your `config.yaml` (including the SEC identity) stays on the computer; nothing is uploaded.
@@ -98,6 +100,7 @@ start them at login), and schedule `python scripts/ingest.py` for after the clos
 
 | Symptom | Fix |
 |---|---|
+| The link opens a different project | Another app holds the port the link points to. optlab uses port 8517 (Streamlit's default 8501 often belongs to another project): `git pull`, then run `bash scripts/setup_remote.sh` again. It stops with a message if 8517 is taken too; then add `--port 8520`. `tailscale serve status` shows where the link points |
 | Page never loads | The device isn't connected to Tailscale (open the app), or the computer is off or asleep |
 | "Please wait…" forever, or the app keeps reconnecting | The name in `.streamlit/config.toml` doesn't match `tailscale status`; run the setup script again, then `systemctl --user restart optlab-dashboard` |
 | `tailscale serve` asks to enable HTTPS | Follow the link it prints (one click in the Tailscale admin console), then run the script again |
