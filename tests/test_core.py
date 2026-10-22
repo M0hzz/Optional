@@ -206,3 +206,27 @@ def test_store_reads_are_thread_safe(tmp_path):
     [t.join() for t in threads]
     store.close()
     assert not errors, errors[:3]
+
+
+def test_writer_waits_for_a_reader_in_another_process(tmp_path):
+    # ingest.py must be able to write while the dashboard is running: the dashboard opens the
+    # file per read, and a writer that finds it locked waits instead of failing
+    import subprocess
+    import sys
+    import time
+
+    db = tmp_path / "t.duckdb"
+    with Store(db) as s:
+        s.upsert("prices", SyntheticSource(end=date(2024, 6, 28)).prices("SPY", "2024-06-01"))
+    holder = subprocess.Popen([sys.executable, "-c", "import duckdb, time; c = duckdb.connect(%r, read_only=True); "
+                               "print('open', flush=True); time.sleep(2)" % str(db)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert holder.stdout.readline().strip() == "open"
+        with pytest.raises(Exception, match="(?i)lock"):
+            Store(db)                                        # no wait: the reader's lock blocks the write
+        t0 = time.monotonic()
+        with Store(db, wait_seconds=30) as s:                # waits until the reader closes
+            assert s.symbols() == ["SPY"]
+        assert time.monotonic() - t0 >= 0.5
+    finally:
+        holder.wait(timeout=30)

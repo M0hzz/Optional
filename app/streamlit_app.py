@@ -50,49 +50,51 @@ STRAT_HELP = ("Covered call: own 100 shares, sell a call above. Cash-secured put
 
 
 # ---------------------------------------------------------------- data access
-@st.cache_resource
-def store() -> Store:
-    return Store(CFG["data"]["db_path"], read_only=True)
+def db(read):
+    """Run one read on a connection opened for it and closed after, so scripts/ingest.py can
+    write while the dashboard stays open (DuckDB allows no writer while any reader holds the file)."""
+    with Store(CFG["data"]["db_path"], read_only=True, wait_seconds=60) as s:
+        return read(s)
 
 
 @st.cache_data(ttl=600)
 def load_prices() -> pl.DataFrame:
-    return store().query("SELECT symbol, date, open, high, low, close, volume FROM prices ORDER BY symbol, date")
+    return db(lambda s: s.query("SELECT symbol, date, open, high, low, close, volume FROM prices ORDER BY symbol, date"))
 
 
 @st.cache_data(ttl=600)
 def load_chain(symbol: str) -> pl.DataFrame:
-    return store().latest_chain(symbol)
+    return db(lambda s: s.latest_chain(symbol))
 
 
 @st.cache_data(ttl=600)
 def load_insiders() -> pl.DataFrame:
-    return store().insider_trades()
+    return db(lambda s: s.insider_trades())
 
 
 def _table(name: str, reader) -> pl.DataFrame:
     # databases built before a table existed lack it until ingest.py is re-run
-    return reader() if store().has_table(name) else pl.DataFrame()
+    return db(lambda s: reader(s) if s.has_table(name) else pl.DataFrame())
 
 
 @st.cache_data(ttl=600)
 def load_fundamentals() -> pl.DataFrame:
-    return _table("fundamentals", store().latest_fundamentals)
+    return _table("fundamentals", Store.latest_fundamentals)
 
 
 @st.cache_data(ttl=600)
 def load_macro() -> pl.DataFrame:
-    return _table("macro", store().macro)
+    return _table("macro", Store.macro)
 
 
 @st.cache_data(ttl=600)
 def load_filings() -> pl.DataFrame:
-    return _table("filings", store().filings)
+    return _table("filings", Store.filings)
 
 
 @st.cache_data(ttl=600)
 def load_financials() -> pl.DataFrame:
-    return _table("financials", store().financials)
+    return _table("financials", Store.financials)
 
 
 def stored_quotes(symbol: str) -> pd.DataFrame | None:
@@ -112,9 +114,8 @@ def stored_quotes(symbol: str) -> pd.DataFrame | None:
 
 
 def snapshot_dates() -> list:
-    if not store().has_table("option_chains"):
-        return []
-    return store().query("SELECT DISTINCT snapshot_date FROM option_chains")["snapshot_date"].to_list()
+    return db(lambda s: s.query("SELECT DISTINCT snapshot_date FROM option_chains")["snapshot_date"].to_list()
+              if s.has_table("option_chains") else [])
 
 
 def next_earnings(symbol: str):
@@ -134,8 +135,7 @@ if not Path(CFG["data"]["db_path"]).exists():
     st.error("No database yet. Run `python scripts/ingest.py` first.")
     st.stop()
 
-symbols = store().symbols()
-RATE = risk_free_rate(store(), CFG)
+symbols, RATE = db(lambda s: (s.symbols(), risk_free_rate(s, CFG)))
 src_label = CFG["data"]["source"]
 
 # ------------------------------------------------------------------- sidebar

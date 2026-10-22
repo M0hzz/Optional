@@ -39,7 +39,7 @@ def main() -> None:
     src = get_source(cfg)
     real = cfg["data"]["source"] == "openbb"
 
-    with Store(cfg["data"]["db_path"]) as store:
+    with Store(cfg["data"]["db_path"], wait_seconds=120) as store:   # waits while the dashboard is mid-read
         for sym in symbols:
             try:
                 n = store.upsert("prices", src.prices(sym, cfg["data"]["history_start"]))

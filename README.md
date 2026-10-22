@@ -37,11 +37,22 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 96 tests
+python -m pytest                   # 170 tests
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
 streamlit run app/streamlit_app.py # the dashboard
 python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
 ```
+
+### Open it from anywhere
+
+Keep optlab running on your own computer and open the dashboard from your phone or laptop
+through a private Tailscale link (only your signed-in devices can reach it):
+
+```bash
+bash scripts/setup_remote.sh       # Linux: link + services for the dashboard, monitor and nightly refresh
+```
+
+Steps for macOS and Windows, daily commands and troubleshooting: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
 
 ### Real data
 
@@ -334,7 +345,8 @@ src/optlab/
   risk/        sizing.py (limits + skfolio)
   research/    features.py (Polars features, scanner, Qlib export)
 app/streamlit_app.py      dashboard
-scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py · explore.py
+scripts/                  ingest.py · demo.py · monitor.py · simulate_day.py · explore.py ·
+                          setup_remote.sh (private link + services)
 src/optlab/live/          expr.py (conditions) · indicators.py · feed.py (chains, bars) ·
                           scanner.py · monitor.py (schedule, alerts) · replay.py (simulated day)
 scans.yaml                live monitor settings, scans and positions
@@ -347,6 +359,7 @@ src/optlab/overlay/       the deterministic overlay: config.py · rules.py · qu
 app/overlay_ui.py         the console and the overlay panels
 overlay.yaml              your overlay settings (optional; written by Research › Overlay setup)
 docs/OVERLAY.md           what the overlay does and every formula
+docs/REMOTE_ACCESS.md     opening the dashboard from other devices
 strategies/               historical-search strategies (YAML)
 watchlists/               symbol lists for scans
 integrations/             lean/ · qlib/ · nautilus/
