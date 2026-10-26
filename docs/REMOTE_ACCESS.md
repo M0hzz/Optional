@@ -100,6 +100,7 @@ start them at login), and schedule `python scripts/ingest.py` for after the clos
 
 | Symptom | Fix |
 |---|---|
+| `streamlit run` says "Port 8517 is not available" | The dashboard is already running as the optlab-dashboard service, so don't start it by hand: open `http://localhost:8517`, and use `systemctl --user restart optlab-dashboard` after changes. For a separate test copy: `streamlit run app/streamlit_app.py --server.port 8519` |
 | The link opens a different project | Another app holds the port the link points to. optlab uses port 8517 (Streamlit's default 8501 often belongs to another project): `git pull`, then run `bash scripts/setup_remote.sh` again. It stops with a message if 8517 is taken too; then add `--port 8520`. `tailscale serve status` shows where the link points |
 | Page never loads | The device isn't connected to Tailscale (open the app), or the computer is off or asleep |
 | "Please wait…" forever, or the app keeps reconnecting | The name in `.streamlit/config.toml` doesn't match `tailscale status`; run the setup script again, then `systemctl --user restart optlab-dashboard` |
