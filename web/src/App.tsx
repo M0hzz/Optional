@@ -1,0 +1,96 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { api } from "./api/client";
+import type { Account, DataSources, Preferences } from "./api/types";
+import { Empty, ErrorState, Loading, Tip } from "./components/ui";
+import { CreateAccountForm } from "./forms/AccountForms";
+import { useRoute, navigate } from "./lib/router";
+import { TermsContext, TERMS, type Mode } from "./lib/terms";
+import { Dashboard } from "./views/Dashboard";
+import { PositionDetail } from "./views/PositionDetail";
+
+function researchUrl(ds?: DataSources): string {
+  if (ds?.research_lab_url) return ds.research_lab_url;
+  const { protocol, hostname } = window.location;
+  return protocol === "https:" ? `https://${hostname}:8443/` : `http://${hostname}:8517/`;
+}
+
+export function App() {
+  const qc = useQueryClient();
+  const route = useRoute();
+  const prefs = useQuery<Preferences>({ queryKey: ["prefs"], queryFn: api.preferences });
+  const accounts = useQuery<Account[]>({ queryKey: ["accounts"], queryFn: api.accounts });
+  const sources = useQuery<DataSources>({ queryKey: ["sources"], queryFn: api.dataSources, staleTime: 300_000 });
+  // Display preferences (labels, active account) update at once and roll back if the server refuses;
+  // financial state is never updated this way.
+  const setPrefs = useMutation({
+    mutationFn: (p: Partial<Preferences>) => api.setPreferences(p),
+    onMutate: (p) => {
+      const prev = qc.getQueryData<Preferences>(["prefs"]);
+      if (prev) qc.setQueryData(["prefs"], { ...prev, ...p });
+      return { prev };
+    },
+    onError: (_e, _p, ctx) => ctx?.prev && qc.setQueryData(["prefs"], ctx.prev),
+    onSuccess: (p) => qc.setQueryData(["prefs"], p),
+  });
+  const mode: Mode = prefs.data?.terminology ?? "professional";
+  const list = accounts.data ?? [];
+  const active = list.find((a) => a.id === prefs.data?.active_account_id) ?? list.find((a) => a.is_default) ?? list[0];
+  useEffect(() => { document.title = mode === "colony" ? "optlab · Command center" : "optlab"; }, [mode]);
+  const posMatch = /^\/positions\/([0-9a-f-]{36})$/.exec(route);
+
+  return (
+    <TermsContext.Provider value={mode}>
+      <div className="shell">
+        <aside className="sidebar" aria-label="Navigation">
+          <div className="brand"><span aria-hidden>◈</span> optlab</div>
+          <nav>
+            <a href="#/" className={!posMatch ? "active" : ""}>{mode === "colony" ? TERMS.dashboard.colony : TERMS.dashboard.pro}</a>
+            <a href={researchUrl(sources.data)} target="_blank" rel="noreferrer">
+              <Tip text={TERMS.research.meaning}><span>Research Lab ↗</span></Tip>
+            </a>
+            <a href="/api/docs" target="_blank" rel="noreferrer">API docs ↗</a>
+          </nav>
+          <div className="sidebar-section">
+            {list.length > 1 && (
+              <label>Account
+                <select value={active?.id ?? ""} onChange={(e) => setPrefs.mutate({ active_account_id: e.target.value })}>
+                  {list.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                </select>
+              </label>
+            )}
+            <fieldset className="mode-switch">
+              <legend>Terminology</legend>
+              {(["professional", "colony"] as const).map((m) => (
+                <label key={m} className="check">
+                  <input type="radio" name="terminology" checked={mode === m} onChange={() => setPrefs.mutate({ terminology: m })} />
+                  {m === "professional" ? "Professional" : "Colony"}
+                </label>
+              ))}
+              <p className="muted-text small">Labels only. Financial terms stay in the tooltips.</p>
+            </fieldset>
+          </div>
+          <div className="sidebar-foot">
+            {sources.data && (
+              <p className={`small ${sources.data.quotes.synthetic ? "warn-text" : "muted-text"}`}>
+                Quotes: {sources.data.quotes.provider}{sources.data.quotes.synthetic ? " (synthetic demo data)" : sources.data.quotes.delay_minutes ? `, delayed ~${sources.data.quotes.delay_minutes} min` : ""}
+              </p>
+            )}
+            <p className="muted-text small">Informational only: optlab never places orders.</p>
+          </div>
+        </aside>
+        <main className="main" id="main">
+          {accounts.isPending || prefs.isPending ? <Loading what="Loading" />
+            : accounts.isError ? <ErrorState error={accounts.error} retry={() => accounts.refetch()} />
+            : !active ? (
+              <section className="panel">
+                <h2>Welcome to optlab</h2>
+                <Empty>Create your account to start recording positions. You can add more accounts later.</Empty>
+                <CreateAccountForm onDone={(a) => { setPrefs.mutate({ active_account_id: a.id }); navigate("/"); }} />
+              </section>
+            ) : posMatch ? <PositionDetail id={posMatch[1]} /> : <Dashboard account={active} />}
+        </main>
+      </div>
+    </TermsContext.Provider>
+  );
+}

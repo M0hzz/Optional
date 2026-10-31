@@ -37,9 +37,10 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 170 tests
+python -m pytest                   # all tests (offline, deterministic)
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
-streamlit run app/streamlit_app.py # the dashboard
+PYTHONPATH=src python -m optlab.api   # the portfolio dashboard: http://127.0.0.1:8600
+streamlit run app/streamlit_app.py # the Research Lab (Streamlit)
 python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
 ```
 
@@ -53,6 +54,7 @@ bash scripts/setup_remote.sh       # Linux: link + services for the dashboard, m
 ```
 
 Steps for macOS and Windows, daily commands and troubleshooting: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
+Docker Compose is a documented alternative: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ### Real data
 
@@ -98,7 +100,27 @@ key with `obb.user.credentials`.
 
 ---
 
-## The dashboard
+## The portfolio dashboard (primary interface)
+
+A FastAPI + React app at `http://127.0.0.1:8600` (Tailscale: `https://<name>/`) for recording and
+inspecting what you actually hold. Informational only: it never places orders.
+
+- **Accounts** with manually entered values (cash, buying power, account value), capital at risk and
+  upcoming expirations.
+- **Positions** of any shape: stock and up to 12 option legs, with fills, fees and fill times. The strategy
+  is recognised deterministically (22 named strategies, otherwise *Custom*), with exact maximum gain and
+  loss (or *Unlimited* / *Unknown*, never $0), breakevens and buying-power effect, before you save.
+- **Close, edit, archive** with a full before/after history; edits are conflict-checked.
+- **Watched contracts** you're researching, with on-demand quotes.
+- **CSV import** (preview, then atomic commit) and export.
+- On-demand estimates from delayed Cboe quotes, always labelled with source, delay and age.
+- Professional or Colony terminology (labels only; financial terms stay in the tooltips).
+
+Money is stored exactly (integer $0.0001 units). Data: `data/optlab.sqlite` (SQLite, WAL, Alembic
+migrations). Guides: [docs/PORTFOLIO.md](docs/PORTFOLIO.md) (using it), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/DEPLOY.md](docs/DEPLOY.md) (systemd, Docker Compose, backups). API documentation: `/api/docs`.
+
+## The Research Lab (Streamlit)
 
 Two sections, picked at the top of the page. The app opens in **Live** while the NYSE is open and in
 **Research** otherwise; switch any time. Only the view you pick runs, so pages load faster.
@@ -336,6 +358,12 @@ Paper account first.
 
 ```
 config.yaml               settings and risk limits
+src/optlab/portfolio/     portfolio domain: models, money, recognize (strategies), quotes, valuation, service,
+                          csv_import, db (SQLite + Alembic)
+src/optlab/api/           FastAPI app (/api/v1) serving the dashboard
+web/                      React + TypeScript dashboard (web/dist is the committed build)
+migrations/               Alembic migrations for data/optlab.sqlite
+Dockerfile, docker-compose.yml, .env.example   Docker Compose alternative
 src/optlab/
   data/        store.py (DuckDB) · sources.py (OpenBB, synthetic) · chain.py
   filings/     insiders.py · company.py (EdgarTools)

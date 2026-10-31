@@ -30,24 +30,26 @@ Your computer has to stay on (and not asleep) for the link to work.
 
 4. Stop the computer from sleeping: Ubuntu Settings → Power → Automatic Suspend → Off.
 
-The script sets up five things:
+The script sets up these pieces:
 
 | Piece | What it is | When it runs |
 |---|---|---|
-| `.streamlit/config.toml` | The dashboard listens on this computer only (127.0.0.1) and accepts the browser through your Tailscale name | Read by every `streamlit run` |
-| `optlab-dashboard` | `streamlit run app/streamlit_app.py` as a service | At boot; restarted if it crashes |
+| `optlab-api` | The portfolio dashboard and API (`python -m optlab.api`) on 127.0.0.1:8600 | At boot; restarted if it crashes |
+| `.streamlit/config.toml` | The Research Lab (Streamlit) listens on this computer only (127.0.0.1) and accepts the browser through your Tailscale name | Read by every `streamlit run` |
+| `optlab-dashboard` | The Research Lab: `streamlit run app/streamlit_app.py` as a service | At boot; restarted if it crashes |
 | `optlab-monitor` | `python scripts/monitor.py` as a service | At boot; it waits for market hours by itself |
 | `optlab-ingest.timer` | `python scripts/ingest.py` | Weekdays 17:30 New York time; runs at the next start if the computer was off |
-| `tailscale serve` | Forwards `https://<name>/` to the dashboard | Always, until removed |
+| `tailscale serve` | `https://<name>/` → the dashboard (8600); `https://<name>:8443/` → the Research Lab (8517) | Always, until removed |
 
-Options: `--no-monitor` (run the monitor yourself in a terminal instead), `--no-ingest` (refresh
-data yourself), `--uninstall` (remove the services and the link).
+Options: `--no-api` (keep the Research Lab as the only link, as before the portfolio dashboard),
+`--no-monitor` (run the monitor yourself in a terminal instead), `--no-ingest` (refresh data yourself),
+`--uninstall` (remove the services and the links). Docker Compose instead: [DEPLOY.md](DEPLOY.md).
 
 ## Day to day
 
 | Task | Command |
 |---|---|
-| Is everything running? | `systemctl --user status optlab-dashboard optlab-monitor optlab-ingest.timer` |
+| Is everything running? | `systemctl --user status optlab-api optlab-dashboard optlab-monitor optlab-ingest.timer` |
 | When does the next refresh run? | `systemctl --user list-timers optlab-ingest.timer` |
 | Dashboard log | `journalctl --user -u optlab-dashboard -f` |
 | Where does the link point? | `tailscale serve status` (should show `http://127.0.0.1:8517`) |

@@ -9,3 +9,8 @@ data/monitor/
 data/overlay/
 data/simulation/
 .streamlit/
+data/optlab.sqlite*
+data/*.lock
+data/backups/
+.env
+web/node_modules/
