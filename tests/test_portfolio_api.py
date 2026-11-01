@@ -21,7 +21,7 @@ def make(client, account, legs, **kw):
 # ------------------------------------------------------------------ system
 def test_health_openapi_and_structured_404(client):
     h = client.get(f"{API}/health").json()
-    assert h["status"] == "ok" and h["database"]["revision"] == h["database"]["head"] == "0001"
+    assert h["status"] == "ok" and h["database"]["revision"] == h["database"]["head"] == "0002"
     assert h["database"]["journal_mode"] == "wal"
     spec = client.get(f"{API}/openapi.json").json()
     assert "/api/v1/positions/analyze" in spec["paths"] and "/api/v1/positions/{position_id}/close" in spec["paths"]
@@ -99,7 +99,7 @@ def test_create_requires_acknowledgement_for_unbounded_or_unknown_risk(client, a
     assert client.post(f"{API}/positions", json=unknown).json()["error"]["details"]["max_loss_state"] == "unknown"
     p = make(client, account, body["legs"], acknowledge_risk=True)
     assert p["max_loss"] == {"state": "unbounded", "value": None} and p["risk_acknowledged"] and not p["defined_risk"]
-    assert p["monitoring_enabled"] is False
+    assert p["monitoring_enabled"] is True                       # monitored by default from Phase 2
 
 
 def test_invalid_legs_give_field_errors(client, account):

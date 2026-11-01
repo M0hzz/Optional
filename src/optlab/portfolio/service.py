@@ -52,6 +52,32 @@ def _check_version(row, version: int) -> None:
                           details={"current_version": row.version})
 
 
+def _usd(units: int | None) -> str:
+    d = from_units(units)
+    if d is None:
+        return "unknown"
+    return f"{'−' if d < 0 else ''}${abs(d):,.2f}"
+
+
+def _event(s: Session, type_: str, title: str, message: str, p: Position | None = None,
+           wc: WatchedContract | None = None, source: dict | None = None) -> None:
+    """Record changes in the event timeline (info: shown in the feed, never notified)."""
+    from ..monitoring.events import emit
+
+    emit(s, type_, "info", title, message, symbol=(p.underlying if p else wc.underlying if wc else None),
+         account_id=(p.account_id if p else wc.account_id if wc else None), position_id=p.id if p else None,
+         contract_id=wc.id if wc else None, source=source or {})
+
+
+def _set_closed(s: Session, p: Position) -> None:
+    """The monitor stops at once: its status for this position becomes CLOSED."""
+    from .models import MonitorState
+
+    st = s.get(MonitorState, ("position", p.id, ""))
+    if st is not None:
+        st.status, st.since, st.candidate, st.candidate_count = "CLOSED", utcnow(), None, 0
+
+
 def _audit(s: Session, entity: str, id_: str, action: str, before: dict | None, after: dict | None,
            reason: str | None = None) -> None:
     s.add(AuditEvent(entity_type=entity, entity_id=id_, action=action, before_json=before, after_json=after,
@@ -304,6 +330,11 @@ def create_position(s: Session, data: PositionIn, earnings: date | None = None, 
     s.add(p)
     s.flush()
     _audit(s, "position", p.id, "create", None, leg_snapshot(p))
+    prem = p.net_premium_units
+    _event(s, "POSITION_OPENED", f"Recorded: {p.name}",
+           f"{a.name}, {'debit' if (prem or 0) > 0 else 'credit'} {_usd(abs(prem) if prem is not None else None)}, "
+           f"maximum loss {_usd(p.max_loss_units) if p.max_loss_state == Bound.BOUNDED else p.max_loss_state.value}. "
+           f"Source: {source}.", p, source={"strategy": p.strategy})
     return p
 
 
@@ -372,8 +403,12 @@ def update_position(s: Session, position_id: str, data: PositionUpdate, earnings
     p.updated_at = utcnow()
     s.flush()
     if financial or before["notes"] != p.notes or before["name"] != p.name:
-        _audit(s, "position", p.id, "correct" if p.lifecycle == Lifecycle.CLOSED else "edit", before,
-               leg_snapshot(p), data.correction_reason)
+        corr = p.lifecycle == Lifecycle.CLOSED
+        _audit(s, "position", p.id, "correct" if corr else "edit", before, leg_snapshot(p), data.correction_reason)
+        what = "fills and legs" if financial else "name or notes"
+        _event(s, "POSITION_CORRECTED" if corr else "POSITION_EDITED", f"{'Corrected' if corr else 'Edited'}: {p.name}",
+               f"Changed the {what}." + (f" Reason: {data.correction_reason}" if data.correction_reason else "")
+               + " The previous values are kept in the audit log.", p)
     return p
 
 
@@ -436,6 +471,9 @@ def close_position(s: Session, position_id: str, data: PositionClose) -> Positio
         p.notes = (p.notes + "\n\n" if p.notes else "") + data.notes
     s.flush()
     _audit(s, "position", p.id, "close", before, leg_snapshot(p))
+    _set_closed(s, p)
+    _event(s, "POSITION_CLOSED", f"Closed: {p.name}", f"Realized P&L {_usd(p.realized_pnl_units)} after fees.", p,
+           source={"realized_pnl_units": p.realized_pnl_units})
     return p
 
 
@@ -453,6 +491,9 @@ def archive_position(s: Session, position_id: str, data: PositionArchive) -> Pos
         p.closed_at = p.archived_at
     s.flush()
     _audit(s, "position", p.id, "archive", before, leg_snapshot(p), data.reason)
+    _set_closed(s, p)
+    _event(s, "POSITION_ARCHIVED", f"Archived: {p.name}",
+           "Archived as entered in error." if data.reason == "entered_in_error" else "Archived after closing.", p)
     return p
 
 
@@ -462,9 +503,20 @@ def audit_trail(s: Session, entity: str, id_: str) -> list[AuditEvent]:
 
 
 # ------------------------------------------------------------------ watched contracts
+def check_conditions(text: str | None, target: str = "contract", field: str = "alert_conditions") -> None:
+    """Alert conditions are evaluated by the monitor: each line must be a valid condition."""
+    from ..monitoring.rules import split_conditions, validate
+
+    errs = [{"field": field, "code": "BAD_CONDITION", "message": e}
+            for e in (validate(c, target) for c in split_conditions(text)) if e]
+    if errs:
+        raise DomainError("BAD_CONDITION", "A condition isn't valid.", 422, field_errors=errs)
+
+
 def create_contract(s: Session, data: ContractIn) -> WatchedContract:
     if data.account_id:
         get_account(s, data.account_id)
+    check_conditions(data.alert_conditions)
     try:
         occ = occ_build(data.underlying, data.expiration, data.option_right, data.strike)
     except OCCError as exc:
@@ -480,6 +532,8 @@ def create_contract(s: Session, data: ContractIn) -> WatchedContract:
                          invalidation=data.invalidation, alert_conditions=data.alert_conditions, notes=data.notes)
     s.add(wc)
     s.flush()
+    _event(s, "CONTRACT_ADDED", f"Watching: {wc.occ_symbol}", f"Status {wc.status.value.replace('_', ' ').lower()}.",
+           wc=wc)
     return wc
 
 
@@ -519,9 +573,15 @@ def update_contract(s: Session, cid: str, data: ContractUpdate) -> WatchedContra
     if data.status is not None:
         if data.status == "ARCHIVED":
             raise DomainError("USE_ARCHIVE", "Archive a contract with the archive action.", 422)
+        if wc.status.value != data.status:
+            _event(s, "CONTRACT_STATUS_CHANGED", f"{data.status.replace('_', ' ').capitalize()}: {wc.occ_symbol}",
+                   f"Status changed by you from {wc.status.value.replace('_', ' ').lower()} to "
+                   f"{data.status.replace('_', ' ').lower()}.", wc=wc, source={"from": wc.status.value, "to": data.status})
         wc.status = ContractStatus(data.status)
     if "target_entry" in data.model_fields_set:
         wc.target_entry_units = None if data.target_entry is None else to_units(data.target_entry, "target_entry")
+    if "alert_conditions" in data.model_fields_set:
+        check_conditions(data.alert_conditions)
     for k in ("invalidation", "alert_conditions", "notes"):
         if k in data.model_fields_set:
             setattr(wc, k, getattr(data, k))
@@ -534,6 +594,7 @@ def archive_contract(s: Session, cid: str, version: int) -> WatchedContract:
     _check_version(wc, version)
     wc.status, wc.archived_at = ContractStatus.ARCHIVED, utcnow()
     s.flush()
+    _event(s, "CONTRACT_ARCHIVED", f"Archived: {wc.occ_symbol}", "No longer watched.", wc=wc)
     return wc
 
 

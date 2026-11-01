@@ -155,8 +155,11 @@ class Position(Audited, Base):
     defined_risk: Mapped[bool] = mapped_column(Boolean, default=False)
     risk_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
     realized_pnl_units: Mapped[int | None] = mapped_column(BigInteger)
-    # Phase 2 switches positions on for the live monitor; until then nothing reads them for monitoring.
-    monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Read by the portfolio monitor (optlab.monitoring) when True and the position is OPEN.
+    monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Per-position monitor settings: {"rules": {"exit_when": [...], "action_when": [...], "watch_when": [...]} | None
+    # (None = the account-wide defaults), "timeframe": "1d", "notify": true}
+    monitor_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
     notes: Mapped[str | None] = mapped_column(Text)
     legs: Mapped[list[PositionLeg]] = relationship(back_populates="position", order_by="PositionLeg.leg_index",
                                                    cascade="all, delete-orphan")
@@ -165,7 +168,6 @@ class Position(Audited, Base):
         CheckConstraint("(max_loss_state = 'bounded') = (max_loss_units IS NOT NULL)", name="ck_positions_loss"),
         CheckConstraint("(max_gain_state = 'bounded') = (max_gain_units IS NOT NULL)", name="ck_positions_gain"),
         CheckConstraint("fees_units >= 0", name="ck_positions_fees"),
-        CheckConstraint("monitoring_enabled = 0", name="ck_positions_not_monitored_phase1"),
     )
     version: Mapped[int] = mapped_column(Integer)
     __mapper_args__ = {"version_id_col": version}
@@ -260,3 +262,184 @@ class IdempotencyRecord(Base):
     status_code: Mapped[int] = mapped_column(Integer)
     response_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(default=utcnow)
+
+
+# ====================================================================== Phase 2: monitoring and events
+class PositionSnapshot(Base):
+    """One monitoring pass's view of one position. Append-only; older ones may be thinned to one per hour
+    (retention), except those marked `keep` (every status change)."""
+    __tablename__ = "position_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    position_id: Mapped[str] = mapped_column(ForeignKey("positions.id", ondelete="CASCADE"))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    taken_at: Mapped[datetime]
+    raw_status: Mapped[str] = mapped_column(String(24))          # what this pass's data says
+    status: Mapped[str] = mapped_column(String(24))              # confirmed status after this pass
+    reasons_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    rules_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    valuation_status: Mapped[str] = mapped_column(String(16))    # AVAILABLE | PARTIAL | UNAVAILABLE
+    value_units: Mapped[int | None] = mapped_column(BigInteger)
+    exit_value_units: Mapped[int | None] = mapped_column(BigInteger)
+    open_pnl_units: Mapped[int | None] = mapped_column(BigInteger)
+    open_pnl_pct: Mapped[float | None]
+    underlying_price_units: Mapped[int | None] = mapped_column(BigInteger)
+    delta: Mapped[float | None]
+    gamma: Mapped[float | None]
+    theta: Mapped[float | None]
+    vega: Mapped[float | None]
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    legs_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    freshness: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(64))
+    delay_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    fetched_at: Mapped[datetime | None]
+    source_timestamp: Mapped[datetime | None]
+    quote_age_seconds: Mapped[float | None]
+    keep: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (Index("ix_position_snapshots_position_taken", "position_id", "taken_at"),
+                      Index("ix_position_snapshots_taken", "taken_at"))
+
+
+class ContractSnapshot(Base):
+    """A watched contract's quote at one monitoring pass (bid/ask history)."""
+    __tablename__ = "contract_snapshots"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    contract_id: Mapped[str] = mapped_column(ForeignKey("watched_contracts.id", ondelete="CASCADE"))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    taken_at: Mapped[datetime]
+    quote_status: Mapped[str] = mapped_column(String(16))        # FOUND | NOT_FOUND | UNAVAILABLE
+    bid_units: Mapped[int | None] = mapped_column(BigInteger)
+    ask_units: Mapped[int | None] = mapped_column(BigInteger)
+    mid_units: Mapped[int | None] = mapped_column(BigInteger)
+    last_units: Mapped[int | None] = mapped_column(BigInteger)
+    underlying_price_units: Mapped[int | None] = mapped_column(BigInteger)
+    iv: Mapped[float | None]
+    delta: Mapped[float | None]
+    volume: Mapped[float | None]
+    open_interest: Mapped[float | None]
+    spread_pct: Mapped[float | None]
+    conditions_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    freshness: Mapped[str] = mapped_column(String(16))
+    provider: Mapped[str] = mapped_column(String(64))
+    fetched_at: Mapped[datetime | None]
+    keep: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (Index("ix_contract_snapshots_contract_taken", "contract_id", "taken_at"),)
+
+
+class MonitorState(Base):
+    """Small mutable state the monitor keeps between passes (confirmation counters, which warnings already
+    fired, whether an alert is armed). Kept apart from the versioned rows so a pass never conflicts with
+    a user's edit."""
+    __tablename__ = "monitor_states"
+    kind: Mapped[str] = mapped_column(String(32), primary_key=True)        # position | contract | alert_rule | warning | monitor
+    subject_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(120), primary_key=True, default="")
+    status: Mapped[str | None] = mapped_column(String(32))
+    since: Mapped[datetime | None]
+    candidate: Mapped[str | None] = mapped_column(String(32))
+    candidate_count: Mapped[int] = mapped_column(Integer, default=0)
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_event_at: Mapped[datetime | None]
+    last_cleared_at: Mapped[datetime | None]
+    checked_at: Mapped[datetime | None]
+    snapshot_id: Mapped[str | None] = mapped_column(String(36))
+    data_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+class Event(Base):
+    """The command-center feed: status changes, alerts, warnings and record changes. Append-only except
+    for acknowledgement and notification state. `seq` orders events across processes (the live stream
+    resumes from it)."""
+    __tablename__ = "events"
+    seq: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[str] = mapped_column(String(36), unique=True, default=new_id)
+    occurred_at: Mapped[datetime] = mapped_column(default=utcnow)
+    type: Mapped[str] = mapped_column(String(40))
+    severity: Mapped[str] = mapped_column(String(16))             # info | warning | critical
+    title: Mapped[str] = mapped_column(String(300))
+    message: Mapped[str] = mapped_column(Text)
+    symbol: Mapped[str | None] = mapped_column(String(16))
+    account_id: Mapped[str | None] = mapped_column(String(36))
+    position_id: Mapped[str | None] = mapped_column(String(36))
+    contract_id: Mapped[str | None] = mapped_column(String(36))
+    alert_rule_id: Mapped[str | None] = mapped_column(String(36))
+    snapshot_id: Mapped[str | None] = mapped_column(String(36))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    dedupe_key: Mapped[str | None] = mapped_column(String(200))
+    source_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    requires_ack: Mapped[bool] = mapped_column(Boolean, default=False)
+    acknowledged_at: Mapped[datetime | None]
+    ack_note: Mapped[str | None] = mapped_column(Text)
+    notify_state: Mapped[str] = mapped_column(String(16), default="none")   # none | pending | sent | failed | suppressed | unavailable
+    notify_detail: Mapped[str | None] = mapped_column(String(300))
+    __table_args__ = (
+        CheckConstraint("severity IN ('info', 'warning', 'critical')", name="ck_events_severity"),
+        Index("ix_events_occurred", "occurred_at"), Index("ix_events_position", "position_id", "seq"),
+        Index("ix_events_contract", "contract_id", "seq"), Index("ix_events_symbol", "symbol", "seq"),
+        Index("ix_events_type", "type", "seq"), Index("ix_events_unacked", "requires_ack", "acknowledged_at"),
+        Index("ix_events_dedupe", "dedupe_key", "occurred_at"),
+        {"sqlite_autoincrement": True},
+    )
+
+
+class NotificationDelivery(Base):
+    """One attempt to deliver an event on one channel (desktop = notify-send on the server)."""
+    __tablename__ = "notification_deliveries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    event_seq: Mapped[int] = mapped_column(ForeignKey("events.seq", ondelete="CASCADE"), index=True)
+    channel: Mapped[str] = mapped_column(String(16))
+    attempted_at: Mapped[datetime] = mapped_column(default=utcnow)
+    status: Mapped[str] = mapped_column(String(16))               # sent | failed | unavailable
+    detail: Mapped[str | None] = mapped_column(String(300))
+
+
+class AlertRule(Audited, Base):
+    """A user-defined condition on a position, a watched contract or a symbol. Fires once when it becomes
+    true (after `confirm_passes`), re-arms only after it has cleared and `rearm_minutes` have passed,
+    and repeats every `repeat_minutes` while true when that is set."""
+    __tablename__ = "alert_rules"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    target_type: Mapped[str] = mapped_column(String(16))          # position | contract | symbol
+    position_id: Mapped[str | None] = mapped_column(ForeignKey("positions.id", ondelete="CASCADE"), index=True)
+    contract_id: Mapped[str | None] = mapped_column(ForeignKey("watched_contracts.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str | None] = mapped_column(String(16), index=True)
+    condition: Mapped[str] = mapped_column(Text)
+    timeframe: Mapped[str] = mapped_column(String(8), default="1d")
+    severity: Mapped[str] = mapped_column(String(16), default="warning")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    notify: Mapped[bool] = mapped_column(Boolean, default=True)
+    confirm_passes: Mapped[int] = mapped_column(Integer, default=1)
+    rearm_minutes: Mapped[int] = mapped_column(Integer, default=30)
+    repeat_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    archived_at: Mapped[datetime | None]
+    __table_args__ = (
+        CheckConstraint("target_type IN ('position', 'contract', 'symbol')", name="ck_alert_rules_target"),
+        CheckConstraint("(target_type = 'position') = (position_id IS NOT NULL)", name="ck_alert_rules_position"),
+        CheckConstraint("(target_type = 'contract') = (contract_id IS NOT NULL)", name="ck_alert_rules_contract"),
+        CheckConstraint("severity IN ('info', 'warning', 'critical')", name="ck_alert_rules_severity"),
+        CheckConstraint("confirm_passes >= 1 AND rearm_minutes >= 0 AND repeat_minutes >= 0", name="ck_alert_rules_timing"),
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    __mapper_args__ = {"version_id_col": version}
+
+
+class MonitorRun(Base):
+    """One monitoring pass: when, how long, what it checked, what went wrong."""
+    __tablename__ = "monitor_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    started_at: Mapped[datetime]
+    finished_at: Mapped[datetime | None]
+    seconds: Mapped[float | None]
+    trigger: Mapped[str] = mapped_column(String(16))              # schedule | manual
+    mode: Mapped[str] = mapped_column(String(16))                 # live | synthetic
+    provider: Mapped[str] = mapped_column(String(64))
+    positions_checked: Mapped[int] = mapped_column(Integer, default=0)
+    contracts_checked: Mapped[int] = mapped_column(Integer, default=0)
+    rules_checked: Mapped[int] = mapped_column(Integer, default=0)
+    events_emitted: Mapped[int] = mapped_column(Integer, default=0)
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    errors_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    __table_args__ = (Index("ix_monitor_runs_started", "started_at"),)

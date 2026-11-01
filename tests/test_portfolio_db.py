@@ -32,7 +32,7 @@ def test_migration_from_empty_matches_the_models_and_rolls_back(db_url):
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
 
-    assert dbm.upgrade(db_url) == dbm.head_revision() == "0001"
+    assert dbm.upgrade(db_url) == dbm.head_revision() == "0002"
     eng = dbm.make_engine(db_url)
     with eng.connect() as c:
         assert compare_metadata(MigrationContext.configure(c), Base.metadata) == []      # no drift
@@ -42,9 +42,9 @@ def test_migration_from_empty_matches_the_models_and_rolls_back(db_url):
     command.downgrade(dbm.alembic_config(db_url), "base")
     path = dbm.sqlite_path(db_url)
     tables = {r[0] for r in sqlite3.connect(path).execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert tables == {"alembic_version"}
-    assert dbm.upgrade(db_url) == "0001"                         # and forward again
-    assert dbm.upgrade(db_url) == "0001"                         # idempotent
+    assert tables - {"sqlite_sequence"} == {"alembic_version"}     # sqlite_sequence: SQLite's own AUTOINCREMENT table
+    assert dbm.upgrade(db_url) == "0002"                         # and forward again
+    assert dbm.upgrade(db_url) == "0002"                         # idempotent
 
 
 def test_concurrent_startup_migrations_run_once(db_url):
@@ -58,7 +58,7 @@ def test_concurrent_startup_migrations_run_once(db_url):
     ts = [threading.Thread(target=go) for _ in range(4)]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    assert not errors and dbm.current_revision(db_url) == "0001"
+    assert not errors and dbm.current_revision(db_url) == "0002"
 
 
 def test_pragmas(database):
@@ -68,16 +68,15 @@ def test_pragmas(database):
     assert database.pragma("synchronous") == 1                    # NORMAL
 
 
-def test_constraints_foreign_keys_and_phase1_monitoring_guard(database):
+def test_constraints_foreign_keys_and_monitoring_flag(database):
     with pytest.raises(IntegrityError):                            # position for a missing account
         with database.session() as s:
             s.add(_position("no-such-account"))
     with database.session() as s:
         a = _account(s)
         aid = a.id
-    with pytest.raises(IntegrityError):                            # monitoring can't be enabled before Phase 2
-        with database.session() as s:
-            s.add(_position(aid, monitoring_enabled=True))
+    with database.session() as s:                                  # Phase 2 (migration 0002) lifted the guard
+        s.add(_position(aid, monitoring_enabled=True))
     with pytest.raises(IntegrityError):                            # quantity must be positive
         with database.session() as s:
             p = _position(aid)

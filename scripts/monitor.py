@@ -72,6 +72,14 @@ def main() -> None:
         cfg = load_scan_config(args.config)
     except (ExprError, OSError) as exc:
         sys.exit(str(exc))
+    # Positions imported into the dashboard (scans.yaml -> portfolio database) are monitored there now;
+    # checking them here as well would send every alert twice.
+    from optlab.monitoring.legacy import split_imported  # noqa: E402
+
+    cfg["positions"], moved = split_imported(cfg["positions"])
+    if moved:
+        print(f"{len(moved)} scans.yaml position(s) are monitored by the dashboard now and skipped here: "
+              f"{', '.join(moved)}. Remove them from scans.yaml when convenient.", flush=True)
     sched = Schedule.from_config(cfg.get("schedule"), args.start, args.end)
     data = cfg.get("data") or {}
     source = "synthetic" if args.synthetic else data.get("source", "live")

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from .money import from_units, quantize_computed
-from .quotes import ESTIMATED, QuoteService
+from .quotes import ESTIMATED, ContractQuote, QuoteService
 
 GREEKS = ("delta", "gamma", "theta", "vega")
 
@@ -38,6 +38,7 @@ class LegValuation:
     greeks: dict = field(default_factory=dict)
     quality: list[str] = field(default_factory=list)
     nearest: list[str] = field(default_factory=list)
+    quote: ContractQuote | None = None          # the full quote (open interest, spread, ...) for the monitor
 
 
 @dataclass
@@ -88,7 +89,7 @@ def value_position(position, quotes: QuoteService) -> PositionValuation:
             g = {k: (None if getattr(q, k) is None else getattr(q, k) * n) for k in GREEKS}
             status = "UNAVAILABLE" if q.status == "FOUND" and q.mid is None else q.status
             lv = LegValuation(lg.leg_index, q.occ_symbol, status, why, q.mid, exit_px,
-                              None if q.mid is None else n * q.mid, q.bid, q.ask, q.iv, g, q.quality, q.nearest)
+                              None if q.mid is None else n * q.mid, q.bid, q.ask, q.iv, g, q.quality, q.nearest, q)
         if lv.value is None:
             reasons.append(f"Leg {lg.leg_index + 1}: {lv.reason or 'no quote'}")
         legs.append(lv)
