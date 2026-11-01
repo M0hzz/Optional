@@ -599,7 +599,10 @@ def archive_contract(s: Session, cid: str, version: int) -> WatchedContract:
 
 
 # ------------------------------------------------------------------ preferences
-PREF_DEFAULTS = {"terminology": "professional", "timezone": "America/New_York", "active_account_id": None}
+PREF_DEFAULTS: dict[str, Any] = {"terminology": "professional", "timezone": "America/New_York", "active_account_id": None,
+                                 "theme": "default", "dashboard_layout": ["overview", "discipline", "progress", "monitor",
+                                                                          "positions", "events", "contracts"],
+                                 "hidden_widgets": []}
 
 
 def get_preferences(s: Session) -> dict:
@@ -619,7 +622,20 @@ def set_preferences(s: Session, data: PreferencesIn) -> dict:
             raise DomainError("BAD_TIMEZONE", f"Unknown time zone {data.timezone!r}.", 422) from None
     if data.active_account_id:
         get_account(s, data.active_account_id)
+    if data.theme and data.theme != "default":            # cosmetic themes unlock with the colony level
+        from ..process.engine import THEMES, progress
+
+        acc_id = data.active_account_id or get_preferences(s).get("active_account_id")
+        if acc_id is None:
+            first = s.scalar(select(Account.id).where(Account.archived_at.is_(None)).order_by(Account.created_at).limit(1))
+            acc_id = first
+        lvl = progress(s, acc_id, get_preferences(s).get("timezone") or "America/New_York", write=False)["level"]["level"] if acc_id else 1
+        if lvl < THEMES[data.theme]:
+            raise DomainError("THEME_LOCKED", f"The {data.theme} theme unlocks at level {THEMES[data.theme]} (you're at "
+                                              f"level {lvl}). Levels come from process points, never from profit.", 409)
     for k in data.model_fields_set:
+        if k in ("theme", "dashboard_layout", "hidden_widgets") and getattr(data, k) is None:
+            continue
         row = s.get(UserPreference, k) or UserPreference(key=k, value_json={})
         row.value_json = {"value": getattr(data, k)}
         s.add(row)

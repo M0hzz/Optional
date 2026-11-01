@@ -8,6 +8,12 @@ import pytest
 from conftest import EXP, EXP2, FakeProvider, opt, stock
 
 API = "/api/v1"
+
+
+def dbm_head():
+    from optlab.portfolio.db import head_revision
+
+    return head_revision()
 IC = [opt("BUY", "PUT", 90, "0.50", fees="0.65"), opt("SELL", "PUT", 95, "1.50", fees="0.65"),
       opt("SELL", "CALL", 105, "1.50", fees="0.65"), opt("BUY", "CALL", 110, "0.50", fees="0.65")]
 
@@ -21,7 +27,7 @@ def make(client, account, legs, **kw):
 # ------------------------------------------------------------------ system
 def test_health_openapi_and_structured_404(client):
     h = client.get(f"{API}/health").json()
-    assert h["status"] == "ok" and h["database"]["revision"] == h["database"]["head"] == "0003"
+    assert h["status"] == "ok" and h["database"]["revision"] == h["database"]["head"] == dbm_head()
     assert h["database"]["journal_mode"] == "wal"
     spec = client.get(f"{API}/openapi.json").json()
     assert "/api/v1/positions/analyze" in spec["paths"] and "/api/v1/positions/{position_id}/close" in spec["paths"]
@@ -319,7 +325,9 @@ def test_watched_contracts(client, account):
 
 def test_preferences(client, account):
     p = client.get(f"{API}/preferences").json()
-    assert p == {"terminology": "professional", "timezone": "America/New_York", "active_account_id": None}
+    assert {k: p[k] for k in ("terminology", "timezone", "active_account_id")} == {
+        "terminology": "professional", "timezone": "America/New_York", "active_account_id": None}
+    assert p["theme"] == "default" and p["hidden_widgets"] == [] and "discipline" in p["dashboard_layout"]   # Phase 4
     p = client.put(f"{API}/preferences", json={"terminology": "colony", "active_account_id": account["id"]}).json()
     assert p["terminology"] == "colony" and p["active_account_id"] == account["id"]
     assert client.put(f"{API}/preferences", json={"terminology": "pirate"}).status_code == 422

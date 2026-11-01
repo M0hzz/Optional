@@ -530,3 +530,91 @@ class TradePlan(Audited, Base):
     )
     version: Mapped[int] = mapped_column(Integer)
     __mapper_args__ = {"version_id_col": version}
+
+
+# ====================================================================== Phase 4: process, journal, reviews
+JOURNAL_KINDS = ("daily_thesis", "eod_review", "decision", "note", "lesson")
+
+
+class JournalEntry(Audited, Base):
+    """Archives: notes, daily theses, end-of-day reviews and decisions, optionally about a position or a plan.
+    Edits keep the earlier text in the audit log."""
+    __tablename__ = "journal_entries"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    entry_date: Mapped[date] = mapped_column(Date, index=True)       # the day it's about, in the display time zone
+    title: Mapped[str | None] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+    tags_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    position_id: Mapped[str | None] = mapped_column(ForeignKey("positions.id", ondelete="SET NULL"), index=True)
+    plan_id: Mapped[str | None] = mapped_column(ForeignKey("trade_plans.id", ondelete="SET NULL"), index=True)
+    archived_at: Mapped[datetime | None]
+    __table_args__ = (CheckConstraint("kind IN ('daily_thesis','eod_review','decision','note','lesson')",
+                                      name="ck_journal_kind"),
+                      Index("ix_journal_account_date", "account_id", "entry_date"))
+    version: Mapped[int] = mapped_column(Integer)
+    __mapper_args__ = {"version_id_col": version}
+
+
+class TradeReview(Audited, Base):
+    """Mission report: the review of a closed position. Process questions only; the realized P&L is shown
+    next to it but never scored."""
+    __tablename__ = "trade_reviews"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    position_id: Mapped[str] = mapped_column(ForeignKey("positions.id", ondelete="CASCADE"), unique=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    followed_plan: Mapped[str | None] = mapped_column(String(16))      # yes | partly | no | no_plan
+    exit_reason: Mapped[str | None] = mapped_column(String(24))        # target | stop | invalidation | time_stop | risk_rule | discretionary | expired | assigned | other
+    exit_followed_plan: Mapped[str | None] = mapped_column(String(16))  # yes | partly | no | no_plan
+    mistakes_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    went_well: Mapped[str | None] = mapped_column(Text)
+    went_wrong: Mapped[str | None] = mapped_column(Text)
+    lessons: Mapped[str | None] = mapped_column(Text)
+    rule_violation_acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
+    would_take_again: Mapped[str | None] = mapped_column(String(8))     # yes | no | unsure
+    completed_at: Mapped[datetime | None]
+    version: Mapped[int] = mapped_column(Integer)
+    __mapper_args__ = {"version_id_col": version}
+
+
+class ProcessAward(Base):
+    """The points ledger. Append-only and never negative: points come only from process facts (a plan
+    before entry, a review, a skipped setup...), never from profit or the number of trades."""
+    __tablename__ = "process_awards"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    code: Mapped[str] = mapped_column(String(40))
+    category: Mapped[str] = mapped_column(String(16))                   # discipline | research | risk_control | review
+    points: Mapped[int] = mapped_column(Integer)
+    subject_type: Mapped[str] = mapped_column(String(16))               # position | plan | review | day
+    subject_id: Mapped[str] = mapped_column(String(36))
+    day: Mapped[date] = mapped_column(Date)
+    description: Mapped[str] = mapped_column(String(300))
+    awarded_at: Mapped[datetime] = mapped_column(default=utcnow)
+    __table_args__ = (CheckConstraint("points >= 0", name="ck_process_awards_points"),
+                      Index("ix_process_awards_unique", "account_id", "code", "subject_type", "subject_id", unique=True),
+                      Index("ix_process_awards_account_day", "account_id", "day"))
+
+
+class DailyObjective(Base):
+    """A manually checked daily objective (the automatic ones are computed from the records), or a rest day."""
+    __tablename__ = "daily_objectives"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    day: Mapped[date] = mapped_column(Date)
+    code: Mapped[str] = mapped_column(String(40))
+    done: Mapped[bool] = mapped_column(Boolean, default=True)
+    note: Mapped[str | None] = mapped_column(Text)
+    at: Mapped[datetime] = mapped_column(default=utcnow)
+    __table_args__ = (Index("ix_daily_objectives_unique", "account_id", "day", "code", unique=True),)
+
+
+class UserAchievement(Base):
+    __tablename__ = "user_achievements"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    code: Mapped[str] = mapped_column(String(40))
+    earned_at: Mapped[datetime] = mapped_column(default=utcnow)
+    detail_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    __table_args__ = (Index("ix_user_achievements_unique", "account_id", "code", unique=True),)

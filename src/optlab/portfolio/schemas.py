@@ -343,13 +343,24 @@ class Page(BaseModel, Generic[T]):
     page_size: int
 
 
+WIDGETS = ("overview", "discipline", "progress", "monitor", "positions", "events", "contracts")
+
+
 class PreferencesIn(Strict):
     terminology: Literal["professional", "colony"] | None = None
     timezone: Annotated[str | None, Field(max_length=64)] = None
     active_account_id: str | None = None
+    theme: Literal["default", "aurora", "nebula", "solar"] | None = None
+    dashboard_layout: Annotated[list[Literal["overview", "discipline", "progress", "monitor", "positions", "events",
+                                             "contracts"]] | None, Field(max_length=7)] = None
+    hidden_widgets: Annotated[list[Literal["overview", "discipline", "progress", "monitor", "positions", "events",
+                                           "contracts"]] | None, Field(max_length=7)] = None
 
 
 class PreferencesOut(BaseModel):
     terminology: Literal["professional", "colony"]
     timezone: str
     active_account_id: str | None
+    theme: str = "default"
+    dashboard_layout: list[str] = list(WIDGETS)
+    hidden_widgets: list[str] = []
