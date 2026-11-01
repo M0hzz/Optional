@@ -13,7 +13,7 @@ export function RiskBadge({ r, label }: { r: RiskResult; label?: string }) {
   const x = R[r];
   return (
     <Tip text={x.help}>
-      <span className={`badge ${x.cls}`} tabIndex={0} aria-label={`Risk ${x.text}`}><span aria-hidden>{x.icon}</span> {label ?? x.text}</span>
+      <span className={`badge ${x.cls}`} tabIndex={0} role="img" aria-label={`Risk ${x.text}`}><span aria-hidden>{x.icon}</span> {label ?? x.text}</span>
     </Tip>
   );
 }

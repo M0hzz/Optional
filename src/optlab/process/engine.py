@@ -123,6 +123,25 @@ class Facts:
     manual: dict[tuple[date, str], DailyObjective]
     policies: list[RiskPolicy]
     schedule_days: set[int] = field(default_factory=lambda: {0, 1, 2, 3, 4})
+    _index: dict | None = field(default=None, init=False, repr=False)
+    _snaps: dict = field(default_factory=dict, init=False, repr=False)
+
+    def index(self) -> dict:
+        """Lookups built once per refresh (a refresh evaluates up to 90 days three times)."""
+        if self._index is None:
+            live = sorted((p for p in self.positions if _live(p)), key=lambda p: p.id)
+            rows = [(p.id, p.opened_at, p.closed_at, [lg.expiration for lg in p.legs if lg.expiration], p) for p in live]
+            by_open: dict[date, list[Position]] = {}
+            for p in live:
+                by_open.setdefault(p.opened_at.astimezone(self.tz).date(), []).append(p)
+            for v in by_open.values():
+                v.sort(key=lambda p: (p.opened_at, p.id))
+            journal: dict[date, list[JournalEntry]] = {}
+            for j in self.journal:
+                if j.archived_at is None:
+                    journal.setdefault(j.entry_date, []).append(j)
+            self._index = {"live": rows, "by_open": by_open, "journal": journal}
+        return self._index
 
     def local(self, dt: datetime | None) -> date | None:
         return None if dt is None else dt.astimezone(self.tz).date()
@@ -177,17 +196,19 @@ def _live(p: Position) -> bool:
 
 def day_snapshot(f: Facts, day: date) -> dict:
     """Everything the day's score depends on: record ids and yes/no facts, deterministic order, no free text.
-    `display` holds names for the explanations and is not part of the evidence."""
+    `display` holds names for the explanations and is not part of the evidence. Memoized per Facts."""
+    if day in f._snaps:
+        return f._snaps[day]
     start, end = f.window(day)
+    ix = f.index()
     rest = bool((m := f.manual.get((day, REST))) and m.done)
-    open_ = sorted((p for p in f.positions if _live(p) and p.opened_at < end and (p.closed_at is None or p.closed_at >= start)),
-                   key=lambda p: p.id)
-    expiring = [p.id for p in open_ if any(lg.expiration and 0 <= (lg.expiration - day).days <= 14 for lg in p.legs)]
-    active = [j for j in f.journal if j.entry_date == day and j.archived_at is None]
+    open_ = [r for r in ix["live"] if r[1] < end and (r[2] is None or r[2] >= start)]          # already sorted by id
+    expiring = [r[0] for r in open_ if any(0 <= (e - day).days <= 14 for e in r[3])]
+    active = ix["journal"].get(day, [])
     pol = _policy_at(f, end)
     entries = []
     display: dict[str, str] = {}
-    for p in sorted((p for p in f.positions if _live(p) and f.local(p.opened_at) == day), key=lambda p: (p.opened_at, p.id)):
+    for p in ix["by_open"].get(day, []):
         pl = f.plans.get(p.plan_id) if p.plan_id else None
         planned = pl is not None and pl.created_at <= p.opened_at
         risk = (p.entry_risk_json or {}).get("overall")
@@ -199,20 +220,24 @@ def day_snapshot(f: Facts, day: date) -> dict:
                         "converted_from": (pl.comparison_json or {}).get("converted_from") if pl else None})
         display[p.id] = p.name
     due = []
-    for p in sorted((p for p in f.positions if _live(p) and p.closed_at is not None and p.closed_at <= end - timedelta(days=2)),
-                    key=lambda p: p.id):
-        r = f.reviews.get(p.id)
-        due.append({"position_id": p.id, "review_id": r.id if r else None,
+    cutoff = end - timedelta(days=2)
+    for pid, _o, closed, _e, p in ix["live"]:
+        if closed is None or closed > cutoff:
+            continue
+        r = f.reviews.get(pid)
+        due.append({"position_id": pid, "review_id": r.id if r else None,
                     "completed": bool(r and r.completed_at and r.completed_at < end)})
-        display[p.id] = p.name
-    return {"version": f"{SCORE_POLICY}/{SCORE_VERSION}", "day": day.isoformat(), "rest_day": rest,
+        display[pid] = p.name
+    snap = {"version": f"{SCORE_POLICY}/{SCORE_VERSION}", "day": day.isoformat(), "rest_day": rest,
             "manual": {c: bool((m := f.manual.get((day, c))) and m.done) for c in sorted(MANUAL)},
-            "open_position_ids": [p.id for p in open_], "expiring_position_ids": expiring,
+            "open_position_ids": [r[0] for r in open_], "expiring_position_ids": expiring,
             "daily_thesis_ids": sorted(j.id for j in active if j.kind == "daily_thesis"),
             "eod_review_ids": sorted(j.id for j in active if j.kind == "eod_review"),
             "policy": None if pol is None else {"id": pol.id, "revision": pol.revision,
                                                  "daily_loss_limit": (pol.settings_json or {}).get("max_daily_realized_loss")},
             "entries": entries, "reviews_due": due, "display": display}
+    f._snaps[day] = snap
+    return snap
 
 
 def evidence_key(snapshot: dict) -> dict:

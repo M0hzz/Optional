@@ -177,6 +177,58 @@ Migration `0007` adds the `analysis_runs` table only. No new packages are needed
 
 Runs execute in a background thread of the API, one at a time. In live mode, bars come from Yahoo and are cached in `data/history.duckdb` (shared with the Research Lab's Signal Explorer).
 
+## Hardening (Phase 7)
+
+**Upgrading:**
+
+1. `git pull`
+2. `python scripts/portfolio_db.py backup`
+3. `systemctl --user restart optlab-api`
+
+There's no migration and no new runtime package.
+
+The API now answers only to `localhost`, `127.0.0.1`, `::1` and `*.ts.net` host names. If you reach it through another name (a different reverse proxy, a hosts-file alias), add it:
+
+```ini
+# ~/.config/systemd/user/optlab-api.service.d/override.conf
+[Service]
+Environment=OPTLAB_ALLOWED_HOSTS=localhost,127.0.0.1,::1,*.ts.net,mybox.lan
+```
+
+See [SECURITY.md](SECURITY.md) for every protection and how to check it.
+
+**Verifying backups and migrations** (run it after upgrades, and before restoring a backup):
+
+```bash
+python scripts/portfolio_db.py verify                          # the live database, through an online backup
+python scripts/portfolio_db.py verify --backup data/backups/optlab-20261101T120000Z.sqlite
+```
+
+It works on copies in a temporary folder and exits 1 if any check fails. The checks:
+1. backup;
+2. SQLite integrity and foreign keys;
+3. migration revision;
+4. schema against the models;
+5. append-only triggers;
+6. restore into a fresh file with identical row counts;
+7. the full migration chain from an empty database;
+8. the latest migration downgraded and re-applied on a copy.
+
+`restore` now refuses a backup that fails the integrity check.
+
+**Performance check:** `python scripts/benchmark.py` seeds a temporary database (300 positions, 20,000 events, 10,000 news items, a year of history) and times the API. Phase 7 results, median of 5:
+
+| Endpoint | Before | After |
+|---|---|---|
+| risk dashboard | 1214 ms | 54 ms |
+| progress (ledger and score refresh) | 671 ms | 224 ms |
+| process score | 72 ms | 41 ms |
+| everything else | 4–61 ms | 4–64 ms |
+
+The dashboard's first download fell from 983 KB to about 535 KB (160 KB gzipped). Charts and the other pages load when first opened.
+
+**Accessibility check:** with the API running, `cd web && npm run a11y -- http://127.0.0.1:8600` runs axe-core (WCAG 2.1 A and AA) on every page in both terminology modes.
+
 ## Database: migrations, backups, restore
 
 - The API applies **forward** migrations at startup, under a lock, and never downgrades or resets.
@@ -184,6 +236,7 @@ Runs execute in a background thread of the API, one at a time. In live mode, bar
 - `python scripts/portfolio_db.py backup [dest]` makes a consistent online copy (SQLite backup API),
   safe while the API is running. Copying `optlab.sqlite` with `cp` is not safe: the recent writes live
   in `optlab.sqlite-wal` until checkpointed. Default destination: `data/backups/optlab-<UTC time>.sqlite`.
+- Verify: `python scripts/portfolio_db.py verify [--backup <file>]` (see Hardening above).
 - Restore: stop the API, then `python scripts/portfolio_db.py restore data/backups/<file> --yes`
   (it backs up the current file first and refuses while the API is running).
 - Rollback a migration: `python scripts/portfolio_db.py downgrade <revision> --yes` (backs up first).

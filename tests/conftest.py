@@ -102,6 +102,7 @@ def client(db_url, quotes):
     from optlab.portfolio.db import Database
 
     app = create_app(Database(db_url), quotes=quotes, web_dist=None, monitor=False, news=False,
+                     allowed_hosts=["testserver", "localhost", "127.0.0.1"],
                      engine_options={"notifier": None, "earnings": lambda s: None, "bars": FakeBars()})
     app.state.stream_poll = 0.05
     with TestClient(app, raise_server_exceptions=False) as c:

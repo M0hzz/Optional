@@ -1,7 +1,7 @@
 // Trade plans (missions): the list, one plan's page with its state machine, checklist, risk check, monitor
 // conditions, conversion into a position and the planned-versus-actual comparison.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AnalysisLink } from "./Analysis";
+import { AnalysisLink } from "../lib/analysisLinks";
 import { useState } from "react";
 import { ApiError, api } from "../api/client";
 import type { Account, Plan, PlanState, RuleResult, TimelineItem } from "../api/types";

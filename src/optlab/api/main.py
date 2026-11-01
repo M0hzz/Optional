@@ -15,6 +15,9 @@ Settings (environment variables, all optional)
     OPTLAB_RESEARCH_URL    link to the Streamlit Research Lab; default: same host, port 8517 (or :8443 over HTTPS)
     OPTLAB_MAX_UPLOAD_BYTES 1000000
     OPTLAB_MONITOR         on (default) | off: run the portfolio monitor in this process (optlab.monitoring)
+    OPTLAB_ALLOWED_HOSTS   Host names this server answers to (DNS-rebinding protection); default
+                           localhost,127.0.0.1,::1,*.ts.net
+    OPTLAB_MAX_BODY_BYTES  2000000: larger request bodies are refused (413)
     OPTLAB_NEWS            on (default) | off: fetch news and official events in this process (optlab.news)
     OPTLAB_SEC_IDENTITY    "Name email" for SEC EDGAR (overrides edgar.identity in config.yaml)
     FINNHUB_API_KEY        optional; Finnhub stays disabled without it
@@ -82,7 +85,8 @@ def run_manual_pass(app: FastAPI):
 
 def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool = True, lock: bool = True,
                web_dist: Path | None = WEB_DIST, monitor: bool | None = None,
-               engine_options: dict | None = None, news: bool | None = None) -> FastAPI:
+               engine_options: dict | None = None, news: bool | None = None,
+               allowed_hosts: list[str] | None = None) -> FastAPI:
     db = database or dbm.Database()
     instance = dbm.InstanceLock(db.url) if lock else None
     run_monitor = (os.environ.get("OPTLAB_MONITOR", "on").lower() not in ("off", "0", "false", "no")
@@ -135,6 +139,9 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
     origins = [o.strip() for o in os.environ.get("OPTLAB_CORS_ORIGINS", DEFAULT_CORS).split(",") if o.strip()]
     if "*" in origins:
         raise ValueError("OPTLAB_CORS_ORIGINS may not contain '*': list the exact origins.")
+    from .security import SecurityMiddleware, allowed_hosts_from_env
+
+    hosts = allowed_hosts if allowed_hosts is not None else allowed_hosts_from_env()
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
                        allow_headers=["Content-Type", "Idempotency-Key", "Last-Event-ID"], allow_credentials=False)
 
@@ -167,11 +174,22 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
         return JSONResponse(error_body("VERSION_CONFLICT", "Someone else changed this record at the same time. Reload "
                                                            "and try again.", None, None, request.state.request_id), 409)
 
+    from .security import BodyTooLarge
+
+    @app.exception_handler(BodyTooLarge)
+    async def too_large(request: Request, exc: BodyTooLarge):
+        return JSONResponse(error_body("BODY_TOO_LARGE", "The request body is too large.", None, None,
+                                       request.state.request_id), 413)
+
     @app.exception_handler(Exception)
     async def unhandled(request: Request, exc: Exception):
         log.exception("unhandled error (request %s)", request.state.request_id)
         return JSONResponse(error_body("INTERNAL_ERROR", "Something went wrong on the server. The details are in the "
                                                          "server log.", None, None, request.state.request_id), 500)
+
+    # outermost: refuses foreign hosts / origins and oversized bodies before anything else runs
+    app.add_middleware(SecurityMiddleware, allowed_hosts=hosts, cors_origins=origins,
+                       max_body=int(os.environ.get("OPTLAB_MAX_BODY_BYTES", 2_000_000)))
 
     from .monitor_routes import router as monitor_router
     from .plan_routes import router as plan_router

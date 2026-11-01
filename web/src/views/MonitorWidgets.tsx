@@ -1,7 +1,7 @@
 // Monitor panel (status, schedule, last pass, "Run now", settings), the event feed with acknowledgement,
 // and the alert-rule list. Everything here is informational: nothing places orders.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { analysisHref } from "./Analysis";
+import { analysisHref } from "../lib/analysisLinks";
 import { useState } from "react";
 import { ApiError, api } from "../api/client";
 import type { AlertRule, EventItem, MonitorStatus, RuleResult, Severity } from "../api/types";

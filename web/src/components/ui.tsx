@@ -54,7 +54,7 @@ export function FreshnessBadge({ freshness, provider, fetchedAt, ageSeconds, del
                   fetchedAt && `Fetched ${dateTime(fetchedAt)} (${age(ageSeconds)}).`].filter(Boolean).join(" ");
   return (
     <Tip text={detail}>
-      <span className={`badge ${f.cls}`} tabIndex={0} aria-label={`Data ${f.text}. ${detail}`}>
+      <span className={`badge ${f.cls}`} tabIndex={0} role="img" aria-label={`Data ${f.text}. ${detail}`}>
         <span aria-hidden>{f.icon}</span> {f.text}
       </span>
     </Tip>
@@ -93,7 +93,7 @@ export function StatusBadge({ m, compact }: { m: MonitorView | null | undefined;
   if (m.checked_at) lines.push(`Checked ${dateTime(m.checked_at)}.`);
   return (
     <Tip text={lines.filter(Boolean).join("\n")}>
-      <span className={`badge ${st.cls} status-badge`} tabIndex={0} aria-label={`Status ${st.text}. ${m.reasons.join(" ")}`}>
+      <span className={`badge ${st.cls} status-badge`} tabIndex={0} role="img" aria-label={`Status ${st.text}. ${m.reasons.join(" ")}`}>
         <span aria-hidden>{st.icon}</span> {st.text}{!compact && m.pending ? <span className="pending"> → {statusInfo(m.pending.status).text}?</span> : null}
       </span>
     </Tip>

@@ -56,7 +56,7 @@ export function DisciplinePanel({ account }: { account: Account }) {
                   <label className="check"><input type="checkbox" checked={i.state === "MET"} disabled={tick.isPending}
                     onChange={(e) => tick.mutate({ code: i.code, done: e.target.checked })} /> {i.label}</label>
                 ) : (
-                  <span><span className={`badge ${st.cls}`} aria-label={st.text}><span aria-hidden>{st.icon}</span></span> {i.label}</span>
+                  <span><span className={`badge ${st.cls}`}><span aria-hidden>{st.icon}</span><span className="sr-only">{st.text}: </span></span> {i.label}</span>
                 )}
                 {i.detail && <span className="muted-text small"> — {i.detail}</span>}
                 {i.code === "DAILY_THESIS" && i.state !== "MET" && !d.rest_day && <button className="btn small ghost" onClick={() => setWriting("daily_thesis")}>Write</button>}
@@ -106,7 +106,7 @@ export function ProgressPanel({ account }: { account: Account }) {
           <div><div className="card-label">Streak</div>
             <div className="level"><span className="level-num">{p.streak.current}</span> day{p.streak.current === 1 ? "" : "s"}</div>
             <div className="muted-text small">best {p.streak.best} · scored weekdays at {p.streak.threshold}%+ · rest days don't break it</div>
-            {hist.data && <div className="spark" aria-label="Daily process scores, last three weeks">{hist.data.filter((h) => h.scheduled).map((h) => (
+            {hist.data && <div className="spark" role="group" aria-label="Daily process scores, last three weeks">{hist.data.filter((h) => h.scheduled).map((h) => (
               <Tip key={h.day} text={`${date(h.day)}: ${h.rest_day ? "rest day" : h.score === null ? "not scored" : h.score + "%"}${h.revision && h.revision > 1 ? ` (revision ${h.revision})` : ""}${h.unknown ? ` · ${h.unknown} unknown` : ""}`}>
                 <button type="button" aria-label={`Score for ${date(h.day)}`} onClick={() => !h.in_progress && setDay(h.day)}
                       className={`spark-bar ${h.rest_day ? "rest" : h.score === null ? "none" : h.score >= p.streak.threshold ? "good" : "low"}`}

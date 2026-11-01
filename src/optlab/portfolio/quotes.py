@@ -267,7 +267,27 @@ def default_service() -> QuoteService:
     return QuoteService(CboeProvider(rate), mode="live")
 
 
+_EARNINGS_CACHE: dict[str, tuple[float, date | None]] = {}
+_EARNINGS_LOCK = threading.Lock()
+EARNINGS_TTL_SECONDS = 600          # the market database is refreshed once a day (ingest), so 10 minutes is plenty
+
+
 def earnings_date(symbol: str) -> date | None:
+    """Next earnings date from the market database, cached per symbol for 10 minutes (opening the DuckDB file
+    costs ~10 ms, and the risk page asks once per open position)."""
+    key = symbol.upper()
+    now = time.monotonic()
+    with _EARNINGS_LOCK:
+        hit = _EARNINGS_CACHE.get(key)
+        if hit and now - hit[0] < EARNINGS_TTL_SECONDS:
+            return hit[1]
+    v = _earnings_date_uncached(key)
+    with _EARNINGS_LOCK:
+        _EARNINGS_CACHE[key] = (now, v)
+    return v
+
+
+def _earnings_date_uncached(symbol: str) -> date | None:
     """Next earnings date from the market database, read through a short-lived read-only connection."""
     from ..config import load_config
     from ..data import Store

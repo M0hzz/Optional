@@ -19,17 +19,8 @@ const BIAS_CLS = { pass: "ok", warn: "warn", fail: "bad" } as const;
 const ST_ICON: Record<string, string> = { pass: "✓", near: "≈", fail: "✕", "n/a": "–" };
 const DIM: Record<string, string> = { trend: "Trend (200-bar average)", market: "Market (SPY vs 50-bar average)", volatility: "Volatility (ATR percentile)", time_of_day: "Time of day" };
 
-export function analysisHref(type: SubjectType, id?: string | null) {
-  return `#/analysis/new/${type}${id ? `/${id}` : ""}`;
-}
-
-export function AnalysisLink({ type, id, small = true }: { type: SubjectType; id: string; small?: boolean }) {
-  return (
-    <Tip text="Open the Historical Signal Explorer with these conditions: when did they match before, and what did price do afterwards?">
-      <a className={`btn ghost ${small ? "small" : ""}`} href={analysisHref(type, id)}>Historical analysis</a>
-    </Tip>
-  );
-}
+export { AnalysisLink, analysisHref } from "../lib/analysisLinks";
+import { analysisHref } from "../lib/analysisLinks";
 
 // ------------------------------------------------------------------ the form
 type Form = Omit<AnalysisDraft, "subject" | "notes" | "source" | "entry"> & { symbolsText: string; horizonsText: string };

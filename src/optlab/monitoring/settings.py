@@ -102,15 +102,36 @@ class MonitorSettings(_M):
     notifications: NotificationSettings = NotificationSettings()
 
 
+_YAML_CACHE: dict[str, tuple[tuple, MonitorSettings]] = {}
+
+
 def from_scans_yaml(path=None) -> MonitorSettings:
-    """Defaults seeded from scans.yaml, falling back to the built-in ones for anything missing or invalid."""
-    import yaml
+    """Defaults seeded from scans.yaml, falling back to the built-in ones for anything missing or invalid.
+    Cached by the file's modification time and size, so an edit is picked up at once."""
+    import os
 
     from ..config import PROJECT_ROOT
 
+    p = str(path or PROJECT_ROOT / "scans.yaml")
+    try:
+        st = os.stat(p)
+        stamp: tuple = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        stamp = ("missing",)
+    hit = _YAML_CACHE.get(p)
+    if hit and hit[0] == stamp:
+        return hit[1].model_copy(deep=True)
+    out = _from_scans_yaml(p)
+    _YAML_CACHE[p] = (stamp, out)
+    return out.model_copy(deep=True)
+
+
+def _from_scans_yaml(path) -> MonitorSettings:
+    import yaml
+
     base = MonitorSettings()
     try:
-        with open(path or PROJECT_ROOT / "scans.yaml") as fh:
+        with open(path) as fh:
             cfg = yaml.safe_load(fh) or {}
     except (OSError, yaml.YAMLError):
         return base

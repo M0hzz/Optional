@@ -195,6 +195,15 @@ The revision is added only when that revision was computed under the current sco
 
 The monitor reads the stored features once per pass (`features.load_rule_values`). News never makes a network call inside a monitoring pass, and a rule can't consist of news names alone (`monitoring/rules.validate`).
 
+## Hardening (Phase 7)
+
+| Module | Responsibility |
+|---|---|
+| `api/security.py` | ASGI middleware in front of everything: Host allowlist (DNS rebinding), Origin / `Sec-Fetch-Site` check on writes, body-size limit (also for chunked bodies), and security headers with a Content-Security-Policy for the dashboard |
+| `portfolio/verify.py` | The eight backup and migration checks behind `scripts/portfolio_db.py verify` |
+| `scripts/benchmark.py` | Seeds a temporary database at scale and times the endpoints |
+| `web/scripts/a11y.mjs` | axe-core on every page, in both terminology modes |
+
 ## Analysis layer (`src/optlab/analysis`, Phase 6)
 
 | Module | Responsibility |
@@ -307,6 +316,11 @@ erDiagram
 - Phase 2 (this): monitoring, snapshots, statuses, alert rules, events, notifications, live updates,
   scans.yaml import. The YAML monitor keeps running the scans and the YAML positions you haven't imported.
 - Phase 3: trade plans, risk policies and checks, plan conversion and comparison, risk dashboard.
+- Phase 7: hardening.
+  - Security: host allowlist, cross-site refusal, body limits, CSP and other headers, and a floating-point power operator in the rule language.
+  - Performance: cached earnings lookups, indexed and memoized day snapshots, a cached `scans.yaml` parse, and code splitting.
+  - Accessibility: WCAG 2.1 AA via axe on every page, a skip link, and reduced motion.
+  - Backup and migration verification (`portfolio_db.py verify`), the benchmark and audit scripts, and docs/SECURITY.md.
 - Phase 6: historical analysis from plans, positions, alert rules, watched contracts and events; forward
   statistics, distributions, breakdowns, bias checks with a look-ahead truncation test, drill-down charts.
 - Phase 5: news and official events (SEC, Fed, BLS, BEA, company feeds, optional Finnhub), de-duplication,

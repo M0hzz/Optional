@@ -1,9 +1,10 @@
 // Add or edit a position. The analysis preview calls /positions/analyze (persists nothing) as you type.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api/client";
 import type { Analysis, Plan, Position, RiskReport } from "../api/types";
-import { AnalysisPanel } from "../components/AnalysisPanel";
+// the payoff chart (Recharts) loads only when a preview is shown
+const AnalysisPanel = lazy(() => import("../components/AnalysisPanel").then((m) => ({ default: m.AnalysisPanel })));
 import { RiskPanel } from "../components/RiskReport";
 import { FieldErrors, Loading, useToast } from "../components/ui";
 import { useTerms } from "../lib/terms";
@@ -160,7 +161,7 @@ export function PositionForm({ accountId, existing, plan, onDone }: { accountId:
         {!valid ? <p className="muted-text">Fill in the symbol and every leg to see the analysis.</p>
           : preview.isPending ? <Loading what="Analysing" />
           : preview.isError ? <FieldErrors error={preview.error} />
-          : preview.data ? <AnalysisPanel a={preview.data} /> : null}
+          : preview.data ? <Suspense fallback={<Loading what="Loading the chart" />}><AnalysisPanel a={preview.data} /></Suspense> : null}
       </section>
 
       {!existing && valid && (

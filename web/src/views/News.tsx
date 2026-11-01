@@ -27,7 +27,7 @@ export function SentimentBadge({ a }: { a: NewsArticle }) {
   const s = SENT[a.sentiment.label];
   return (
     <Tip text={`${a.sentiment.explanation ?? ""} · confidence ${pct(a.sentiment.confidence)} · ${a.sentiment.model_version}`}>
-      <span className={`badge ${s.cls}`} tabIndex={0} aria-label={`Sentiment ${s.text}`}><span aria-hidden>{s.icon}</span> {s.text} {a.sentiment.score !== null && signed(a.sentiment.score)}</span>
+      <span className={`badge ${s.cls}`} tabIndex={0} role="img" aria-label={`Sentiment ${s.text}`}><span aria-hidden>{s.icon}</span> {s.text} {a.sentiment.score !== null && signed(a.sentiment.score)}</span>
     </Tip>
   );
 }

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { api } from "./api/client";
 import type { Account, DataSources, EventItem, MonitorStatus, Preferences, Progress, SubjectType, ThemeId } from "./api/types";
 import { Empty, ErrorState, Loading, Tip, useToast } from "./components/ui";
@@ -8,12 +8,21 @@ import { CreateAccountForm } from "./forms/AccountForms";
 import { useRoute, navigate } from "./lib/router";
 import { TermsContext, TERMS, type Mode } from "./lib/terms";
 import { Dashboard } from "./views/Dashboard";
-import { PlanDetail, PlansView } from "./views/Plans";
-import { AcademyView, DebriefView, JournalView, MissionReportView } from "./views/Process";
-import { PositionDetail } from "./views/PositionDetail";
-import { RiskView } from "./views/Risk";
-import { NewsView } from "./views/News";
-import { AnalysisList, AnalysisNew, AnalysisRunView, ManualNew } from "./views/Analysis";
+
+// Route views load on first visit (smaller first download); the dashboard is in the main bundle.
+const PlansView = lazy(() => import("./views/Plans").then((m) => ({ default: m.PlansView })));
+const PlanDetail = lazy(() => import("./views/Plans").then((m) => ({ default: m.PlanDetail })));
+const DebriefView = lazy(() => import("./views/Process").then((m) => ({ default: m.DebriefView })));
+const JournalView = lazy(() => import("./views/Process").then((m) => ({ default: m.JournalView })));
+const AcademyView = lazy(() => import("./views/Process").then((m) => ({ default: m.AcademyView })));
+const MissionReportView = lazy(() => import("./views/Process").then((m) => ({ default: m.MissionReportView })));
+const PositionDetail = lazy(() => import("./views/PositionDetail").then((m) => ({ default: m.PositionDetail })));
+const RiskView = lazy(() => import("./views/Risk").then((m) => ({ default: m.RiskView })));
+const NewsView = lazy(() => import("./views/News").then((m) => ({ default: m.NewsView })));
+const AnalysisList = lazy(() => import("./views/Analysis").then((m) => ({ default: m.AnalysisList })));
+const AnalysisNew = lazy(() => import("./views/Analysis").then((m) => ({ default: m.AnalysisNew })));
+const AnalysisRunView = lazy(() => import("./views/Analysis").then((m) => ({ default: m.AnalysisRunView })));
+const ManualNew = lazy(() => import("./views/Analysis").then((m) => ({ default: m.ManualNew })));
 
 function researchUrl(ds?: DataSources): string {
   if (ds?.research_lab_url) return ds.research_lab_url;
@@ -90,6 +99,7 @@ function Shell() {
 
   return (
     <TermsContext.Provider value={mode}>
+      <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById("main")?.focus(); }}>Skip to main content</a>
       <div className="shell">
         <aside className="sidebar" aria-label="Navigation">
           <div className="brand"><span aria-hidden>◈</span> optlab</div>
@@ -131,7 +141,8 @@ function Shell() {
             <p className="muted-text small">Informational only: optlab never places orders.</p>
           </div>
         </aside>
-        <main className="main" id="main">
+        <main className="main" id="main" tabIndex={-1}>
+          <Suspense fallback={<Loading what="Loading" />}>
           {accounts.isPending || prefs.isPending ? <Loading what="Loading" />
             : accounts.isError ? <ErrorState error={accounts.error} retry={() => accounts.refetch()} />
             : !active ? (
@@ -154,6 +165,7 @@ function Shell() {
               : anRun ? <AnalysisRunView id={anRun[1]} />
               : route === "/learn" ? <AcademyView />
               : <Dashboard account={active} />}
+          </Suspense>
         </main>
       </div>
     </TermsContext.Provider>

@@ -13,7 +13,7 @@ import { navigate } from "../lib/router";
 import { RiskBadge, RiskPanel } from "../components/RiskReport";
 import { HistoryChart, MonitoringSection, PositionAlerts, Timeline } from "./PositionMonitoring";
 import { SymbolNews } from "./News";
-import { AnalysisLink } from "./Analysis";
+import { AnalysisLink } from "../lib/analysisLinks";
 
 export function PositionDetail({ id }: { id: string }) {
   const q = useQuery<Position, ApiError>({ queryKey: ["position", id], queryFn: () => api.position(id), refetchInterval: useRefetchInterval() });
@@ -131,7 +131,7 @@ function EstimatePanel({ id }: { id: string }) {
   return (
     <div>
       <div className="quotes-row">
-        <span className="badge info" aria-label="On-demand estimate">≈ On-demand estimate</span>
+        <span className="badge info">≈ On-demand estimate</span>
         <FreshnessBadge freshness={d.freshness} provider={d.provider} fetchedAt={d.fetched_at} ageSeconds={d.quote_age_seconds} delayMinutes={d.delay_minutes} />
         <span className="muted-text small">Valued {dateTime(d.valued_at)}</span>
         <button className="btn small" onClick={() => v.refetch()} disabled={v.isFetching}>{v.isFetching ? "Refreshing…" : "Refresh"}</button>

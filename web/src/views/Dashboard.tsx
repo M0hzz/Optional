@@ -17,7 +17,7 @@ import { useTerms } from "../lib/terms";
 import { AlertRulesList, EventFeed, MonitorPanel } from "./MonitorWidgets";
 import { DisciplinePanel, ProgressPanel } from "./Process";
 import { NewsWidget } from "./News";
-import { analysisHref } from "./Analysis";
+import { analysisHref } from "../lib/analysisLinks";
 
 const WIDGET_NAMES: Record<WidgetId, { pro: string; colony: string }> = {
   overview: { pro: "Account overview", colony: "Treasury" }, discipline: { pro: "Daily discipline", colony: "Daily orders" },

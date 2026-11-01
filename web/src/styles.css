@@ -1,7 +1,7 @@
 /* optlab dashboard: dark command-centre theme. Text contrast ≥ 4.5:1 on panels; state is never colour alone. */
 :root {
   --bg: #0b0f14; --panel: #121821; --panel-2: #18202b; --border: #263241; --grid: #223040;
-  --text: #e6edf3; --muted: #9aa8b6; --accent: #4cc2ff; --accent-2: #2b86c5;
+  --text: #e6edf3; --muted: #9aa8b6; --accent: #4cc2ff; --accent-2: #2477b0;
   --ok: #4ade80; --ok-bg: #0f2a1a; --warn: #fbbf24; --warn-bg: #2d230a; --bad: #f87171; --bad-bg: #2d1414;
   --info: #93c5fd; --info-bg: #10233b;
   --radius: 8px; --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
@@ -299,3 +299,10 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 .bias-list li { padding: 5px 0; border-bottom: 1px solid var(--border); }
 .focus-row td { background: var(--panel-2); }
 .link-btn { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 2px; }
+
+/* ---------------------------------------------------------------- accessibility (Phase 7) */
+.skip-link { position: absolute; left: -9999px; top: 8px; z-index: 1000; background: var(--panel-2); color: var(--text);
+  padding: 8px 12px; border: 2px solid var(--accent); border-radius: 6px; }
+.skip-link:focus { left: 8px; }
+main:focus { outline: none; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }

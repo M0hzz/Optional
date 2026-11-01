@@ -6,6 +6,8 @@
     python scripts/portfolio_db.py upgrade                # forward migrations (the API also does this at startup)
     python scripts/portfolio_db.py downgrade <revision> --yes   # backs up first; destructive for the dropped tables
     python scripts/portfolio_db.py restore <backup.sqlite> --yes  # stop the API first; backs up the current file first
+    python scripts/portfolio_db.py verify                 # backup + integrity + schema + restore + migration checks
+    python scripts/portfolio_db.py verify --backup <file> # the same checks on a backup file (e.g. before restoring it)
 
 Backups use SQLite's online backup API, so they are consistent even while the API is running.
 """
@@ -42,6 +44,8 @@ def main() -> None:
     r = sub.add_parser("restore")
     r.add_argument("source")
     r.add_argument("--yes", action="store_true")
+    v = sub.add_parser("verify")
+    v.add_argument("--backup")
     a = ap.parse_args()
     url = dbm.database_url()
     path = dbm.sqlite_path(url)
@@ -62,7 +66,18 @@ def main() -> None:
 
         command.downgrade(dbm.alembic_config(url), a.revision)
         print(f"now at revision {dbm.current_revision(url)}")
+    elif a.cmd == "verify":
+        from optlab.portfolio.verify import verify
+
+        report = verify(url, a.backup)
+        print(report.text())
+        sys.exit(0 if report.ok else 1)
     elif a.cmd == "restore":
+        from optlab.portfolio.verify import integrity
+
+        ok, detail = integrity(Path(a.source))
+        if not ok:
+            sys.exit(f"Not restoring {a.source}: {detail}")
         if not a.yes:
             sys.exit("Restoring replaces the current database. Stop the API first (systemctl --user stop optlab-api, "
                      "or docker compose stop api), then re-run with --yes.")

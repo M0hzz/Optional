@@ -122,6 +122,11 @@ inspecting what you actually hold. Informational only: it never places orders.
 - **Risk policy** (Phase 3): your limits per position and for the account (losses per day and week, open
   risk, counts, Greeks, liquidity, expirations, earnings, no margin, no averaging down without a plan),
   with small-account limits below $1,000. Every check says PASS, WARNING, BLOCKED or UNKNOWN and why.
+- **Hardened** (Phase 7):
+  - The API refuses foreign hosts (DNS rebinding) and cross-site changes, limits request sizes, and sends a strict Content-Security-Policy.
+  - Pages pass WCAG 2.1 AA checks.
+  - `scripts/portfolio_db.py verify` checks backups, restores and migrations.
+  - See [docs/SECURITY.md](docs/SECURITY.md).
 - **Historical analysis** (Phase 6): open the Historical Signal Explorer from a plan, position, alert rule, watched contract or event, with the conditions it uses. It shows:
   - exact and near matches;
   - forward returns, favourable and adverse moves;
