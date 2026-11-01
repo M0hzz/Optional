@@ -55,7 +55,7 @@ def test_cors_is_restricted(client, monkeypatch):
 
     monkeypatch.setenv("OPTLAB_CORS_ORIGINS", "*")
     with pytest.raises(ValueError):
-        create_app(web_dist=None, migrate=False, lock=False)
+        create_app(web_dist=None, migrate=False, lock=False, news=False)
 
 
 # ------------------------------------------------------------------ accounts

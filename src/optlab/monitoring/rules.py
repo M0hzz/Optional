@@ -65,6 +65,15 @@ CHAIN_DESCR = {"atm_iv": "~30-day at-the-money implied volatility", "skew": "25-
                "put_call_volume": "put/call volume ratio", "put_call_oi": "put/call open-interest ratio",
                "option_volume": "total option volume"}
 TARGET_NAMES = {"position": POSITION_NAMES, "contract": CONTRACT_NAMES, "symbol": SYMBOL_NAMES}
+NEWS_ONLY = ("News can confirm a condition but can't be the whole condition: combine it with a price, chain, "
+             "position or contract value, e.g. `price > sma(50) and news_sentiment_1d > 0`. News is a confirmation "
+             "and risk-awareness layer, never a trade signal on its own.")
+
+
+def news_names() -> dict[str, str]:
+    from ..news.features import RULE_NAMES
+
+    return RULE_NAMES
 
 
 @lru_cache(maxsize=1)
@@ -78,7 +87,7 @@ def bar_vocabulary() -> tuple[frozenset[str], frozenset[str]]:
 
 def allowed_names(target: str) -> set[str]:
     bn, bf = bar_vocabulary()
-    return set(TARGET_NAMES[target]) | set(CHAIN_NAMES) | set(bn) | set(bf)
+    return set(TARGET_NAMES[target]) | set(CHAIN_NAMES) | set(bn) | set(bf) | set(news_names())
 
 
 def validate(text: str, target: str) -> str | None:
@@ -94,6 +103,8 @@ def validate(text: str, target: str) -> str | None:
         hints = [m for u in unknown for m in difflib.get_close_matches(u, allowed_names(target), n=2)]
         return (f"Unknown name{'s' if len(unknown) > 1 else ''} {', '.join(unknown)} in {text!r}"
                 + (f"; did you mean {', '.join(dict.fromkeys(hints))}?" if hints else "."))
+    if used and used <= set(news_names()):
+        return NEWS_ONLY
     return None
 
 
@@ -170,10 +181,12 @@ class Context:
 
     def __init__(self, target: str, names: dict[str, Any], why_missing: dict[str, str] | None = None,
                  bars: pd.DataFrame | None = None, bars_error: str | None = None, timeframe: str = "1d",
-                 chain: pd.DataFrame | None = None):
+                 chain: pd.DataFrame | None = None, news: tuple[dict, dict] | None = None):
         self.target, self.timeframe, self.chain = target, timeframe, chain
-        self.names = {**{k: None for k in CHAIN_NAMES}, **names}
-        self.why = dict(why_missing or {})
+        nn, nw = news if news is not None else ({k: None for k in news_names()},
+                                                {k: "news values weren't loaded for this check" for k in news_names()})
+        self.names = {**{k: None for k in CHAIN_NAMES}, **nn, **names}
+        self.why = {**nw, **dict(why_missing or {})}
         self._stats_done = False
         self.bars, self.bars_error = bars, bars_error
         self._series: Evaluator | None = None

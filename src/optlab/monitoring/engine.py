@@ -123,6 +123,7 @@ class Engine:
                  notifier: Notifier | None = desktop_notifier, earnings: Callable[[str], date | None] = earnings_date,
                  clock: Callable[[], datetime] = utcnow):
         self.db, self.quotes, self.notifier, self.earnings, self.clock = db, quotes, notifier, earnings, clock
+        self._news: dict = {}
         self.bars = bars or BarsSource(quotes.mode)
         self.lock = threading.Lock()
         self.running_since: datetime | None = None
@@ -167,6 +168,11 @@ class Engine:
             display_tz = get_preferences(s).get("timezone") or "America/New_York"
             prev = {r.subject_id: (r.data_json or {}).get("metrics") for r in
                     s.scalars(select(MonitorState).where(MonitorState.kind == "position"))}
+            from ..news.features import load_rule_values
+
+            news_syms = ({p.underlying for p in positions} | {c.underlying for c in contracts} | {pl.symbol for pl in plans}
+                         | {r.symbol for r in alert_rules if r.symbol})
+            self._news = load_rule_values(s, news_syms)
         today = now.astimezone(ZoneInfo(st.schedule.timezone)).date()
         by_pos = {p.id: p for p in positions}
         by_contract = {c.id: c for c in contracts}
@@ -189,7 +195,7 @@ class Engine:
                 b, berr = bars.get((p.underlying, rules_for(p, st)[1]), (None, None))
                 vals[p.id] = v
                 checks[p.id] = check_position(p, v, snaps[p.underlying], st, earn.get(p.underlying), today, b, berr,
-                                              prev.get(p.id), self.quotes.max_age, now)
+                                              prev.get(p.id), self.quotes.max_age, now, self._news.get(p.underlying))
             except Exception as exc:              # never skip silently: the position becomes STALE DATA
                 log.exception("checking position %s failed", p.id)
                 msg = f"{type(exc).__name__}: {str(exc)[:160]}"
@@ -459,7 +465,8 @@ class Engine:
             missing.update({k: "no usable two-sided quote (" + ", ".join(q.quality) + ")" for k in ("mid", "spread", "spread_pct",
                                                                                                       "extrinsic", "breakeven")})
         b, berr = bars.get((c.underlying, st.timeframe), (None, None))
-        return Context("contract", names, missing, b, berr, st.timeframe, snap.rows if snap else None)
+        return Context("contract", names, missing, b, berr, st.timeframe, snap.rows if snap else None,
+                       self._news.get(c.underlying))
 
     def _write_contract(self, s: Session, c: WatchedContract, cq, snap, st, now, today, run_id, bars, earn,
                         ctx_cache) -> list[int]:
@@ -538,20 +545,20 @@ class Engine:
             if chk is None or p is None:
                 return None
             b, berr = bars.get((p.underlying, r.timeframe), (None, None))
-            return Context("position", chk.metrics, chk.why_missing, b, berr, r.timeframe, snaps[p.underlying].rows)
+            return Context("position", chk.metrics, chk.why_missing, b, berr, r.timeframe, snaps[p.underlying].rows,
+                           self._news.get(p.underlying))
         if r.target_type == "contract":
             return cache.get(f"contract:{r.contract_id}")
         return self._symbol_context((r.symbol or "").upper(), r.timeframe, snaps, bars, earn, today)
 
-    @staticmethod
-    def _symbol_context(sym: str, timeframe: str, snaps, bars, earn, today) -> Context:
+    def _symbol_context(self, sym: str, timeframe: str, snaps, bars, earn, today) -> Context:
         sn = snaps.get(sym)
         price = sn.underlying_price() if sn else None
         b, berr = bars.get((sym, timeframe), (None, None))
         names = {"price": None if price is None else float(price),
                  "days_to_earnings": (earn[sym] - today).days if earn.get(sym) else 9999}
         why = {"price": f"no option chain for {sym} ({sn.error if sn else 'not fetched'})"} if price is None else {}
-        return Context("symbol", names, why, b, berr, timeframe, sn.rows if sn else None)
+        return Context("symbol", names, why, b, berr, timeframe, sn.rows if sn else None, self._news.get(sym))
 
     def _write_alert(self, s: Session, r: AlertRule, ctx: Context | None, st, now, run_id, by_pos, by_contract) -> list[int]:
         state = _state(s, "alert_rule", r.id)

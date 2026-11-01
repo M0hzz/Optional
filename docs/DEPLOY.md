@@ -136,6 +136,35 @@ docker compose down
 
 The copy is migrated; `./data` is untouched. Use a different port from your running API.
 
+## News (Phase 5)
+
+The API fetches news every `news.interval_minutes` in the background. Only one process per database does this, using `optlab.news.lock`. `OPTLAB_NEWS=off` switches it off.
+
+Set up:
+
+1. **SEC EDGAR:** put your name and email in `edgar.identity` in config.yaml (or the `OPTLAB_SEC_IDENTITY` environment variable). The SEC requires it on every request; without it EDGAR stays off and says why.
+2. **Sentiment dictionary:**
+   ```bash
+   python scripts/news.py install-lexicon                    # prints the license terms
+   python scripts/news.py install-lexicon --accept-license   # downloads the official CSV to data/lexicon/
+   # or, after downloading it yourself from https://sraf.nd.edu/loughranmcdonald-master-dictionary/:
+   python scripts/news.py install-lexicon --file ~/Downloads/Loughran-McDonald_MasterDictionary_1993-2025.csv --accept-license
+   ```
+   It's free for academic research; commercial use needs a license from the authors. `data/lexicon/` is git-ignored: the dictionary is never committed.
+3. **Optional:**
+   - `FINNHUB_API_KEY` in the environment: in `~/.config/systemd/user/optlab-api.service.d/override.conf` as `Environment=FINNHUB_API_KEY=...`, or in `.env` for Docker. Never put it in config.yaml.
+   - Company IR feeds under `news.company_ir`.
+4. Check: `python scripts/news.py status`. Fetch once by hand (only when the API isn't running, or use **Refresh now**): `python scripts/news.py fetch`.
+
+**Upgrading to Phase 5:**
+
+1. `git pull`
+2. `pip install -r requirements.txt` (adds defusedxml and beautifulsoup4)
+3. `python scripts/portfolio_db.py backup`
+4. `systemctl --user restart optlab-api`
+
+Migration `0006` adds the news tables only. Docker images include the new requirements; rebuild with `docker compose up -d --build`.
+
 ## Database: migrations, backups, restore
 
 - The API applies **forward** migrations at startup, under a lock, and never downgrades or resets.

@@ -157,10 +157,10 @@ def system_rules(p: Position, price: float | None, today: date, settings: Monito
 def check_position(p: Position, v: PositionValuation, snap: ChainSnapshot, settings: MonitorSettings,
                    earnings: date | None, today: date, bars=None, bars_error: str | None = None,
                    previous: dict | None = None, max_age: float = 300,
-                   now=None) -> PositionCheck:
+                   now=None, news: tuple[dict, dict] | None = None) -> PositionCheck:
     names, why = metrics_for(p, v, earnings, today)
     rules, timeframe, _ = rules_for(p, settings)
-    ctx = Context("position", names, why, bars, bars_error, timeframe, snap.rows)
+    ctx = Context("position", names, why, bars, bars_error, timeframe, snap.rows, news)
     results = ([ctx.evaluate(r, "exit") for r in rules.exit_when] + [ctx.evaluate(r, "action") for r in rules.action_when]
                + [ctx.evaluate(r, "watch") for r in rules.watch_when])
     results += system_rules(p, names["price"], today, settings)

@@ -15,8 +15,8 @@ import enum
 from datetime import date, datetime, timezone
 from typing import Any
 
-from sqlalchemy import (JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, ForeignKey, Index, Integer,
-                        String, Text, TypeDecorator, text)
+from sqlalchemy import (JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, Float, ForeignKey, Index,
+                        Integer, String, Text, TypeDecorator, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .ids import new_id
@@ -675,3 +675,139 @@ class UserAchievement(Base):
     earned_at: Mapped[datetime] = mapped_column(default=utcnow)
     detail_json: Mapped[dict[str, Any]] = mapped_column(default=dict)          # the evidence
     __table_args__ = (Index("ix_user_achievements_unique", "account_id", "code", unique=True),)
+
+
+# ------------------------------------------------------------------ news and sentiment (Phase 5, migration 0006)
+class NewsSource(Base):
+    """A news or official-event provider (SEC EDGAR, Federal Reserve, BLS, BEA, company IR feeds, Finnhub):
+    whether it's enabled, how much weight its items get, and the result of its last fetch."""
+    __tablename__ = "news_sources"
+    code: Mapped[str] = mapped_column(String(32), primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    kind: Mapped[str] = mapped_column(String(16))                    # filings | macro | central_bank | company | news
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    credibility: Mapped[float] = mapped_column(Float, default=0.5)   # 0..1, weight in the symbol features
+    status: Mapped[str] = mapped_column(String(16), default="never")  # never | ok | error | disabled | unavailable
+    status_detail: Mapped[str | None] = mapped_column(Text)
+    last_fetch_at: Mapped[datetime | None]
+    last_success_at: Mapped[datetime | None]
+    items_last: Mapped[int] = mapped_column(Integer, default=0)
+    new_last: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+    __table_args__ = (CheckConstraint("credibility >= 0 AND credibility <= 1", name="ck_news_sources_credibility"),
+                      CheckConstraint("status IN ('never', 'ok', 'error', 'disabled', 'unavailable')", name="ck_news_sources_status"))
+
+
+class NewsCluster(Base):
+    """One story: the articles that report the same thing (exact URL or near-identical headline, close in time)."""
+    __tablename__ = "news_clusters"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    lead_article_id: Mapped[str | None] = mapped_column(String(36))
+    first_seen_at: Mapped[datetime]
+    first_published_at: Mapped[datetime | None]
+    last_published_at: Mapped[datetime | None]
+    article_count: Mapped[int] = mapped_column(Integer, default=1)
+    source_count: Mapped[int] = mapped_column(Integer, default=1)
+    symbols_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    category: Mapped[str | None] = mapped_column(String(32))
+
+
+class NewsArticle(Base):
+    """A normalized item from a source. `published_at` is the source's publication time (None when the source
+    gives none: collection time is never used in its place); `first_seen_at` is when optlab first saw it."""
+    __tablename__ = "news_articles"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source_code: Mapped[str] = mapped_column(ForeignKey("news_sources.code", ondelete="RESTRICT"))
+    external_id: Mapped[str] = mapped_column(String(300))
+    url: Mapped[str | None] = mapped_column(Text)
+    canonical_url: Mapped[str | None] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str | None] = mapped_column(Text)
+    summary_origin: Mapped[str] = mapped_column(String(20), default="none")   # provider | opening_sentences | none
+    published_at: Mapped[datetime | None]
+    first_seen_at: Mapped[datetime] = mapped_column(default=utcnow)
+    raw_json: Mapped[dict[str, Any]] = mapped_column(default=dict)            # the provider's metadata, as received
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    cluster_id: Mapped[str | None] = mapped_column(ForeignKey("news_clusters.id", ondelete="SET NULL"))
+    is_cluster_lead: Mapped[bool] = mapped_column(Boolean, default=True)
+    duplicate_of: Mapped[str | None] = mapped_column(String(36))              # exact duplicate (same URL)
+    category: Mapped[str | None] = mapped_column(String(32))
+    category_confidence: Mapped[float | None] = mapped_column(Float)
+    classification_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    novelty: Mapped[float] = mapped_column(Float, default=1.0)
+    __table_args__ = (Index("ix_news_articles_external", "source_code", "external_id", unique=True),
+                      Index("ix_news_articles_published", "published_at"),
+                      Index("ix_news_articles_seen", "first_seen_at"),
+                      Index("ix_news_articles_url", "canonical_url"),
+                      Index("ix_news_articles_cluster", "cluster_id"),
+                      CheckConstraint("summary_origin IN ('provider', 'opening_sentences', 'none')", name="ck_news_articles_summary"))
+
+
+class NewsEntity(Base):
+    """A symbol an article is about, how it was matched and how relevant the article is to it (0..1)."""
+    __tablename__ = "news_entities"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    article_id: Mapped[str] = mapped_column(ForeignKey("news_articles.id", ondelete="CASCADE"))
+    symbol: Mapped[str] = mapped_column(String(16))
+    cik: Mapped[str | None] = mapped_column(String(10))
+    method: Mapped[str] = mapped_column(String(16))      # filer | provider | exchange | cashtag | name | market
+    relevance: Mapped[float] = mapped_column(Float)
+    evidence: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (Index("ix_news_entities_unique", "article_id", "symbol", unique=True),
+                      Index("ix_news_entities_symbol", "symbol"),
+                      CheckConstraint("relevance >= 0 AND relevance <= 1", name="ck_news_entities_relevance"))
+
+
+class NewsEvent(Base):
+    """An event: a classified article (kind 'article') or a scheduled official release (kind 'scheduled':
+    FOMC meetings, BLS and BEA release dates) used for event awareness."""
+    __tablename__ = "news_events"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    kind: Mapped[str] = mapped_column(String(16))
+    external_key: Mapped[str] = mapped_column(String(300))
+    source_code: Mapped[str] = mapped_column(ForeignKey("news_sources.code", ondelete="RESTRICT"))
+    article_id: Mapped[str | None] = mapped_column(ForeignKey("news_articles.id", ondelete="CASCADE"))
+    category: Mapped[str] = mapped_column(String(32))
+    title: Mapped[str] = mapped_column(Text)
+    at: Mapped[datetime | None]                          # publication time, or the scheduled time
+    importance: Mapped[str] = mapped_column(String(8), default="medium")
+    symbols_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    details_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    __table_args__ = (Index("ix_news_events_key", "source_code", "kind", "external_key", unique=True),
+                      Index("ix_news_events_at", "at"),
+                      CheckConstraint("kind IN ('article', 'scheduled')", name="ck_news_events_kind"),
+                      CheckConstraint("importance IN ('high', 'medium', 'low')", name="ck_news_events_importance"))
+
+
+class SentimentScore(Base):
+    """Dictionary sentiment of one article under one model version, with the matched words that explain it."""
+    __tablename__ = "sentiment_scores"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    article_id: Mapped[str] = mapped_column(ForeignKey("news_articles.id", ondelete="CASCADE"))
+    model: Mapped[str] = mapped_column(String(32))                 # loughran-mcdonald
+    model_version: Mapped[str] = mapped_column(String(80))         # dictionary file + scoring rules version
+    label: Mapped[str] = mapped_column(String(10))                 # positive | negative | neutral | unknown
+    score: Mapped[float | None] = mapped_column(Float)             # (positive − negative) ÷ (positive + negative)
+    confidence: Mapped[float] = mapped_column(Float)
+    word_count: Mapped[int] = mapped_column(Integer)
+    positive: Mapped[int] = mapped_column(Integer, default=0)
+    negative: Mapped[int] = mapped_column(Integer, default=0)
+    uncertainty: Mapped[int] = mapped_column(Integer, default=0)
+    litigious: Mapped[int] = mapped_column(Integer, default=0)
+    constraining: Mapped[int] = mapped_column(Integer, default=0)
+    terms_json: Mapped[dict[str, Any]] = mapped_column(default=dict)   # category -> matched words (and negated positives)
+    computed_at: Mapped[datetime] = mapped_column(default=utcnow)
+    __table_args__ = (Index("ix_sentiment_scores_unique", "article_id", "model_version", unique=True),
+                      CheckConstraint("label IN ('positive', 'negative', 'neutral', 'unknown')", name="ck_sentiment_label"),
+                      CheckConstraint("score IS NULL OR (score >= -1 AND score <= 1)", name="ck_sentiment_score"))
+
+
+class SymbolNewsFeature(Base):
+    """The latest aggregated news features of a symbol (or `_MARKET` for macro and central-bank items)."""
+    __tablename__ = "symbol_news_features"
+    symbol: Mapped[str] = mapped_column(String(16), primary_key=True)
+    as_of: Mapped[datetime]
+    features_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    model_version: Mapped[str | None] = mapped_column(String(80))
+    updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)

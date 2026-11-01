@@ -15,6 +15,9 @@ Settings (environment variables, all optional)
     OPTLAB_RESEARCH_URL    link to the Streamlit Research Lab; default: same host, port 8517 (or :8443 over HTTPS)
     OPTLAB_MAX_UPLOAD_BYTES 1000000
     OPTLAB_MONITOR         on (default) | off: run the portfolio monitor in this process (optlab.monitoring)
+    OPTLAB_NEWS            on (default) | off: fetch news and official events in this process (optlab.news)
+    OPTLAB_SEC_IDENTITY    "Name email" for SEC EDGAR (overrides edgar.identity in config.yaml)
+    FINNHUB_API_KEY        optional; Finnhub stays disabled without it
 Monitoring: with OPTLAB_MONITOR=on the server runs monitoring passes on the schedule in a background
 thread, holding a per-database monitor lock so passes never run twice (see monitoring/runner.py).
 Authentication: none in Phase 1 (single user, localhost / Tailscale only). Routes take their session
@@ -79,11 +82,13 @@ def run_manual_pass(app: FastAPI):
 
 def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool = True, lock: bool = True,
                web_dist: Path | None = WEB_DIST, monitor: bool | None = None,
-               engine_options: dict | None = None) -> FastAPI:
+               engine_options: dict | None = None, news: bool | None = None) -> FastAPI:
     db = database or dbm.Database()
     instance = dbm.InstanceLock(db.url) if lock else None
     run_monitor = (os.environ.get("OPTLAB_MONITOR", "on").lower() not in ("off", "0", "false", "no")
                    if monitor is None else monitor)
+    run_news = (os.environ.get("OPTLAB_NEWS", "on").lower() not in ("off", "0", "false", "no")
+                if news is None else news)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -97,11 +102,18 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
 
             app.state.runner = Runner(db, _engine(app))
             app.state.runner.start()
+        if run_news:
+            from ..news.runner import NewsRunner
+
+            app.state.news_runner = NewsRunner(db)
+            app.state.news_runner.start()
         try:
             yield
         finally:
             if app.state.runner is not None:
                 app.state.runner.stop()
+            if app.state.news_runner is not None:
+                app.state.news_runner.stop()
             db.dispose()
             if instance:
                 instance.release()
@@ -113,6 +125,7 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
     app.state.quotes = quotes
     app.state.engine = None
     app.state.runner = None
+    app.state.news_runner = None
     app.state.engine_options = engine_options or {}
     app.state.max_upload = int(os.environ.get("OPTLAB_MAX_UPLOAD_BYTES", 1_000_000))
     app.state.research_url = os.environ.get("OPTLAB_RESEARCH_URL") or None
@@ -160,12 +173,14 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
     from .monitor_routes import router as monitor_router
     from .plan_routes import router as plan_router
     from .process_routes import router as process_router
+    from .news_routes import router as news_router
     from .routes import router
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(monitor_router, prefix="/api/v1")
     app.include_router(plan_router, prefix="/api/v1")
     app.include_router(process_router, prefix="/api/v1")
+    app.include_router(news_router, prefix="/api/v1")
 
     if web_dist is not None and (web_dist / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")

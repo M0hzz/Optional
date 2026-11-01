@@ -12,6 +12,7 @@ import { useRefetchInterval } from "../lib/live";
 import { navigate } from "../lib/router";
 import { RiskBadge, RiskPanel } from "../components/RiskReport";
 import { HistoryChart, MonitoringSection, PositionAlerts, Timeline } from "./PositionMonitoring";
+import { SymbolNews } from "./News";
 
 export function PositionDetail({ id }: { id: string }) {
   const q = useQuery<Position, ApiError>({ queryKey: ["position", id], queryFn: () => api.position(id), refetchInterval: useRefetchInterval() });
@@ -97,6 +98,7 @@ export function PositionDetail({ id }: { id: string }) {
       </section>
 
       <PositionAlerts p={p} />
+      <SymbolNews symbol={p.underlying} />
       <Timeline p={p} />
       {p.entry_risk && p.entry_risk.overall !== "PASS" && (
         <section className="panel"><details><summary><h3 className="inline">Risk check when recorded</h3></summary><RiskPanel report={p.entry_risk} /></details></section>

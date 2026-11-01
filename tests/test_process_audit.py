@@ -530,7 +530,7 @@ def test_migration_0005_keeps_existing_awards_as_legacy_entries(db_url):
                 "'2026-10-02 12:00:00')")
     con.commit()
     con.close()
-    assert dbm.upgrade(db_url) == "0005"
+    assert dbm.upgrade(db_url, "0005") == "0005"
     db = Database(db_url)
     with db.session() as s:
         a = s.get(ProcessAward, "x1")

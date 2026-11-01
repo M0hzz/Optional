@@ -19,7 +19,7 @@ from ..monitoring import settings as msettings
 from ..monitoring.calendar import Window
 from ..monitoring.events import emit
 from ..monitoring.read import ALL_LABELS, position_views
-from ..monitoring.rules import CHAIN_DESCR, TARGET_NAMES, bar_vocabulary, validate
+from ..monitoring.rules import CHAIN_DESCR, NEWS_ONLY, TARGET_NAMES, bar_vocabulary, news_names, validate
 from ..monitoring.schemas import (AckIn, AlertRuleIn, AlertRuleOut, AlertRuleUpdate, BulkAckIn, EventOut, EventPage,
                                   PositionMonitorIn, ValidateIn, YamlCommitIn)
 from ..monitoring.settings import MonitorSettings
@@ -170,6 +170,7 @@ def vocabulary():
     bn, bf = bar_vocabulary()
     return {"targets": {t: [{"name": k, "meaning": v} for k, v in names.items()] for t, names in TARGET_NAMES.items()},
             "chain": [{"name": k, "meaning": v} for k, v in CHAIN_DESCR.items()],
+            "news": [{"name": k, "meaning": v} for k, v in news_names().items()], "news_rule": NEWS_ONLY,
             "bar_names": sorted(bn), "bar_functions": sorted(bf), "statuses": LABELS}
 
 

@@ -12,6 +12,7 @@ import { PlanDetail, PlansView } from "./views/Plans";
 import { AcademyView, DebriefView, JournalView, MissionReportView } from "./views/Process";
 import { PositionDetail } from "./views/PositionDetail";
 import { RiskView } from "./views/Risk";
+import { NewsView } from "./views/News";
 
 function researchUrl(ds?: DataSources): string {
   if (ds?.research_lab_url) return ds.research_lab_url;
@@ -77,10 +78,10 @@ function Shell() {
   const planMatch = /^\/plans\/([0-9a-f-]{36})$/.exec(route);
   const reportMatch = /^\/reports\/([0-9a-f-]{36})$/.exec(route);
   const section = posMatch ? "dash" : planMatch || route === "/plans" ? "plans" : route === "/risk" ? "risk"
-    : reportMatch || route === "/debrief" ? "debrief" : route === "/journal" ? "journal" : route === "/learn" ? "learn" : "dash";
+    : reportMatch || route === "/debrief" ? "debrief" : route === "/journal" ? "journal" : route === "/news" ? "news" : route === "/learn" ? "learn" : "dash";
   const theme = prefs.data?.theme ?? "default";
   useEffect(() => { document.documentElement.dataset.colorTheme = theme; }, [theme]);
-  const nav = (key: "dashboard" | "plans" | "risk" | "debrief" | "journal" | "academy", href: string, sec: string) => (
+  const nav = (key: "dashboard" | "plans" | "risk" | "debrief" | "journal" | "news" | "academy", href: string, sec: string) => (
     <a href={href} className={section === sec ? "active" : ""}>{mode === "colony" ? TERMS[key].colony : TERMS[key].pro}</a>);
 
   return (
@@ -90,7 +91,7 @@ function Shell() {
           <div className="brand"><span aria-hidden>◈</span> optlab</div>
           <nav>
             {nav("dashboard", "#/", "dash")}{nav("plans", "#/plans", "plans")}{nav("risk", "#/risk", "risk")}
-            {nav("debrief", "#/debrief", "debrief")}{nav("journal", "#/journal", "journal")}{nav("academy", "#/learn", "learn")}
+            {nav("debrief", "#/debrief", "debrief")}{nav("journal", "#/journal", "journal")}{nav("news", "#/news", "news")}{nav("academy", "#/learn", "learn")}
             <a href={researchUrl(sources.data)} target="_blank" rel="noreferrer">
               <Tip text={TERMS.research.meaning}><span>Research Lab ↗</span></Tip>
             </a>
@@ -142,6 +143,7 @@ function Shell() {
               : reportMatch ? <MissionReportView id={reportMatch[1]} />
               : route === "/debrief" ? <DebriefView account={active} />
               : route === "/journal" ? <JournalView account={active} />
+              : route === "/news" ? <NewsView account={active} />
               : route === "/learn" ? <AcademyView />
               : <Dashboard account={active} />}
         </main>

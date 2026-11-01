@@ -14,3 +14,5 @@ data/*.lock
 data/backups/
 .env
 web/node_modules/
+data/lexicon/
+data/news/

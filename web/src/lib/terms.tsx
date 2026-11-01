@@ -35,6 +35,7 @@ export const TERMS = {
   academy: { pro: "Learn", colony: "Academy", meaning: "What every term, status and score in optlab means." },
   alertRules: { pro: "Alert rules", colony: "Tripwires", meaning: "Your own conditions on a position, a watched contract or a symbol. Each fires once, re-arms after it clears, and can repeat." },
   research: { pro: "Research Lab", colony: "Research Lab", meaning: "The original optlab analysis app (Streamlit): backtests, history, pricing, company data." },
+  news: { pro: "News", colony: "Intel feed", meaning: "News and official events (SEC filings, Federal Reserve, BLS, BEA, company feeds, optional Finnhub), de-duplicated, mapped to symbols, classified and scored with the Loughran–McDonald dictionary. A confirmation and risk-awareness layer: it never suggests or places an order." },
   dashboard: { pro: "Dashboard", colony: "Command center", meaning: "Overview of your account, positions and watched contracts." },
 } satisfies Record<string, Term>;
 

@@ -601,7 +601,7 @@ def archive_contract(s: Session, cid: str, version: int) -> WatchedContract:
 # ------------------------------------------------------------------ preferences
 PREF_DEFAULTS: dict[str, Any] = {"terminology": "professional", "timezone": "America/New_York", "active_account_id": None,
                                  "theme": "default", "dashboard_layout": ["overview", "discipline", "progress", "monitor",
-                                                                          "positions", "events", "contracts"],
+                                                                          "positions", "events", "contracts", "news"],
                                  "hidden_widgets": []}
 
 

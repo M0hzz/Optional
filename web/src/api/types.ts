@@ -274,7 +274,7 @@ export interface ContractQuote {
 }
 
 export interface Page<T> { items: T[]; total: number; page: number; page_size: number }
-export type WidgetId = "overview" | "discipline" | "progress" | "monitor" | "positions" | "events" | "contracts";
+export type WidgetId = "overview" | "discipline" | "progress" | "monitor" | "positions" | "events" | "contracts" | "news";
 export type ThemeId = "default" | "aurora" | "nebula" | "solar";
 export interface Preferences {
   terminology: "professional" | "colony"; timezone: string; active_account_id: string | null;
@@ -349,3 +349,38 @@ export interface ImportReport {
 }
 export interface AuditEntry { id: string; action: string; reason: string | null; at: string;
                               before: Record<string, unknown> | null; after: Record<string, unknown> | null }
+
+// ------------------------------------------------------------------ news (Phase 5)
+export type SentimentLabel = "positive" | "negative" | "neutral" | "unknown";
+export interface NewsSymbol { symbol: string; method: string; relevance: number; evidence: string | null }
+export interface NewsArticle {
+  id: string; title: string; url: string | null; publisher: string | null;
+  source: { code: string; name: string; kind: string | null; credibility: number | null };
+  published_at: string | null; first_seen_at: string; publication_time_known: boolean;
+  summary: string | null; summary_origin: "provider" | "opening_sentences" | "none";
+  symbols: NewsSymbol[]; category: string | null; category_label: string; category_confidence: number | null;
+  classification: { version: string; rule: string; matched: Record<string, string[]>; secondary: string[]; importance: string };
+  sentiment: null | { label: SentimentLabel; score: number | null; confidence: number; model: string; model_version: string;
+    counts: Record<string, number>; terms: Record<string, string[]>; explanation: string | null };
+  sentiment_unavailable: string | null; novelty: number;
+  cluster: null | { id: string; article_count: number; source_count: number; is_lead: boolean; duplicate_of: string | null; duplicates: number };
+  why_it_may_matter: { text: string; yours: { kind: string; id: string; name: string; symbol: string }[]; note: string };
+  same_story?: { id: string; title: string; source_code: string; url: string | null; published_at: string | null; first_seen_at: string }[];
+}
+export interface NewsPage { items: NewsArticle[]; total: number; limit: number; offset: number; note: string }
+export interface NewsSourceRow {
+  code: string; name: string; kind: string; enabled: boolean; configured: boolean; configuration_note: string | null;
+  credibility: number | null; status: "never" | "ok" | "error" | "disabled" | "unavailable"; status_detail: string | null;
+  last_fetch_at: string | null; last_success_at: string | null; items_last: number; new_last: number; articles: number;
+}
+export interface NewsSources {
+  sources: NewsSourceRow[]; interval_minutes: number; identity_configured: boolean; note: string;
+  lexicon: { installed: boolean; model_version: string | null; note: string | null; license: string; page: string; install: string };
+  runner: { state: string; detail: string | null; next_run_at?: string | null; in_process?: boolean; last_run?: Record<string, unknown> | null };
+}
+export interface CalendarItem { id: string; title: string; at: string; source_code: string; category: string; category_label: string; importance: "high" | "medium" | "low"; details: Record<string, unknown> }
+export interface NewsFeatures {
+  symbol: string; as_of: string | null; version: string; note: string;
+  features: null | Record<string, number | string | boolean | null | string[]>;
+  rule_values: Record<string, number | boolean | string | null>; why_missing: Record<string, string>; meanings: Record<string, string>;
+}

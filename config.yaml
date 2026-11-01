@@ -21,6 +21,24 @@ edgar:
   lookback_days: 180               # Form 4 insider trades
   filings_lookback_days: 365       # 8-K / 10-Q / 10-K filings
 
+news:
+  # Phase 5: news and official events, a confirmation and risk-awareness layer (never a trade signal).
+  # Fetched by the API every interval (OPTLAB_NEWS=off switches it off). SEC EDGAR needs edgar.identity above.
+  enabled: true
+  interval_minutes: 15
+  symbols: []                      # extra symbols to follow (positions, plans, watched contracts and the
+                                   # universe above are always followed)
+  sec:
+    lookback_days: 14              # filings per followed company (the latest 5 of each form)
+    submissions_every_minutes: 60
+  bls:
+    feeds: [cpi, empsit, ppi, jolts, eci, realer, prod2, ximpim]
+  company_ir: {}                   # SYMBOL: RSS/Atom URL of the company's investor-relations news feed
+  # disabled_sources: [bea]
+  # credibility: {sec_edgar: 0.95, federal_reserve: 0.95, bls: 0.95, bea: 0.95, company_ir: 0.85, finnhub: 0.7}
+  # Finnhub is optional: set FINNHUB_API_KEY in the environment (never in this file) to enable it.
+  # lexicon_path: data/lexicon/Loughran-McDonald_MasterDictionary_1993-2025.csv
+
 account:
   equity: 100000
   max_risk_per_trade_pct: 2.0      # max loss of a single position, % of equity

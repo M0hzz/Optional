@@ -463,6 +463,14 @@ export function AcademyView() {
         <ul className="small"><li><strong>Pass</strong> within the limit · <strong>Warning</strong> close to it · <strong>Blocked</strong> breaks your policy (optlab can't stop an order; it records and warns) · <strong>Unknown</strong> data is missing, never counted as a pass.</li></ul>
         <h3>Plans</h3>
         <ul className="small"><li>Draft → Armed (complete and risk-checked) → Waiting (trigger) → Qualified (confirmed) → Converted. Or Skipped (a good outcome when the setup doesn't qualify), Invalidated, Expired.</li></ul>
+        <h3>News and official events</h3>
+        <ul className="small">
+          <li>Sources: SEC EDGAR filings (8-K items, offerings, quarterly and annual reports) for the companies you follow, Federal Reserve press releases and FOMC meeting dates, BLS and BEA releases and release schedules, company investor-relations feeds you add, and Finnhub if you set an API key.</li>
+          <li>Each item keeps its source's publication time and the time optlab first saw it (never mixed up), the symbols it's about and how they were matched (relevance), its category with the rule that matched, and the source's weight.</li>
+          <li>The same story from several sources is shown once. Novelty is high for the first report of a story and low for repeats.</li>
+          <li>Sentiment comes from the Loughran–McDonald financial dictionary: positive and negative words are counted, and positive words after "not", "no", "never"… count as negative. The matched words are shown. There's no generated text: summaries are the source's own or its opening sentences.</li>
+          <li>News is a confirmation and risk-awareness layer. It never suggests, places or blocks an order. A monitoring rule may use news values (e.g. <code>news_sentiment_1d</code>, <code>news_risk_event_1d</code>) only together with a price, chain or position condition.</li>
+        </ul>
         <h3>Process score and points</h3>
         <ul className="small">
           <li>Daily process score: objectives met ÷ objectives that apply. Trades add items (planned before entry, maximum loss defined, within policy, waited for confirmation); with no trades they don't apply, so a quiet day can score 100%.</li>

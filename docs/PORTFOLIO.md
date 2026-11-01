@@ -461,6 +461,75 @@ Realized P&L is shown for the record and labelled *never scored*.
 
 **Journal** (Archives) holds daily theses, end-of-day reviews, decisions, lessons and notes. An entry can be linked to a position or a plan. Edits keep the earlier text in the audit log; entries are archived, never deleted. **Show archived** lists archived entries, which can be restored.
 
+## News and official events (Phase 5)
+
+**News** (colony: *Intel feed*) collects news and official events about the symbols you follow. It's a confirmation and risk-awareness layer: it never suggests, places or blocks an order.
+
+**Followed symbols:** open positions, draft and live plans, watched contracts, symbol alert rules, the `universe` in config.yaml and `news.symbols`.
+
+**Sources** (each can be switched off on the News page):
+
+| Source | What | Needs |
+|---|---|---|
+| SEC EDGAR | 8-K filings (with their items), 10-Q / 10-K, offerings (S-1, S-3, 424B1/4/5), SC 13D and tender offers for followed companies; the latest 5 of each form per company | `edgar.identity` (your name and email) |
+| Federal Reserve | press releases; FOMC meeting dates (statement at 2:00 p.m. ET) | — |
+| BLS | CPI, jobs, PPI, JOLTS, ECI, real earnings, productivity, import prices; the release schedule | — |
+| BEA | GDP, personal income and outlays, trade and more; next release dates | — |
+| Company IR feeds | RSS / Atom feeds you list under `news.company_ir` | the feed URLs |
+| Finnhub (optional) | company news for followed symbols | `FINNHUB_API_KEY` in the environment |
+
+Sources are fetched every `news.interval_minutes` (15 by default) by the API. A failing source is shown with its error; the others keep working. **Refresh now** fetches at once.
+
+**Each item shows:**
+- the headline;
+- the source (and the publisher for Finnhub);
+- the **publication time**, or "publication time not given by the source" (the time optlab collected an item is never used in its place);
+- the **first-seen time**;
+- the related symbols, with relevance and how each was matched;
+- the event category, with the rule and words that matched;
+- the sentiment, with the matched words;
+- novelty and the source's weight;
+- how many other articles report the same story;
+- the link;
+- a short summary (the source's own, or the item's first two sentences: never generated text);
+- why it may matter (a fixed sentence for the category, plus which of your positions, plans or watched contracts it concerns).
+
+**Duplicates:** the same story from several sources (the same URL, or a near-identical headline with the same figures, published close together) is shown once, with "+N similar". Tick *Show duplicates* to see them all.
+
+**Sentiment** uses the Loughran–McDonald financial dictionary (the 1993–2025 master dictionary):
+- Positive and negative words are counted in the headline and summary.
+- A positive word after "no", "not", "never" (within three words) counts as negative.
+- Score = (positive − negative) ÷ (positive + negative), shown with the words that produced it.
+- It's deterministic and literal: "unemployment" or "deficit" count as negative even in a neutral data release, so read the words, not just the label.
+
+The dictionary is free for academic research; commercial use needs a license from its authors. It isn't shipped with optlab. Install it with `python scripts/news.py install-lexicon --accept-license` (see Deploying). Until it's installed, items are still collected and classified, and are marked "sentiment n/a". When you install it, existing items are scored on the next run.
+
+**Symbol features** (shown on each position's page; used by monitoring rules):
+
+| Name | Meaning |
+|---|---|
+| `news_sentiment_15m`, `_1h`, `_1d` | weighted sentiment of the stories in the window, −1..+1 (weights: source, relevance, confidence, recency) |
+| `news_volume_15m`, `news_volume_1h` | stories in the window (duplicates count once) |
+| `news_velocity` | stories in the last hour ÷ the hourly average of the previous 7 days |
+| `news_novelty` | share of the day's articles that are new stories |
+| `news_confidence` | mean sentiment confidence of the day's stories |
+| `minutes_since_news` | minutes since the latest story |
+| `bullish_article_count`, `bearish_article_count` | the day's positive / negative stories |
+| `news_source_count` | distinct sources in the day |
+| `news_risk_event_1d` | a story in the day about earnings, guidance, an offering, a deal, a lawsuit, a regulatory action, a management change, or a macro / Fed event |
+| `market_news_risk_1d` | a high-importance Fed or macro release (FOMC statement, CPI, jobs, GDP, PCE…) in the day |
+
+**News-confirmed rules:** alert rules, watched-contract entry conditions, position rules and plan conditions can use these names, but never on their own. `price > sma(50) and news_sentiment_1d > 0` is accepted; `news_sentiment_1d > 0` alone is refused.
+
+When the news itself is unavailable (no source fetched yet, or all failing), the rule can't be checked and says why. When news is available but there's nothing to measure (no story today), a sentiment value doesn't apply and its comparison is false.
+
+**Command-center events:**
+- **NEWS** for a new story about something you hold, plan or watch. It's a warning for risk categories (earnings, offerings, deals, lawsuits, regulatory actions, management changes) and informational otherwise.
+- **NEWS** for high-importance market releases.
+- **SENTIMENT_SHIFT** when a held symbol's day sentiment turns positive or negative.
+
+Each story is announced once.
+
 ## Importing positions from scans.yaml
 
 **Import scans.yaml** (Monitor panel) shows the `positions:` of the project's scans.yaml with their

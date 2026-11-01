@@ -16,12 +16,13 @@ import { useRefetchInterval } from "../lib/live";
 import { useTerms } from "../lib/terms";
 import { AlertRulesList, EventFeed, MonitorPanel } from "./MonitorWidgets";
 import { DisciplinePanel, ProgressPanel } from "./Process";
+import { NewsWidget } from "./News";
 
 const WIDGET_NAMES: Record<WidgetId, { pro: string; colony: string }> = {
   overview: { pro: "Account overview", colony: "Treasury" }, discipline: { pro: "Daily discipline", colony: "Daily orders" },
   progress: { pro: "Progress", colony: "Colony growth" }, monitor: { pro: "Monitor", colony: "Expedition control" },
   positions: { pro: "Positions", colony: "Active expeditions" }, events: { pro: "Alerts and events", colony: "Command events" },
-  contracts: { pro: "Watched contracts", colony: "Scouted units" },
+  contracts: { pro: "Watched contracts", colony: "Scouted units" }, news: { pro: "News", colony: "Intel feed" },
 };
 const ALL_WIDGETS = Object.keys(WIDGET_NAMES) as WidgetId[];
 
@@ -38,6 +39,7 @@ export function Dashboard({ account }: { account: Account }) {
     overview: <AccountOverview account={account} />, discipline: <DisciplinePanel account={account} />, progress: <ProgressPanel account={account} />,
     monitor: <MonitorPanel accountId={account.id} />, positions: <PositionsWidget account={account} />,
     events: <EventFeed accountId={account.id} />, contracts: <WatchedWidget account={account} />,
+    news: <NewsWidget account={account} />,
   })[w];
   const move = (w: WidgetId, d: -1 | 1) => {
     const o = [...order]; const i = o.indexOf(w); const j = i + d;

@@ -273,3 +273,24 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 :root[data-color-theme="aurora"] { --accent: #4ade80; --accent-2: #15803d; }
 :root[data-color-theme="nebula"] { --accent: #c4b5fd; --accent-2: #6d28d9; }
 :root[data-color-theme="solar"] { --accent: #fbbf24; --accent-2: #b45309; }
+
+/* ---------------------------------------------------------------- news (Phase 5) */
+.news-layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .news-layout { grid-template-columns: 1fr; } }
+.news-side { display: grid; gap: 16px; min-width: 0; }
+.news-layout > * { min-width: 0; }
+.source-list li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.source-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.news-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.news-list.compact { gap: 8px; }
+.news-item { border-bottom: 1px solid var(--border); padding-bottom: 10px; }
+.news-item .event-head { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.news-title { font-weight: 600; margin: 4px 0 2px; line-height: 1.35; }
+.news-title a { color: var(--text); }
+.news-title a:hover { color: var(--accent); }
+.news-item .chip { cursor: default; padding: 1px 7px; margin-left: 4px; font-size: 11.5px; }
+.news-item .why { color: var(--muted); margin: 4px 0; }
+.banner { border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; }
+.banner.warn { border-color: var(--warn); background: var(--warn-bg); }
+.bad-text { color: var(--bad); }
+.calendar li { margin-bottom: 4px; }

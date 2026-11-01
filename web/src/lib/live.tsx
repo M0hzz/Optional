@@ -55,6 +55,7 @@ export function LiveProvider({ children, onEvent }: { children: ReactNode; onEve
       const e = JSON.parse((m as MessageEvent).data) as EventItem;
       touch("events", "monitor-status", "overview", "timeline", "positions", "position", "position-monitor", "contracts",
             "contract-monitor", "alert-rules", "plans", "plan", "plan-timeline", "risk");
+      if (e.type === "NEWS" || e.type === "SENTIMENT_SHIFT") touch("news", "news-features", "news-sources");
       cb.current?.(e);
       if (e.notify && browserNotificationsOn() && notificationSupport() === "granted") {
         try { new Notification(e.title, { body: e.message.slice(0, 300), tag: e.id }); } catch { /* ignore */ }

@@ -178,6 +178,37 @@ reviews, objectives, position archive) and whenever progress is read. The sync i
 
 The revision is added only when that revision was computed under the current scoring version.
 
+## News layer (`src/optlab/news`, Phase 5)
+
+| Module | Responsibility |
+|---|---|
+| `providers.py` | One interface for every source (`available(settings)`, `fetch(ctx)`): SEC EDGAR (current 8-K feed + per-company submissions, ticker/CIK map), Federal Reserve (press releases, FOMC calendar), BLS (release feeds, iCalendar schedule), BEA (RSS with next release dates), company IR feeds, Finnhub (API key in a header, never the URL) |
+| `feeds.py`, `http.py` | RSS / Atom / iCalendar parsing with defusedxml; GET with a timeout, a size cap and an identifying User-Agent |
+| `normalize.py` | HTML to text (scripts dropped), http(s)-only URLs, canonical URLs (tracking parameters removed), opening sentences, headline fingerprints and similarity |
+| `symbols.py` | Symbol mapping with method and relevance (filer CIK, company feed, exchange pattern, provider tag, cashtag, company name for followed symbols, `_MARKET`) |
+| `classify.py` | classify-rules/v1: SEC form and 8-K items, Fed feed category, macro releases, keyword rules; confidence and the matched words |
+| `sentiment.py` | Loughran–McDonald (lm-rules/v1) behind a `SentimentModel` interface; the version includes the dictionary file's hash |
+| `features.py` | features-v1: pure function of the stored items and a time (no look-ahead: publication and first-seen time ≤ T); rule values (None = unknown, NaN = doesn't apply) |
+| `pipeline.py` | The run: fetch outside any transaction, then store (idempotent per source and external id), map, de-duplicate (dedupe-v1), classify, score, rescore, schedule, features, events |
+| `runner.py` | Background thread in the API, one per database (`optlab.news.lock`); OPTLAB_NEWS=off disables it |
+| `api/news_routes.py` | `/news`, `/news/articles/{id}`, `/news/features/{symbol}`, `/news/features`, `/news/calendar`, `/news/sources`, `PATCH /news/sources/{code}`, `POST /news/refresh` |
+
+The monitor reads the stored features once per pass (`features.load_rule_values`). News never makes a network call inside a monitoring pass, and a rule can't consist of news names alone (`monitoring/rules.validate`).
+
+## Database (Phase 5, migration `0006`)
+
+New tables only; no existing table changes:
+
+| Table | Contents |
+|---|---|
+| `news_sources` | code, name, kind, enabled, credibility (0..1), last fetch status and detail |
+| `news_articles` | source and external id (unique), URL and canonical URL, title, summary and its origin, `published_at` (nullable), `first_seen_at`, raw provider metadata, fingerprint, cluster, lead flag, exact-duplicate reference, category, confidence, classification details, novelty |
+| `news_entities` | article × symbol: CIK, match method, relevance, evidence |
+| `news_clusters` | one story: lead article, article and source counts, symbols, first / last publication |
+| `news_events` | classified articles (`article`) and scheduled releases (`scheduled`, upserted by key) |
+| `sentiment_scores` | per article and model version: label, score, confidence, counts per list, matched words |
+| `symbol_news_features` | the latest features per symbol (and `_MARKET`) |
+
 ## Database (Phase 4 completion, migration `0005`)
 
 | Table / change | Contents |
@@ -256,6 +287,9 @@ erDiagram
 - Phase 2 (this): monitoring, snapshots, statuses, alert rules, events, notifications, live updates,
   scans.yaml import. The YAML monitor keeps running the scans and the YAML positions you haven't imported.
 - Phase 3: trade plans, risk policies and checks, plan conversion and comparison, risk dashboard.
+- Phase 5: news and official events (SEC, Fed, BLS, BEA, company feeds, optional Finnhub), de-duplication,
+  symbol mapping, classification, Loughran–McDonald sentiment, symbol features, news-confirmed rules, the
+  news page, the dashboard widget and the macro calendar.
 - Phase 4: configurable command center, daily discipline and process score, points, levels, streaks,
   achievements, themes, reviews (mission reports), journal, the Learn page.
 - Not yet: news

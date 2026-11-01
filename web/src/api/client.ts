@@ -2,7 +2,7 @@
 import type {
   Account, AlertRule, Analysis, AuditEntry, Contract, ContractMonitor, ContractQuote, DataSources, EventItem, EventPage,
   ImportReport, JournalEntryT, LegIn, MissionReport, MonitorRunInfo, PendingReview, Progress, Review, DayScore, Plan, PolicyPayload, PolicySettings, RiskDashboard, RiskReport, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
-  LedgerEntry, PointsSummary, Preferences, RuleSet, ScoreHistoryDay, Versions, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
+  CalendarItem, LedgerEntry, NewsArticle, NewsFeatures, NewsPage, NewsSources, PointsSummary, Preferences, RuleSet, ScoreHistoryDay, Versions, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
 } from "./types";
 
 export interface FieldError { field: string; code: string; message: string }
@@ -148,6 +148,15 @@ export const api = {
   snapshots: (id: string, limit = 2000) => request<SnapshotRow[]>("GET", `/positions/${id}/snapshots` + q({ limit })),
   timeline: (id: string) => request<TimelineItem[]>("GET", `/positions/${id}/timeline`),
   contractMonitor: (id: string) => request<ContractMonitor>("GET", `/watched-contracts/${id}/monitor`),
+  // ---------------------------------------------------------------- news (Phase 5)
+  news: (p: { symbol?: string[]; category?: string[]; source?: string[]; held?: boolean; q?: string; include_duplicates?: boolean; limit?: number; offset?: number }) =>
+    request<NewsPage>("GET", "/news" + q(p)),
+  newsArticle: (id: string) => request<NewsArticle>("GET", `/news/articles/${id}`),
+  newsFeatures: (symbol: string) => request<NewsFeatures>("GET", `/news/features/${encodeURIComponent(symbol)}`),
+  newsCalendar: (days = 14, importance?: string[]) => request<CalendarItem[]>("GET", "/news/calendar" + q({ days, importance })),
+  newsSources: () => request<NewsSources>("GET", "/news/sources"),
+  setNewsSource: (code: string, enabled: boolean) => request<{ code: string; enabled: boolean; status: string }>("PATCH", `/news/sources/${code}`, { enabled }),
+  refreshNews: () => request<Record<string, unknown>>("POST", "/news/refresh"),
   yamlPreview: (accountId: string) => request<{ path: string; rows: YamlRow[] }>("POST", "/imports/scans-yaml/preview" + q({ account_id: accountId })),
   yamlCommit: (accountId: string, acknowledgeRisk: boolean, key: string) =>
     request<{ imported: { id: string; name: string }[]; rows: YamlRow[] }>(
