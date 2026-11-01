@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api } from "./api/client";
-import type { Account, DataSources, Preferences } from "./api/types";
-import { Empty, ErrorState, Loading, Tip } from "./components/ui";
+import type { Account, DataSources, EventItem, MonitorStatus, Preferences } from "./api/types";
+import { Empty, ErrorState, Loading, Tip, useToast } from "./components/ui";
+import { LiveProvider, useLiveState, useRefetchInterval } from "./lib/live";
 import { CreateAccountForm } from "./forms/AccountForms";
 import { useRoute, navigate } from "./lib/router";
 import { TermsContext, TERMS, type Mode } from "./lib/terms";
@@ -16,6 +17,27 @@ function researchUrl(ds?: DataSources): string {
 }
 
 export function App() {
+  const toast = useToast();
+  const onEvent = (e: EventItem) => { if (e.severity !== "info") toast(e.title, "bad"); };
+  return <LiveProvider onEvent={onEvent}><Shell /></LiveProvider>;
+}
+
+function AlertCount() {
+  const live = useLiveState();
+  const st = useQuery<MonitorStatus>({ queryKey: ["monitor-status"], queryFn: api.monitorStatus, refetchInterval: useRefetchInterval(30_000) || 60_000 });
+  const n = st.data ? st.data.unacknowledged.critical + st.data.unacknowledged.warning : 0;
+  return (
+    <div className="sidebar-alerts small">
+      <a href="#/" onClick={() => setTimeout(() => document.getElementById("ev-h-all")?.scrollIntoView({ behavior: "smooth" }), 50)}>
+        {n > 0 ? <span className={`badge ${st.data!.unacknowledged.critical ? "bad" : "warn"}`}>⚑ {n} to acknowledge</span>
+               : <span className="badge muted">✓ Nothing to acknowledge</span>}
+      </a>
+      <span className={live === "live" ? "muted-text" : "warn-text"}>{live === "live" ? "● live" : live === "connecting" ? "◌ connecting" : "◌ polling"}</span>
+    </div>
+  );
+}
+
+function Shell() {
   const qc = useQueryClient();
   const route = useRoute();
   const prefs = useQuery<Preferences>({ queryKey: ["prefs"], queryFn: api.preferences });
@@ -51,6 +73,7 @@ export function App() {
             </a>
             <a href="/api/docs" target="_blank" rel="noreferrer">API docs ↗</a>
           </nav>
+          <AlertCount />
           <div className="sidebar-section">
             {list.length > 1 && (
               <label>Account

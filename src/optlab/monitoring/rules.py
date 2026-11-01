@@ -270,7 +270,9 @@ def explain(r: RuleResult, previous: dict | None = None) -> str:
     parts = []
     for k, v in r.values.items():
         s = f"{k} = {fmt_value(k, v)}"
-        if previous and k in previous and previous[k] is not None and previous[k] != v and not isinstance(v, bool):
-            s += f", was {fmt_value(k, previous[k])}"
+        if previous and k in previous and previous[k] is not None and not isinstance(v, bool):
+            was = fmt_value(k, previous[k])
+            if was != fmt_value(k, v):                  # only when the change shows at display precision
+                s += f", was {was}"
         parts.append(s)
     return r.rule + (f" ({'; '.join(parts)})" if parts else "")

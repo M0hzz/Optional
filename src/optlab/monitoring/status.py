@@ -110,9 +110,8 @@ def metrics_for(p: Position, v: PositionValuation, earnings: date | None, today:
     loss_pct: float | None = NAN
     if max_loss is not None and max_loss > 0:
         loss_pct = None if pnl is None else max(0.0, -pnl) / float(max_loss) * 100
-    for k, reason in (("pnl", "the position can't be fully valued"), ("pnl_pct", "the position can't be fully valued"),
-                      ("value", "the position can't be fully valued")):
-        why[k] = "; ".join(v.reasons) or reason
+    for k in ("pnl", "pnl_pct", "value"):
+        why[k] = "the position can't be fully valued (see the leg quotes)"
     g = v.greeks
     for k in ("position_delta", "position_gamma", "theta_day", "position_vega"):
         why[k] = "a leg has no Greeks from the provider"
@@ -173,11 +172,20 @@ def check_position(p: Position, v: PositionValuation, snap: ChainSnapshot, setti
         age = snap.age_seconds(now)
         stale.append(f"option quotes are an older snapshot ({snap.error})" if snap.error else
                      f"option quotes are {int((age or 0) // 60)} min old (limit {int(max_age // 60)} min)")
-    if v.status != "AVAILABLE":
+    no_chain = fresh == UNAVAILABLE
+    if v.status != "AVAILABLE" and not no_chain:          # with no chain at all, every leg fails the same way
         stale += v.reasons or ["the position can't be fully valued"]
-    for r in results:
-        if r.result is None:
-            stale.append(f"rule `{r.rule}`: {r.reason}")
+    unknown = [r for r in results if r.result is None]
+    data_gaps = [r for r in unknown if r.error is None and ("pnl" in r.values or "price" in r.values
+                                                           or "unavailable" in (r.reason or "") or no_chain
+                                                           or any(r.values.get(k) is None for k in r.values))]
+    if no_chain or v.status != "AVAILABLE":
+        if data_gaps:
+            stale.append(f"{len(data_gaps)} rule{'s' if len(data_gaps) != 1 else ''} can't be checked without that data: "
+                         + ", ".join(f"`{r.rule}`" for r in data_gaps))
+        unknown = [r for r in unknown if r not in data_gaps]
+    for r in unknown:
+        stale.append(f"rule `{r.rule}`: {r.reason}")
     hit = {k: [r for r in results if r.result and r.kind == k] for k in ("exit", "action", "watch", "system")}
     if stale:
         status, reasons = STALE, list(dict.fromkeys(stale))

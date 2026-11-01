@@ -7,7 +7,8 @@ Two supported ways to run it. Pick **one** for the dashboard API: both use the s
 |---|---|---|
 | Dashboard / API | `optlab-api` service, 127.0.0.1:8600 | `api` container, 127.0.0.1:8600 |
 | Research Lab | `optlab-dashboard` service, 127.0.0.1:8517 | `research` container, 127.0.0.1:8518 |
-| Monitor, nightly refresh | `optlab-monitor`, `optlab-ingest.timer` | not included (keep them on systemd) |
+| Portfolio monitor (Phase 2) | inside `optlab-api` | inside the `api` container |
+| YAML monitor, nightly refresh | `optlab-monitor`, `optlab-ingest.timer` | not included (keep them on systemd) |
 | Remote access | `tailscale serve` (script) | add `tailscale serve` yourself (below) |
 | Node.js needed | no (`web/dist` is committed) | no (built in the image) |
 
@@ -82,6 +83,28 @@ sudo tailscale serve --bg 8600 && sudo tailscale serve --bg --https=8443 8518
 
 Going back: `docker compose down`, then `bash scripts/setup_remote.sh`.
 
+## The portfolio monitor (Phase 2)
+
+The API runs the portfolio monitor in a background thread: positions, watched contracts and alert rules in
+`data/optlab.sqlite`, on the schedule in the dashboard's Monitor → Settings (initially scans.yaml's
+schedule). Nothing to install or start separately.
+
+- **One per database.** It holds `data/optlab.monitor.lock`. A second API is already refused by the
+  instance lock; `scripts/portfolio_monitor.py` (a standalone runner, mostly for `--once` checks) says
+  the monitor runs elsewhere and exits. The lock works across the Docker bind mount.
+- **Off switch:** `OPTLAB_MONITOR=off` (environment of `optlab-api`, or `.env` for Docker). *Run now* still
+  works then.
+- **Alongside the YAML monitor.** `optlab-monitor` keeps running the scans in scans.yaml. Positions you
+  import into the dashboard (Monitor → Import scans.yaml) are skipped by it automatically, so the same
+  trade never alerts twice; the rest it still checks. Restart it after importing:
+  `systemctl --user restart optlab-monitor`.
+- **Desktop notifications** use `notify-send` (package `libnotify-bin`) from the `optlab-api` user service,
+  as the YAML monitor already does. Inside Docker there's no desktop: use the browser notifications.
+- **Upgrading from Phase 1:** `git pull`, `pip install -r requirements.txt`,
+  `python scripts/portfolio_db.py backup`, then `systemctl --user restart optlab-api`. The API applies
+  migration `0002` at startup (it switches monitoring on for open positions). The new frontend is in
+  `web/dist` (committed).
+
 ## Database: migrations, backups, restore
 
 - The API applies **forward** migrations at startup, under a lock, and never downgrades or resets.
@@ -105,5 +128,9 @@ Going back: `docker compose down`, then `bash scripts/setup_remote.sh`.
 | `No module named 'fastapi'` / `'sqlalchemy'` | `.venv/bin/pip install -r requirements.txt` |
 | Quotes always *Unavailable* | Check the Research Lab's option chain works; Cboe through OpenBB needs internet. Outside market hours quotes are the last session's. |
 | Quotes say *Synthetic* | `config.yaml` has `data.source: synthetic` (or `OPTLAB_QUOTE_SOURCE=synthetic`). |
+| Every position shows *Stale data* | Read the reason on the position. *option quotes unavailable (...)*: the provider failed (outside market hours Cboe sometimes errors); *Last checked ... ago*: the monitor isn't running or it's outside the monitoring window (Monitor panel says which). |
+| Monitor panel: *Runs in another process* | Another process holds `data/optlab.monitor.lock` (Docker, or `scripts/portfolio_monitor.py`). Use *Run now* in that one, or stop it. |
+| No desktop notifications | `sudo apt install libnotify-bin`; check Monitor → Settings → Desktop; the event says *no desktop notifier on the server* when `notify-send` is missing. |
+| Browser notifications can't be ticked | Use the `https://` Tailscale link (browsers need HTTPS or localhost), and allow notifications for the site. |
 | The old app opens at the main link | You ran with `--no-api`, or `tailscale serve status` still points / at 8517: re-run `bash scripts/setup_remote.sh`. |
 | Docker: `permission denied` on `data/` | Set `OPTLAB_UID`/`OPTLAB_GID` in `.env` to your `id -u` / `id -g`. |

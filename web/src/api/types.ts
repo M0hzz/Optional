@@ -23,6 +23,9 @@ export interface Overview {
   capital_at_risk: Money; capital_at_risk_complete: boolean; capital_at_risk_pct_of_buying_power: number | null;
   realized_pnl_total: Money; upcoming_expirations: { expiration: string; days: number; positions: string[] }[];
   strategies: Record<string, number>;
+  monitoring: { statuses: Record<string, number>; attention: number; open_pnl: Money | null; open_pnl_positions: number;
+                open_pnl_complete: boolean; greeks: Record<string, number> | null; last_checked_at: string | null;
+                label: string };
 }
 
 export interface LegIn {
@@ -45,7 +48,111 @@ export interface Position {
   max_loss: Bounded; max_gain: Bounded; defined_risk: boolean; risk_acknowledged: boolean;
   realized_pnl: Money | null; monitoring_enabled: boolean; nearest_expiration: string | null;
   days_to_expiration: number | null; notes: string | null; source: string; created_at: string; updated_at: string;
-  version: number; legs: Leg[];
+  version: number; legs: Leg[]; monitor: MonitorView | null;
+}
+
+// ------------------------------------------------------------------ monitoring (Phase 2)
+export type MonitorStatusValue = "STALE_DATA" | "EXIT_CONDITION_MET" | "ACTION_REQUIRED" | "WATCH" | "HOLD" | "CLOSED" | "NOT_MONITORED";
+
+export interface SnapshotSummary {
+  id: string; taken_at: string; raw_status: string; status: string; valuation_status: string; value: Money | null;
+  exit_value: Money | null; open_pnl: Money | null; open_pnl_pct: number | null; underlying_price: Money | null;
+  greeks: { delta: number | null; gamma: number | null; theta: number | null; vega: number | null };
+  freshness: Freshness; provider: string; delay_minutes: number; fetched_at: string | null;
+  quote_age_seconds: number | null; label: string;
+}
+
+export interface RuleResult {
+  kind: "exit" | "action" | "watch" | "system" | "alert" | "condition"; rule: string; result: boolean | null;
+  values: Record<string, number | boolean | string | null>; reason: string | null; error: string | null;
+}
+
+export interface MonitorView {
+  enabled: boolean; status: MonitorStatusValue; label: string; stored_status: string | null; reasons: string[];
+  since: string | null; checked_at: string | null; age_seconds: number | null; stale_overlay: boolean;
+  pending: { status: string; label: string; passes: number; needed: number } | null;
+  raw_status: string | null; raw_reasons: string[]; snapshot: SnapshotSummary | null;
+  rules?: RuleResult[]; metrics?: Record<string, number | boolean | string | null>;
+}
+
+export interface RuleSet { exit_when: string[]; action_when: string[]; watch_when: string[] }
+
+export interface PositionMonitor extends MonitorView {
+  rules_config: { use_defaults: boolean; rules: RuleSet; timeframe: string; notify: boolean; defaults: RuleSet };
+  confirm_passes: number; version: number;
+}
+
+export type Severity = "info" | "warning" | "critical";
+
+export interface EventItem {
+  id: string; seq: number; occurred_at: string; type: string; severity: Severity; title: string; message: string;
+  symbol: string | null; account_id: string | null; position_id: string | null; contract_id: string | null;
+  alert_rule_id: string | null; snapshot_id: string | null; requires_ack: boolean; acknowledged_at: string | null;
+  ack_note: string | null; notify: boolean; notify_state: string; notify_detail: string | null;
+  source: Record<string, unknown>;
+}
+export interface EventPage extends Page<EventItem> { latest_seq: number }
+
+export interface AlertRule {
+  id: string; name: string; target_type: "position" | "contract" | "symbol"; position_id: string | null;
+  contract_id: string | null; symbol: string | null; account_id: string | null; condition: string; timeframe: string;
+  severity: Severity; enabled: boolean; notify: boolean; confirm_passes: number; rearm_minutes: number;
+  repeat_minutes: number; archived_at: string | null; created_at: string; updated_at: string; version: number;
+  state: { active: boolean; checked_at: string | null; last_fired_at: string | null; last_cleared_at: string | null;
+           passes_true: number; last: RuleResult | null } | null;
+}
+
+export interface MonitorRunInfo {
+  id: string; started_at: string; finished_at: string | null; seconds: number | null; trigger: string; ok: boolean;
+  errors: string[]; positions: number; contracts: number; rules: number; events: number; mode: string; provider: string;
+}
+
+export interface MonitorStatus {
+  enabled: boolean; schedule: string; window_open: boolean; why_closed: string | null; next_window_open: string | null;
+  runner: { state: string; detail: string | null; next_pass_at: string | null; in_process: boolean;
+            lock_holder_pid: string | null; running_since: string | null };
+  last_run: MonitorRunInfo | null; last_successful_run_at: string | null; stale_after_seconds: number;
+  unacknowledged: { warning: number; critical: number }; latest_seq: number;
+  quotes: DataSources["quotes"]; note: string | null;
+}
+
+export interface MonitorSettings {
+  enabled: boolean;
+  schedule: { start: string; end: string; timezone: string; days: string[]; every_seconds: number; skip_market_holidays: boolean };
+  confirm_passes: number; repeat_urgent_minutes: number; rearm_minutes: number; stale_after_seconds: number;
+  default_rules: RuleSet; timeframe: string; completed_bars_only: boolean; assignment_risk_days: number;
+  expiry_action: boolean; expiration_warning_days: number[]; liquidity_max_spread_pct: number;
+  retention_full_days: number;
+  notifications: { desktop: boolean; min_severity: Severity; quiet_hours: boolean; quiet_start: string;
+                   quiet_end: string; critical_during_quiet_hours: boolean; muted_symbols: string[] };
+}
+
+export interface SnapshotRow {
+  taken_at: string; status: string; raw_status: string; open_pnl: Money | null; open_pnl_pct: number | null;
+  value: Money | null; underlying_price: Money | null; delta: number | null; gamma: number | null;
+  theta: number | null; vega: number | null; freshness: Freshness; valuation_status: string;
+}
+
+export type TimelineItem =
+  | { kind: "event"; at: string; event: EventItem }
+  | { kind: "audit"; at: string; audit: { id: string; action: string; reason: string | null; before: unknown; after: unknown } };
+
+export interface ContractMonitor {
+  checked_at: string | null; quote_status: string | null; conditions: RuleResult[]; freshness: Freshness | null;
+  reason: string | null; pending: { status: string; passes: number; needed: number } | null; automated: boolean;
+}
+
+export interface Vocabulary {
+  targets: Record<"position" | "contract" | "symbol", { name: string; meaning: string }[]>;
+  chain: { name: string; meaning: string }[]; bar_names: string[]; bar_functions: string[];
+  statuses: Record<string, string>;
+}
+
+export interface YamlRow {
+  index: number; name: string; symbol: string; fingerprint: string;
+  status: "new" | "duplicate" | "invalid" | "imported" | "skipped"; errors: string[]; warnings: string[];
+  strategy: string | null; max_loss: { state: string; value: string | null } | null; needs_risk_ack: boolean;
+  rules: RuleSet; timeframe: string;
 }
 
 export interface Issue { code: string; message: string; leg: number | null }

@@ -75,6 +75,11 @@ export function dateTime(iso: string | null | undefined, tz = TZ): string | null
                                      hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
 }
 
+/** Short axis label in the display time zone: "Nov 2, 10:31". */
+export function shortTime(ms: number, tz = TZ): string {
+  return new Date(ms).toLocaleString("en-US", { timeZone: tz, month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 export function date(iso: string | null | undefined): string | null {
   if (!iso) return null;
   const [y, m, d] = iso.slice(0, 10).split("-").map(Number);

@@ -221,7 +221,7 @@ class WatchedContract(Audited, Base):
                                                    default=ContractStatus.RESEARCHING, index=True)
     target_entry_units: Mapped[int | None] = mapped_column(BigInteger)
     invalidation: Mapped[str | None] = mapped_column(Text)
-    alert_conditions: Mapped[str | None] = mapped_column(Text)     # stored only; evaluated from Phase 2
+    alert_conditions: Mapped[str | None] = mapped_column(Text)     # entry conditions, one per line (monitoring/rules.py)
     notes: Mapped[str | None] = mapped_column(Text)
     position_id: Mapped[str | None] = mapped_column(ForeignKey("positions.id", ondelete="SET NULL"))
     archived_at: Mapped[datetime | None]

@@ -4,11 +4,11 @@ optlab is two applications over one project folder:
 
 | | Dashboard (new, primary) | Research Lab (original) |
 |---|---|---|
-| What | Accounts, positions, legs, watched contracts, strategy analysis | Watchlist, market, option chains, backtests, Signal explorer, overlay |
+| What | Accounts, positions, legs, watched contracts, strategy analysis, position monitoring, alerts and events | Watchlist, market, option chains, backtests, Signal explorer, overlay |
 | Stack | FastAPI + SQLAlchemy 2 + Alembic, React 19 + TypeScript + Vite | Streamlit |
 | Data | `data/optlab.sqlite` (SQLite, WAL) | `data/market.duckdb`, `data/history.duckdb` (DuckDB) |
 | Port | 127.0.0.1:8600 | 127.0.0.1:8517 (systemd) / 8518 (Docker) |
-| Code | `src/optlab/portfolio`, `src/optlab/api`, `web/` | `app/`, `src/optlab/{data,live,overlay,history,...}` |
+| Code | `src/optlab/portfolio`, `src/optlab/monitoring`, `src/optlab/api`, `web/` | `app/`, `src/optlab/{data,live,overlay,history,...}` |
 
 Nothing in either application places orders or connects to a broker's order entry.
 
@@ -18,8 +18,12 @@ Nothing in either application places orders or connects to a broker's order entr
                                                   │                         ├─ recognize.py  (strategy + exact payoff maths)
                                                   │                         └─ quotes.py     (shared chain snapshots) ─▶ Cboe via OpenBB
                                                   └─ /*  web/dist (React)                                (DuckDB: earnings dates, read-only)
+ browser ◀─SSE /api/v1/stream── events + finished passes (live updates)
+                    API process: background thread  monitoring.runner ─▶ monitoring.engine ─▶ quotes.py (same snapshots)
+                                                                         └─▶ snapshots, state, events ─▶ SQLite
+                                                                         └─▶ notify-send (desktop)
  browser ──HTTPS :8443 (Tailscale)──▶ :8517  Streamlit Research Lab ─▶ DuckDB
- systemd: optlab-monitor (scans.yaml, unchanged), optlab-ingest timer (DuckDB, unchanged)
+ systemd: optlab-monitor (scans.yaml scans + YAML positions not imported), optlab-ingest timer (DuckDB, unchanged)
 ```
 
 ## Backend layers (`src/optlab/portfolio`, `src/optlab/api`)
@@ -40,6 +44,29 @@ Nothing in either application places orders or connects to a broker's order entr
 | `api/main.py`, `routes.py`, `deps.py`, `serialize.py` | FastAPI app factory, structured errors, CORS, static frontend, one transaction per request |
 
 All financial calculations happen on the server; the browser formats strings for display.
+
+## Monitoring layer (`src/optlab/monitoring`, Phase 2)
+
+| Module | Responsibility |
+|---|---|
+| `settings.py` | Monitor settings (schedule, confirmation, re-arm, repeat, stale limit, default rules, notifications), stored in `user_preferences`; seeded from scans.yaml until first saved |
+| `calendar.py` | Monitoring window: weekly schedule in its time zone (DST via zoneinfo), US market holidays and early closes for 2026–2027 |
+| `rules.py` | Conditions in the scans.yaml expression language; three-valued results (true / false / unknown) with the values used; completed-bar handling; validation per target (position / contract / symbol) |
+| `status.py` | Position metrics, built-in action checks, status precedence STALE > EXIT > ACTION > WATCH > HOLD and the reason strings |
+| `transitions.py` | Pure state machines: status confirmation (stale immediate), urgent reminders; alert fire / clear / re-arm / repeat |
+| `events.py` | Writing events, the notification policy (severity, quiet hours, mutes), desktop delivery and its log |
+| `engine.py` | One pass: read (short transaction) → fetch chains, bars, earnings (no lock held) → evaluate → write snapshots, state and events (one transaction) → notify |
+| `runner.py` | The scheduler thread and the per-database monitor lock (`optlab.monitor.lock`): one monitor per database across processes and containers |
+| `read.py` | Effective status for the API: closed, not monitored, never checked, and the stale overlay when the last check is older than the limit |
+| `legacy.py` | scans.yaml import (with fingerprints) and the skip list the YAML monitor reads |
+| `api/monitor_routes.py` | `/monitor/*`, `/events`, `/alert-rules`, position snapshots / timeline / rules, scans.yaml import, `/stream` (SSE) |
+
+Each pass fetches one chain per underlying through the API's `QuoteService`, so the monitor and the
+dashboard share snapshots and never fetch the same chain twice within its TTL. Price bars are fetched only
+for rules that use studies. The monitor's per-pass state lives in `monitor_states`, not on the versioned
+rows, so a pass never causes an edit conflict (except a watched contract whose status the monitor changes,
+which is a real change). The live stream polls the `events` table by its sequence number, so it works
+whichever process wrote the events, and a reconnecting browser resumes with `Last-Event-ID` without gaps.
 
 ## Database (Phase 1, migration `0001`)
 
@@ -116,6 +143,37 @@ Every table that records facts carries `created_at`, `updated_at`, `source`, `so
 `metadata_json`; editable ones carry `version`. Indexes: account, underlying, lifecycle, expiration,
 OCC symbol, status, `(entity_type, entity_id, at)` on the audit log, and every foreign key.
 
+## Database (Phase 2, migration `0002`)
+
+| Table | Contents |
+|---|---|
+| `position_snapshots` | One row per position per pass: raw and confirmed status, reasons, every rule result, value / exit value / open P&L (units), P&L %, Greeks, metrics, per-leg quotes, provider, freshness, fetch and source times; `keep` marks status changes (never thinned) |
+| `contract_snapshots` | A watched contract's quote per pass (bid/ask/mid/last in units, IV, delta, OI, spread) and its condition results |
+| `monitor_states` | Per subject (position, contract, alert rule, warning, monitor): status, since, candidate and count, armed/active, last event, last cleared, last check, last snapshot |
+| `events` | The feed: integer `seq` (stream order) + UUID, time, type, severity, title, message, symbol and links (account, position, contract, rule, snapshot, run), source data, dedupe key, acknowledgement, notification state |
+| `notification_deliveries` | Each desktop delivery attempt and its result |
+| `alert_rules` | Versioned user rules: target (position / contract / symbol), condition, timeframe, severity, confirm / re-arm / repeat, notify, archived |
+| `monitor_runs` | Each pass: start, duration, trigger (schedule / manual), provider, counts, errors |
+
+```mermaid
+erDiagram
+    positions ||--o{ position_snapshots : "one per pass"
+    watched_contracts ||--o{ contract_snapshots : "one per pass"
+    positions ||--o{ alert_rules : "target"
+    watched_contracts ||--o{ alert_rules : "target"
+    events ||--o{ notification_deliveries : "desktop attempts"
+    monitor_runs ||--o{ position_snapshots : "run_id"
+    monitor_runs ||--o{ events : "run_id"
+    positions ||--o{ events : "position_id"
+    position_snapshots ||--o| events : "snapshot_id"
+    monitor_states }o--|| positions : "kind=position"
+```
+
+`positions` gains `monitor_json` (own rules, timeframe, notify) and loses the Phase 1 constraint on
+`monitoring_enabled`; the migration switches monitoring on for positions that are OPEN. Indexes cover
+`(position_id, taken_at)`, `taken_at`, events by position / contract / symbol / type / time / unacknowledged
+/ dedupe key, and every foreign key. `downgrade` drops the Phase 2 tables and restores the constraint.
+
 ## Request flow (create a position)
 
 1. `POST /api/v1/positions` with an `Idempotency-Key`. A repeat with the same key returns the first response.
@@ -126,8 +184,7 @@ OCC symbol, status, `(entity_type, entity_id, at)` on the audit log, and every f
 
 ## Phase boundaries
 
-- The live monitor (`scripts/monitor.py`) still reads only `scans.yaml`. Database positions have
-  `monitoring_enabled = 0`, enforced by a CHECK constraint that the Phase 2 migration will lift.
-- Lifecycle is OPEN / CLOSED / ARCHIVED only; HOLD / WATCH / ACTION REQUIRED / STALE DATA come with
-  monitoring in Phase 2.
-- `QuoteService` is built for reuse by the monitor in Phase 2; the monitor is unchanged in Phase 1.
+- Phase 2 (this): monitoring, snapshots, statuses, alert rules, events, notifications, live updates,
+  scans.yaml import. The YAML monitor keeps running the scans and the YAML positions you haven't imported.
+- Not yet: trade plans and risk policies (Phase 3), process scoring and achievements (Phase 4), news
+  (Phase 5), historical-signal drill-downs (Phase 6). Scans still live in scans.yaml and the Research Lab.

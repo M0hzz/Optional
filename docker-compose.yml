@@ -34,6 +34,7 @@ services:
       OPTLAB_RESEARCH_URL: ${OPTLAB_RESEARCH_URL:-http://127.0.0.1:8518/}
       OPTLAB_CORS_ORIGINS: http://127.0.0.1:${OPTLAB_API_PORT:-8600},http://localhost:${OPTLAB_API_PORT:-8600}
       OPTLAB_QUOTE_SOURCE: ${OPTLAB_QUOTE_SOURCE:-}
+      OPTLAB_MONITOR: ${OPTLAB_MONITOR:-on}      # the portfolio monitor runs inside the API (one per database)
     ports:
       - "127.0.0.1:${OPTLAB_API_PORT:-8600}:8600"
     healthcheck:

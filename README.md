@@ -111,9 +111,13 @@ inspecting what you actually hold. Informational only: it never places orders.
   is recognised deterministically (22 named strategies, otherwise *Custom*), with exact maximum gain and
   loss (or *Unlimited* / *Unknown*, never $0), breakevens and buying-power effect, before you save.
 - **Close, edit, archive** with a full before/after history; edits are conflict-checked.
-- **Watched contracts** you're researching, with on-demand quotes.
+- **Watched contracts** you're researching, with quotes and entry conditions checked every pass.
+- **Monitoring** (Phase 2): every open position is checked on a schedule and gets a status (Stale data,
+  Exit condition met, Action required, Watch, Hold) with the exact reasons; snapshots every pass, P&L and
+  Greeks history, alert rules, an event feed with acknowledgement, desktop and browser notifications, and
+  live updates. Positions in scans.yaml can be imported once; the YAML monitor then skips them.
 - **CSV import** (preview, then atomic commit) and export.
-- On-demand estimates from delayed Cboe quotes, always labelled with source, delay and age.
+- Values from delayed Cboe quotes, always labelled with source, delay and age; stale data is never shown as safe.
 - Professional or Colony terminology (labels only; financial terms stay in the tooltips).
 
 Money is stored exactly (integer $0.0001 units). Data: `data/optlab.sqlite` (SQLite, WAL, Alembic
@@ -163,6 +167,9 @@ Research › Overlay setup or in `overlay.yaml`; switch it off with **Show overl
 ---
 
 ## Live monitor
+
+(The dashboard's portfolio monitor, above, now covers positions; positions you import from scans.yaml into
+the dashboard are skipped here. This monitor keeps running the scans and any YAML positions not imported.)
 
 `scripts/monitor.py` runs the scans and position checks in **`scans.yaml`** on a
 schedule (default 09:30–16:00 New York time, weekdays, every 60 seconds) and sends

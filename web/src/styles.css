@@ -75,7 +75,7 @@ h3.inline { display: inline; }
 .term { border-bottom: 1px dotted var(--muted); cursor: help; }
 .term-secondary { color: var(--muted); font-size: 0.85em; }
 .info { color: var(--muted); font-size: 11px; margin-left: 3px; }
-.tooltip { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; max-width: 340px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 6px 24px rgba(0,0,0,.45); z-index: 60; }
+.tooltip { white-space: pre-line; background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; max-width: 340px; font-size: 12.5px; line-height: 1.45; box-shadow: 0 6px 24px rgba(0,0,0,.45); z-index: 60; }
 .tooltip-arrow { fill: var(--panel-2); }
 
 /* buttons and inputs */
@@ -170,3 +170,48 @@ label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--t
   .grid-3, .grid-4 { grid-template-columns: 1fr 1fr; }
   .card.wide { grid-column: auto; }
 }
+
+/* ---------------------------------------------------------------- Phase 2: monitoring and events */
+.status-badge .pending { opacity: .8; font-weight: 400; }
+.reason { max-width: 260px; margin-top: 2px; }
+.monitor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.monitor-grid .wide-cell { grid-column: 1 / -1; }
+.monitor-grid details ul { margin: 4px 0 0; padding-left: 18px; }
+.sidebar-alerts { display: flex; flex-direction: column; gap: 4px; margin: 6px 0 12px; }
+.sidebar-alerts a { text-decoration: none; }
+.events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.event { border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--panel-2); }
+.event.sev-critical { border-left-color: var(--bad); }
+.event.sev-warning { border-left-color: var(--warn); }
+.event.unacked { box-shadow: 0 0 0 1px rgba(251, 191, 36, .25); }
+.event-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.event-title { flex: 1 1 260px; }
+.event-msg { margin: 4px 0; font-size: 13px; white-space: pre-line; }
+.event-meta { display: flex; gap: 12px; flex-wrap: wrap; }
+.status-card { border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; background: var(--panel-2); }
+.status-card.status-bad { border-left-color: var(--bad); }
+.status-card.status-warn { border-left-color: var(--warn); }
+.status-card.status-ok { border-left-color: var(--ok); }
+.status-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.status-line .badge { font-size: 14px; }
+.reasons { margin: 8px 0 0; padding-left: 20px; }
+.reasons li { margin: 2px 0; }
+.timeline { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--border); }
+.timeline li { padding: 6px 0 6px 12px; position: relative; }
+.timeline li::before { content: ""; position: absolute; left: -6px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+.tl-time { color: var(--muted); font-size: 12px; font-family: var(--mono); }
+.rule-list { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.rule-list legend { padding: 0 6px; }
+.rule-list p { margin: 0; }
+.rule-row { display: flex; gap: 8px; align-items: end; }
+.rule-row label { flex: 1; }
+.rules-editor { display: flex; flex-direction: column; gap: 10px; }
+.vocab dl { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px 16px; margin: 8px 0; }
+.vocab dt { color: var(--accent); }
+.vocab dd { margin: 0 0 4px; color: var(--muted); }
+.presets { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.days { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.actions-left { display: flex; gap: 8px; margin: 8px 0; }
+fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
+fieldset legend { padding: 0 6px; color: var(--muted); }
+@media (max-width: 900px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } .grid-3 { grid-template-columns: 1fr; } }

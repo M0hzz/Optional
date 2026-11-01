@@ -89,6 +89,12 @@ The script needs systemd, so on a Mac or Windows PC do the same by hand:
 Keep the dashboard and the monitor running in terminals (or use launchd / Task Scheduler to
 start them at login), and schedule `python scripts/ingest.py` for after the close.
 
+## Notifications on your phone or laptop
+
+Open the dashboard through the `https://` link and tick **Notifications** in its Monitor panel. Browsers
+allow pop-ups only over HTTPS (which Tailscale provides) or on localhost, and only while the dashboard is
+open in that browser. Desktop notifications on the machine running optlab come from `notify-send`.
+
 ## Security
 
 - Only devices signed in to your Tailscale account can open the link. Anyone you add to your

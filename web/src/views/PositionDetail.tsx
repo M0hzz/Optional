@@ -8,10 +8,12 @@ import { BoundedValue, ConfirmDialog, ErrorState, FieldErrors, FreshnessBadge, L
 import { ClosePositionForm } from "../forms/ClosePositionForm";
 import { PositionForm } from "../forms/PositionForm";
 import { date, dateTime, money, num, pct, price } from "../lib/format";
+import { useRefetchInterval } from "../lib/live";
 import { navigate } from "../lib/router";
+import { HistoryChart, MonitoringSection, PositionAlerts, Timeline } from "./PositionMonitoring";
 
 export function PositionDetail({ id }: { id: string }) {
-  const q = useQuery<Position, ApiError>({ queryKey: ["position", id], queryFn: () => api.position(id) });
+  const q = useQuery<Position, ApiError>({ queryKey: ["position", id], queryFn: () => api.position(id), refetchInterval: useRefetchInterval() });
   const analysis = useQuery<Analysis, ApiError>({ queryKey: ["position-analysis", id, q.data?.version], queryFn: () => api.positionAnalysis(id), enabled: !!q.data });
   const [editing, setEditing] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -52,7 +54,6 @@ export function PositionDetail({ id }: { id: string }) {
           <div><dt>Maximum gain</dt><dd><BoundedValue b={p.max_gain} kind="gain" /></dd></div>
           <div><dt>Defined risk</dt><dd>{p.defined_risk ? <span className="badge ok">◆ Yes</span> : <span className="badge bad">◇ No</span>}</dd></div>
           {p.realized_pnl !== null && <div><dt>Realized P&amp;L</dt><dd><Pnl value={p.realized_pnl} /></dd></div>}
-          <div><dt>Monitoring</dt><dd><span className="badge muted">○ Not monitored (Phase 2)</span></dd></div>
         </dl>
         {p.notes && <div className="notes"><strong>Notes</strong><p className="pre">{p.notes}</p></div>}
       </section>
@@ -73,19 +74,25 @@ export function PositionDetail({ id }: { id: string }) {
         </table></div>
       </section>
 
+      <MonitoringSection p={p} />
+
       {p.lifecycle === "OPEN" && (
         <section className="panel" aria-labelledby="est-h">
-          <div className="panel-head"><h3 id="est-h">Current estimate</h3>
-            {!showEstimate && <button className="btn small" onClick={() => setShowEstimate(true)}>Get on-demand estimate</button>}</div>
-          {showEstimate ? <EstimatePanel id={p.id} /> : <p className="muted-text">Not fetched. Estimates use delayed quotes and are recalculated only when you ask; continuous monitoring arrives in Phase 2.</p>}
+          <div className="panel-head"><h3 id="est-h">Fresh estimate</h3>
+            {!showEstimate && <button className="btn small" onClick={() => setShowEstimate(true)}>Get an estimate now</button>}</div>
+          {showEstimate ? <EstimatePanel id={p.id} /> : <p className="muted-text">The values above are from the latest monitoring pass. Fetch a fresh estimate now (from the shared, delayed quote snapshot) without waiting for the next pass.</p>}
         </section>
       )}
+
+      <HistoryChart p={p} />
 
       <section className="panel" aria-labelledby="an-h">
         <h3 id="an-h">Entry analysis</h3>
         {analysis.isPending ? <Loading /> : analysis.isError ? <ErrorState error={analysis.error} /> : <AnalysisPanel a={analysis.data} />}
       </section>
 
+      <PositionAlerts p={p} />
+      <Timeline p={p} />
       <AuditPanel id={p.id} version={p.version} />
 
       <Modal open={editing} onOpenChange={setEditing} title={`Edit ${p.name}`} wide>

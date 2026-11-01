@@ -63,8 +63,8 @@ export function ContractForm({ accountId, existing, onDone }: { accountId: strin
       </div>
       <label>Invalidation <span className="muted-text small">what would make you drop the idea</span>
         <input value={f.invalidation} maxLength={2000} onChange={(e) => set({ invalidation: e.target.value })} /></label>
-      <label>Alert conditions <span className="muted-text small">stored now; evaluated from Phase 2</span>
-        <input value={f.alert_conditions} maxLength={2000} onChange={(e) => set({ alert_conditions: e.target.value })} /></label>
+      <label>Entry conditions <span className="muted-text small">one per line, e.g. <code>ask &lt;= target_entry</code>, <code>oi &gt;= 500</code>, <code>spread_pct &lt; 10</code>. Checked every monitoring pass; while the status is Waiting / Entry qualified / Entry condition lost, it changes automatically when all of them hold (or stop holding).</span>
+        <textarea rows={3} className="mono" value={f.alert_conditions} maxLength={2000} onChange={(e) => set({ alert_conditions: e.target.value })} /></label>
       <label>Notes<textarea rows={2} value={f.notes} maxLength={5000} onChange={(e) => set({ notes: e.target.value })} /></label>
       <FieldErrors error={save.error} />
       <div className="actions"><button className="btn primary" type="submit" disabled={Object.values(errs).some(Boolean) || save.isPending}>

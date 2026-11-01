@@ -166,7 +166,7 @@ def test_unvaluable_position_and_unknown_rule_are_stale_never_hold():
     v = _valuation(pnl=None, pct=None, status="PARTIAL")
     chk = check_position(_position(SPREAD), v, _snap(), MonitorSettings(), None, TODAY, max_age=1e9)
     assert chk.raw_status == STALE and "Leg 1: not in chain" in chk.reasons
-    assert any("pnl_pct" in r and "Can't evaluate" in r for r in chk.reasons)
+    assert any("can't be checked without that data" in r and "`pnl_pct >= 50`" in r for r in chk.reasons)
 
 
 def test_rule_needing_bars_without_bars_is_stale():

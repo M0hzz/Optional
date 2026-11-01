@@ -1,7 +1,8 @@
 // Thin typed client for /api/v1. Errors arrive as {error: {code, message, field_errors, details}}.
 import type {
-  Account, Analysis, AuditEntry, Contract, ContractQuote, DataSources, ImportReport, LegIn, Overview, Page,
-  Position, Preferences, Snapshot, Valuation,
+  Account, AlertRule, Analysis, AuditEntry, Contract, ContractMonitor, ContractQuote, DataSources, EventItem, EventPage,
+  ImportReport, LegIn, MonitorRunInfo, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
+  Preferences, RuleSet, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
 } from "./types";
 
 export interface FieldError { field: string; code: string; message: string }
@@ -40,7 +41,7 @@ async function request<T>(method: string, path: string, body?: unknown, headers:
   return data as T;
 }
 
-const q = (params: Record<string, string | number | boolean | string[] | undefined | null>) => {
+export const q = (params: Record<string, string | number | boolean | string[] | undefined | null>) => {
   const u = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null || v === "") continue;
@@ -84,6 +85,36 @@ export const api = {
     const f = new FormData(); f.append("file", file);
     return request<ImportReport>("POST", `/imports/positions/preview${q({ account_id: accountId })}`, f);
   },
+  // ---------------------------------------------------------------- monitoring (Phase 2)
+  monitorStatus: () => request<MonitorStatus>("GET", "/monitor/status"),
+  runMonitor: () => request<{ run_id: string; ok: boolean; seconds: number; positions: number; contracts: number; rules: number; events: number; notified: number; errors: string[] }>("POST", "/monitor/run"),
+  monitorSettings: () => request<MonitorSettings>("GET", "/monitor/settings"),
+  saveMonitorSettings: (b: MonitorSettings) => request<MonitorSettings>("PUT", "/monitor/settings", b),
+  monitorRuns: (limit = 20) => request<MonitorRunInfo[]>("GET", "/monitor/runs" + q({ limit })),
+  vocabulary: () => request<Vocabulary>("GET", "/monitor/vocabulary"),
+  validateCondition: (condition: string, target: "position" | "contract" | "symbol") =>
+    request<{ valid: boolean; error: string | null }>("POST", "/monitor/validate", { condition, target }),
+  events: (p: { account_id?: string; position_id?: string; contract_id?: string; symbol?: string; type?: string[];
+                severity?: string[]; unacknowledged?: boolean; page?: number; page_size?: number }) =>
+    request<EventPage>("GET", "/events" + q(p)),
+  ackEvent: (id: string, note?: string | null) => request<EventItem>("POST", `/events/${id}/acknowledge`, { note: note ?? null }),
+  ackEvents: (b: { ids?: string[]; up_to_seq?: number; position_id?: string }) =>
+    request<{ acknowledged: number }>("POST", "/events/acknowledge", b),
+  alertRules: (p: { position_id?: string; contract_id?: string; account_id?: string }) =>
+    request<AlertRule[]>("GET", "/alert-rules" + q(p)),
+  createAlertRule: (b: Record<string, unknown>) => request<AlertRule>("POST", "/alert-rules", b),
+  updateAlertRule: (id: string, b: Record<string, unknown>) => request<AlertRule>("PATCH", `/alert-rules/${id}`, b),
+  archiveAlertRule: (id: string, version: number) => request<AlertRule>("POST", `/alert-rules/${id}/archive`, { version }),
+  positionMonitor: (id: string) => request<PositionMonitor>("GET", `/positions/${id}/monitor`),
+  setPositionMonitor: (id: string, b: { version: number; monitoring_enabled?: boolean; use_defaults?: boolean; rules?: RuleSet; timeframe?: string; notify?: boolean }) =>
+    request<PositionMonitor>("PUT", `/positions/${id}/monitor`, b),
+  snapshots: (id: string, limit = 2000) => request<SnapshotRow[]>("GET", `/positions/${id}/snapshots` + q({ limit })),
+  timeline: (id: string) => request<TimelineItem[]>("GET", `/positions/${id}/timeline`),
+  contractMonitor: (id: string) => request<ContractMonitor>("GET", `/watched-contracts/${id}/monitor`),
+  yamlPreview: (accountId: string) => request<{ path: string; rows: YamlRow[] }>("POST", "/imports/scans-yaml/preview" + q({ account_id: accountId })),
+  yamlCommit: (accountId: string, acknowledgeRisk: boolean, key: string) =>
+    request<{ imported: { id: string; name: string }[]; rows: YamlRow[] }>(
+      "POST", "/imports/scans-yaml/commit" + q({ account_id: accountId }), { acknowledge_risk: acknowledgeRisk }, { "Idempotency-Key": key }),
   importCommit: (accountId: string, file: File, mode: "all_or_nothing" | "valid_only", key: string) => {
     const f = new FormData(); f.append("file", file);
     return request<{ imported: Position[]; report: ImportReport }>(

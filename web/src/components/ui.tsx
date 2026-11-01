@@ -3,7 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
 import { ApiError } from "../api/client";
-import type { Bounded, Freshness, Lifecycle } from "../api/types";
+import type { Bounded, Freshness, Lifecycle, MonitorView, Severity } from "../api/types";
 import { age, dateTime, money, pnl, sign } from "../lib/format";
 import { useTerms, type TermKey } from "../lib/terms";
 
@@ -70,6 +70,45 @@ const LIFE: Record<Lifecycle, { icon: string; text: string; cls: string }> = {
 export function LifecycleBadge({ lifecycle }: { lifecycle: Lifecycle }) {
   const l = LIFE[lifecycle];
   return <span className={`badge ${l.cls}`}><span aria-hidden>{l.icon}</span> {l.text}</span>;
+}
+
+const STATUS: Record<string, { icon: string; text: string; cls: string; help: string }> = {
+  STALE_DATA: { icon: "⌛", text: "Stale data", cls: "bad", help: "The data is missing, old or incomplete, so the position's state is unknown. Never treated as safe." },
+  EXIT_CONDITION_MET: { icon: "⛔", text: "Exit condition met", cls: "bad", help: "One of the position's exit rules holds." },
+  ACTION_REQUIRED: { icon: "❗", text: "Action required", cls: "bad", help: "Something needs a decision: an action rule holds, a leg expires today or has expired, or a short option is in the money close to expiration." },
+  WATCH: { icon: "◔", text: "Watch", cls: "warn", help: "A watch rule holds: look at the position." },
+  HOLD: { icon: "●", text: "Hold", cls: "ok", help: "No exit, action or watch rule holds on current data." },
+  CLOSED: { icon: "✓", text: "Closed", cls: "muted", help: "The position isn't open." },
+  NOT_MONITORED: { icon: "○", text: "Not monitored", cls: "muted", help: "Monitoring is off for this position: nothing checks it." },
+};
+
+export const statusInfo = (s: string) => STATUS[s] ?? { icon: "?", text: s, cls: "muted", help: "" };
+
+/** A monitoring status with icon and text; the reasons are in the tooltip. */
+export function StatusBadge({ m, compact }: { m: MonitorView | null | undefined; compact?: boolean }) {
+  if (!m) return <span className="badge muted">… Unknown</span>;
+  const st = statusInfo(m.status);
+  const lines = [st.help, ...m.reasons.map((r) => "• " + r)];
+  if (m.pending) lines.push(`Changing to ${m.pending.label}: seen on ${m.pending.passes} of the ${m.pending.needed} passes needed to confirm.`);
+  if (m.checked_at) lines.push(`Checked ${dateTime(m.checked_at)}.`);
+  return (
+    <Tip text={lines.filter(Boolean).join("\n")}>
+      <span className={`badge ${st.cls} status-badge`} tabIndex={0} aria-label={`Status ${st.text}. ${m.reasons.join(" ")}`}>
+        <span aria-hidden>{st.icon}</span> {st.text}{!compact && m.pending ? <span className="pending"> → {statusInfo(m.pending.status).text}?</span> : null}
+      </span>
+    </Tip>
+  );
+}
+
+const SEV: Record<Severity, { icon: string; text: string; cls: string }> = {
+  critical: { icon: "⛔", text: "Critical", cls: "bad" },
+  warning: { icon: "⚠", text: "Warning", cls: "warn" },
+  info: { icon: "ℹ", text: "Info", cls: "muted" },
+};
+
+export function SeverityBadge({ s }: { s: Severity }) {
+  const x = SEV[s];
+  return <span className={`badge ${x.cls}`}><span aria-hidden>{x.icon}</span> {x.text}</span>;
 }
 
 /** A maximum gain/loss: dollars when bounded, "Unlimited" or "Unknown" otherwise (never $0). */
