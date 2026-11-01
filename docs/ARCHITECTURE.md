@@ -163,12 +163,33 @@ latest fresh snapshots (open P&L, Greeks), never from a fresh network call.
 
 | Module | Responsibility |
 |---|---|
-| `engine.py` | Loads an account's facts once (positions, plans, reviews, journal, objective ticks, policy revisions); `score_day` (pure), streaks, the points ledger sync (idempotent, capped per day), levels, achievements, theme unlocks. Never reads P&L (tested on its source and its results) |
-| `service.py` | Journal entries, reviews (mission reports) with completion rules, objective ticks and rest days |
-| `api/process_routes.py` | `/accounts/{id}/progress`, `/process-score`, `/process-score/history`, `/objectives/{code}`, `/awards`, `/journal`, `/reviews`, `/positions/{id}/review`, `/positions/{id}/report` |
+| `engine.py` | Versioned rules (`process-score/v1`, `points-policy/v1`, `achievement-rules/v1`). Loads an account's facts once; `day_snapshot` (the evidence: ids and booleans) → `evaluate` (pure: MET / VIOLATED / UNKNOWN / NOT_APPLICABLE, TO_DO for today) → `finalize_days` (stores finished days, adds revisions); `sync_awards` (append-only ledger: awards, revocations, replacements; capped per day); `adjust` (manual revocation / correction); streaks, levels, achievements with evidence; `refresh` runs it all, idempotently. Never reads P&L (tested on its source and its results) |
+| `service.py` | Journal entries (archive / restore), reviews with completion rules, version history and the policy results snapshot, objective ticks and rest days |
+| `api/process_routes.py` | `/accounts/{id}/progress`, `/process-score`, `/process-score/history`, `/scores/{day}`, `/ledger`, `/ledger/{entry}/revoke`, `/ledger/{entry}/correct`, `/objectives/{code}`, `/awards`, `/journal` (+ `/archive`, `/restore`), `/reviews`, `/positions/{id}/review` (+ `/history`), `/positions/{id}/policy-results`, `/positions/{id}/report` |
 
-Points are derived from records, not from clicks: the ledger is brought up to date after the writes that can
-earn points and whenever progress is read, and the unique index makes every award happen once.
+Points and scores are derived from records, not from clicks. The ledger and the finished-day scores are
+brought up to date after every write that can change scoring evidence (journal create / archive / restore,
+reviews, objectives, position archive) and whenever progress is read. The sync is idempotent:
+
+- an award exists once per rule and subject (a partial unique index);
+- a revocation is added only while the subject's net points are positive;
+- a replacement is added only after a system revocation, never after a person's revocation;
+- a new score revision is added only when a finished day's evidence key or points differ from its latest revision.
+
+The revision is added only when that revision was computed under the current scoring version.
+
+## Database (Phase 4 completion, migration `0005`)
+
+| Table / change | Contents |
+|---|---|
+| `daily_scores` (new) | One row per finished day and revision: account date, time zone, policy code and version, revision, supersedes id, correction reason, calculated at, backfill, rest day, input snapshot, components, numerator, denominator, percentage, points, source ids. Unique per account, day and revision |
+| `process_awards` (extended) | Ledger columns: `entry_type` (award / revocation / correction / replacement), `rule_version`, `source_ids_json`, `evidence_json`, `timezone`, `backfill`, `references_id`, `reason`, `actor`, `audit_id`. Checks: awards and replacements ≥ 0, revocations ≤ 0, every non-award references an entry. The uniqueness (code, subject) now applies to awards only (partial index) |
+| `user_achievements` (extended) | `rule_version`; `detail_json` holds the evidence |
+| Triggers | `daily_scores`, `process_awards` and `user_achievements` refuse UPDATE and DELETE (`RAISE(ABORT)`) |
+
+Existing awards are kept as `award` entries of `points-policy/v1` with evidence `{"legacy": true}` and the
+time zone from your preferences. Downgrading to `0004` removes the triggers, the score history and every
+non-award entry (back up first; `scripts/portfolio_db.py downgrade` does).
 
 ## Database (Phase 4, migration `0004`)
 
@@ -176,7 +197,7 @@ earn points and whenever progress is read, and the unique index makes every awar
 |---|---|
 | `journal_entries` | Versioned entries: kind, day, title, text, tags, optional position / plan, archived |
 | `trade_reviews` | One per position: plan followed, exit reason and whether planned, mistakes, went well / wrong, lesson, rule-break acknowledgement, would take again, completed |
-| `process_awards` | The points ledger: code, category, points (≥ 0), subject, day; unique per code and subject |
+| `process_awards` | The points ledger: code, category, points (≥ 0), subject, day; unique per code and subject (extended in `0005`) |
 | `daily_objectives` | Manual objective ticks and rest days, one per account, day and code |
 | `user_achievements` | Achievements earned, once each |
 

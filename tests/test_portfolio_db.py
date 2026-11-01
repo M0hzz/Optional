@@ -32,7 +32,7 @@ def test_migration_from_empty_matches_the_models_and_rolls_back(db_url):
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
 
-    assert dbm.upgrade(db_url) == dbm.head_revision() == "0004"
+    assert dbm.upgrade(db_url) == dbm.head_revision() == "0005"
     eng = dbm.make_engine(db_url)
     with eng.connect() as c:
         assert compare_metadata(MigrationContext.configure(c), Base.metadata) == []      # no drift

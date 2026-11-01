@@ -7,6 +7,7 @@
 # Both services publish on 127.0.0.1 only. The project's data/ folder is bind-mounted, so there is ONE
 # SQLite database (data/optlab.sqlite) shared with the host install. Run the API from systemd OR from
 # Docker, not both: a second API on the same database refuses to start (single-instance lock).
+# To try an upgrade first, point OPTLAB_DATA_DIR at a folder holding a COPY of the database (docs/DEPLOY.md).
 name: optlab
 
 x-common: &common
@@ -19,7 +20,7 @@ x-common: &common
   user: "${OPTLAB_UID:-1000}:${OPTLAB_GID:-1000}"
   restart: unless-stopped
   volumes:
-    - ./data:/app/data
+    - ${OPTLAB_DATA_DIR:-./data}:/app/data       # OPTLAB_DATA_DIR: test an upgrade on a backup copy, never the only database
     - ./config.yaml:/app/config.yaml:ro
     - ./scans.yaml:/app/scans.yaml:ro
 

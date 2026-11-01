@@ -16,7 +16,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from sqlalchemy import (JSON, BigInteger, Boolean, CheckConstraint, Date, DateTime, Enum, ForeignKey, Index, Integer,
-                        String, Text, TypeDecorator)
+                        String, Text, TypeDecorator, text)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from .ids import new_id
@@ -579,22 +579,76 @@ class TradeReview(Audited, Base):
 
 
 class ProcessAward(Base):
-    """The points ledger. Append-only and never negative: points come only from process facts (a plan
-    before entry, a review, a skipped setup...), never from profit or the number of trades."""
+    """The points ledger. Append-only (database triggers refuse UPDATE and DELETE). Points come only from
+    process facts, never from profit or the number of trades.
+
+    entry_type
+        award        a rule's points for a subject (+), once per code and subject (partial unique index)
+        revocation   removes an earlier award or replacement (−, the same points), with the reason
+        correction   adjusts an earlier entry by a delta (±), with the reason
+        replacement  grants the points again after a revocation (+), when the evidence is restored
+    Every adjustment references the entry it adjusts (`references_id`), says why, who or what caused it
+    (`actor`) and links the audit record. Effective points = the sum of all entries.
+    """
     __tablename__ = "process_awards"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    entry_type: Mapped[str] = mapped_column(String(16), default="award")
     code: Mapped[str] = mapped_column(String(40))
+    rule_version: Mapped[str] = mapped_column(String(40), default="points-policy/v1")
     category: Mapped[str] = mapped_column(String(16))                   # discipline | research | risk_control | review
     points: Mapped[int] = mapped_column(Integer)
     subject_type: Mapped[str] = mapped_column(String(16))               # position | plan | review | day
     subject_id: Mapped[str] = mapped_column(String(36))
-    day: Mapped[date] = mapped_column(Date)
+    source_ids_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    evidence_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    day: Mapped[date] = mapped_column(Date)                              # account date
+    timezone: Mapped[str] = mapped_column(String(64), default="America/New_York")
+    backfill: Mapped[bool] = mapped_column(Boolean, default=False)
     description: Mapped[str] = mapped_column(String(300))
-    awarded_at: Mapped[datetime] = mapped_column(default=utcnow)
-    __table_args__ = (CheckConstraint("points >= 0", name="ck_process_awards_points"),
-                      Index("ix_process_awards_unique", "account_id", "code", "subject_type", "subject_id", unique=True),
-                      Index("ix_process_awards_account_day", "account_id", "day"))
+    references_id: Mapped[str | None] = mapped_column(String(36))
+    reason: Mapped[str | None] = mapped_column(Text)
+    actor: Mapped[str] = mapped_column(String(64), default="system")
+    audit_id: Mapped[str | None] = mapped_column(String(36))
+    awarded_at: Mapped[datetime] = mapped_column(default=utcnow)        # creation timestamp
+    __table_args__ = (
+        CheckConstraint("entry_type IN ('award', 'revocation', 'correction', 'replacement')", name="ck_process_awards_type"),
+        CheckConstraint("(entry_type IN ('award', 'replacement') AND points >= 0) OR (entry_type = 'revocation' AND points <= 0)"
+                        " OR entry_type = 'correction'", name="ck_process_awards_points"),
+        CheckConstraint("entry_type = 'award' OR references_id IS NOT NULL", name="ck_process_awards_reference"),
+        Index("ix_process_awards_unique", "account_id", "code", "subject_type", "subject_id", unique=True,
+              sqlite_where=text("entry_type = 'award'")),
+        Index("ix_process_awards_account_day", "account_id", "day"),
+        Index("ix_process_awards_subject", "account_id", "code", "subject_type", "subject_id"),
+    )
+
+
+class DailyScore(Base):
+    """A finished account day's process score: immutable (triggers refuse UPDATE and DELETE). When the
+    evidence for a finished day changes, a new revision is added that references the one it supersedes and
+    says why; earlier revisions stay. Scores computed under an older scoring version are never recomputed."""
+    __tablename__ = "daily_scores"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    account_date: Mapped[date] = mapped_column(Date)
+    timezone: Mapped[str] = mapped_column(String(64))
+    policy_code: Mapped[str] = mapped_column(String(40))                # process-score
+    policy_version: Mapped[str] = mapped_column(String(16))             # v1
+    revision: Mapped[int] = mapped_column(Integer)
+    supersedes_id: Mapped[str | None] = mapped_column(String(36))
+    correction_reason: Mapped[str | None] = mapped_column(Text)
+    calculated_at: Mapped[datetime] = mapped_column(default=utcnow)
+    backfill: Mapped[bool] = mapped_column(Boolean, default=False)
+    rest_day: Mapped[bool] = mapped_column(Boolean, default=False)
+    input_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON)
+    components_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    numerator: Mapped[int] = mapped_column(Integer)
+    denominator: Mapped[int] = mapped_column(Integer)
+    percentage: Mapped[int | None] = mapped_column(Integer)
+    points: Mapped[int] = mapped_column(Integer)
+    source_ids_json: Mapped[list[str]] = mapped_column(JSON, default=list)
+    __table_args__ = (Index("ix_daily_scores_revision", "account_id", "account_date", "revision", unique=True),
+                      CheckConstraint("numerator >= 0 AND denominator >= numerator", name="ck_daily_scores_counts"))
 
 
 class DailyObjective(Base):
@@ -611,10 +665,13 @@ class DailyObjective(Base):
 
 
 class UserAchievement(Base):
+    """An achievement, earned once (unique per account and code; triggers refuse UPDATE and DELETE), with the
+    rule version and the evidence it was earned on."""
     __tablename__ = "user_achievements"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
     code: Mapped[str] = mapped_column(String(40))
+    rule_version: Mapped[str] = mapped_column(String(40), default="achievement-rules/v1")
     earned_at: Mapped[datetime] = mapped_column(default=utcnow)
-    detail_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    detail_json: Mapped[dict[str, Any]] = mapped_column(default=dict)          # the evidence
     __table_args__ = (Index("ix_user_achievements_unique", "account_id", "code", unique=True),)

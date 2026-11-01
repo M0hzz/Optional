@@ -282,16 +282,42 @@ export interface Preferences {
 }
 
 // ------------------------------------------------------------------ process and progression (Phase 4)
-export interface ScoreItem { code: string; label: string; group: "objective" | "trade" | "review"; status: "met" | "not_met" | "na" | "pending"; detail: string; kind: "auto" | "manual"; subject_id: string | null }
-export interface DayScore { day: string; rest_day: boolean; score: number | null; met: number; applicable: number; in_progress: boolean; items: ScoreItem[] }
-export interface Award { code: string; category: string; points: number; description: string; day: string; awarded_at: string }
-export interface Achievement { code: string; name: string; description: string; goal: number; progress: number; earned_at: string | null }
+// MET earns credit · VIOLATED counts, no credit · UNKNOWN counts, no credit, disclosed · NOT_APPLICABLE excluded ·
+// TO_DO: today only (an unfinished actionable item), never stored for a finished day
+export type ScoreState = "MET" | "VIOLATED" | "UNKNOWN" | "NOT_APPLICABLE" | "TO_DO";
+export interface ScoreItem { code: string; label: string; group: "objective" | "trade" | "review"; state: ScoreState; detail: string; kind: "auto" | "manual"; subject_id: string | null }
+export interface DayScore {
+  day: string; timezone: string; version: string; rest_day: boolean; score: number | null; met: number; applicable: number; unknown: number;
+  in_progress: boolean; items: ScoreItem[]; points: number | null; stored: boolean;
+  // stored (finished) days only
+  id?: string; revision?: number; supersedes_id?: string | null; correction_reason?: string | null; calculated_at?: string; backfill?: boolean;
+  source_ids?: string[];
+}
+export interface ScoreHistoryDay { day: string; score: number | null; rest_day: boolean; met: number; applicable: number; unknown: number; stored: boolean; revision: number | null; version: string; in_progress: boolean; scheduled: boolean }
+export type LedgerType = "award" | "revocation" | "correction" | "replacement";
+export interface LedgerEntry {
+  id: string; entry_type: LedgerType; code: string; rule_version: string; category: string; points: number; subject_type: string; subject_id: string;
+  source_ids: string[]; evidence: Record<string, unknown>; day: string; timezone: string; backfill: boolean; description: string;
+  references_id: string | null; reason: string | null; actor: string; audit_id: string | null; awarded_at: string; note?: string | null;
+}
+export interface PointsSummary {
+  lifetime_awarded: number; revoked_or_corrected: number; effective: number; total: number;
+  by_category: Record<"discipline" | "research" | "risk_control" | "review", number>; entries: Record<LedgerType, number>;
+}
+export interface Versions { process_score: string; points_policy: string; achievement_rules: string }
+export interface Achievement { code: string; name: string; description: string; goal: number; progress: number; earned_at: string | null; rule_version: string; evidence: Record<string, unknown> | null }
 export interface Progress {
-  points: { total: number; by_category: Record<"discipline" | "research" | "risk_control" | "review", number> };
+  versions: Versions; points: PointsSummary;
   level: { level: number; colony_name: string; points_for_level: number; points_for_next: number; progress: number };
   streak: { current: number; best: number; threshold: number };
-  achievements: Achievement[]; recent_awards: Award[]; themes: { id: ThemeId; unlock_level: number; unlocked: boolean }[];
-  new: { awards: number; achievements: string[] }; today: DayScore;
+  achievements: Achievement[]; recent_awards: LedgerEntry[]; themes: { id: ThemeId; unlock_level: number; unlocked: boolean }[];
+  new: { ledger: Partial<Record<LedgerType, number>>; achievements: string[] }; today: DayScore;
+}
+export interface PolicyResult { code: string; name: string; result: "PASS" | "WARNING" | "BLOCKED" | "UNKNOWN"; value: string | null; limit: string | null; explanation: string; source: string | null; policy_revision: number | null; override_recorded: boolean }
+export interface PolicyResults {
+  overall: "PASS" | "WARNING" | "BLOCKED" | "UNKNOWN"; policy_revision: number | null; policy_id: string | null; evaluated_at: string | null;
+  override_recorded: boolean; unplanned: boolean; plan: { id: string; title: string; created_after_entry: boolean } | null;
+  violated: PolicyResult[]; unknown: PolicyResult[]; checks: PolicyResult[];
 }
 export type JournalKind = "daily_thesis" | "eod_review" | "decision" | "note" | "lesson";
 export interface JournalEntryT {
@@ -302,11 +328,13 @@ export interface Review {
   id: string; position_id: string; followed_plan: string | null; exit_reason: string | null; exit_followed_plan: string | null;
   mistakes: string[]; went_well: string | null; went_wrong: string | null; lessons: string | null;
   rule_violation_acknowledged: boolean; would_take_again: string | null; completed_at: string | null; version: number;
+  policy_results?: PolicyResults | null; acknowledged_rules?: string[];
 }
+export interface ReviewVersion { at: string; action: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null }
 export interface PendingReview { position_id: string; name: string; underlying: string; closed_at: string | null; days_waiting: number | null; overdue: boolean; rule_violation: boolean; started: boolean; plan_id: string | null }
 export interface MissionReport {
   position: Position; plan: Plan | null; review: Review | null; journal: JournalEntryT[]; timeline: TimelineItem[];
-  points: { code: string; points: number; category: string; description: string }[]; pnl_note: string;
+  points: LedgerEntry[]; points_net: number; policy_results: PolicyResults; review_history: ReviewVersion[]; pnl_note: string;
 }
 export interface DataSources {
   quotes: { mode: string; provider: string; delay_minutes: number; synthetic: boolean; greeks_source: string };

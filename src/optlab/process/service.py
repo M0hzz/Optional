@@ -129,8 +129,26 @@ def journal_update(s: Session, jid: str, data: JournalUpdate) -> JournalEntry:
 def journal_archive(s: Session, jid: str, version: int) -> JournalEntry:
     e = journal_get(s, jid)
     svc._check_version(e, version)
+    if e.archived_at is not None:
+        raise svc.DomainError("ALREADY_ARCHIVED", "This journal entry is already archived.", 409)
     e.archived_at = utcnow()
     s.flush()
+    s.add(AuditEvent(entity_type="journal", entity_id=e.id, action="archive", before_json={"archived_at": None},
+                     after_json={"archived_at": e.archived_at.isoformat()}))
+    return e
+
+
+def journal_restore(s: Session, jid: str, version: int) -> JournalEntry:
+    """Bring an archived entry back. Its points come back as a replacement ledger entry (never a re-award)."""
+    e = journal_get(s, jid)
+    svc._check_version(e, version)
+    if e.archived_at is None:
+        raise svc.DomainError("NOT_ARCHIVED", "This journal entry isn't archived.", 409)
+    before = {"archived_at": e.archived_at.isoformat()}
+    e.archived_at = None
+    e.updated_at = utcnow()
+    s.flush()
+    s.add(AuditEvent(entity_type="journal", entity_id=e.id, action="restore", before_json=before, after_json={"archived_at": None}))
     return e
 
 
@@ -157,6 +175,37 @@ def journal_list(s: Session, account_id: str, kind: list[str] | None = None, sta
 REQUIRED = ("followed_plan", "exit_reason", "exit_followed_plan", "lessons")
 
 
+def policy_results(s: Session, p) -> dict:
+    """Every risk result recorded for the position at entry, as reviewed: rule code and name, result, observed value
+    and limit, the explanation, the policy revision, and whether an explicit override was recorded at entry.
+    Also says whether the position was unplanned (no plan, or a plan written after the entry)."""
+    from ..planning.plans import get as get_plan
+
+    risk = p.entry_risk_json or {}
+    plan = get_plan(s, p.plan_id) if p.plan_id else None
+    unplanned = plan is None or plan.created_at > p.opened_at
+    override = bool(p.rule_violation)
+    order = {"BLOCKED": 0, "UNKNOWN": 1, "WARNING": 2, "PASS": 3}
+    checks = [{"code": c.get("code"), "name": c.get("label"), "result": c.get("result"), "value": c.get("value"),
+               "limit": c.get("limit"), "explanation": c.get("reason"), "source": c.get("source"),
+               "policy_revision": risk.get("policy_revision"),
+               "override_recorded": override and c.get("result") == "BLOCKED"} for c in risk.get("checks", [])]
+    checks.sort(key=lambda c: (order.get(c["result"] or "", 9), c["code"] or ""))
+    if not risk:
+        checks = [{"code": "NO_RISK_CHECK", "name": "Entry risk check", "result": "UNKNOWN", "value": None, "limit": None,
+                   "explanation": "No risk check was recorded when this position was entered (imported, or entered "
+                                  "before risk checks existed): compliance can't be judged.", "source": None,
+                   "policy_revision": None, "override_recorded": False}]
+    return {"overall": risk.get("overall") or "UNKNOWN", "policy_revision": risk.get("policy_revision"),
+            "policy_id": risk.get("policy_id"), "evaluated_at": risk.get("evaluated_at"), "override_recorded": override,
+            "unplanned": unplanned,
+            "plan": None if plan is None else {"id": plan.id, "title": plan.title,
+                                               "created_after_entry": plan.created_at > p.opened_at},
+            "violated": [c for c in checks if c["result"] == "BLOCKED"],
+            "unknown": [c for c in checks if c["result"] == "UNKNOWN"],
+            "checks": checks}
+
+
 def review_get(s: Session, position_id: str) -> TradeReview | None:
     return s.scalar(select(TradeReview).where(TradeReview.position_id == position_id))
 
@@ -177,13 +226,18 @@ def review_save(s: Session, position_id: str, data: ReviewIn) -> TradeReview:
             raise svc.DomainError("VERSION_REQUIRED", "This review exists: send the version you loaded.", 422)
         svc._check_version(r, data.version)
         before = {k: getattr(r, k) for k in ("followed_plan", "exit_reason", "exit_followed_plan", "went_well", "went_wrong",
-                                             "lessons", "would_take_again")} | {"mistakes": r.mistakes_json}
+                                             "lessons", "would_take_again", "rule_violation_acknowledged")} | {
+            "mistakes": r.mistakes_json, "completed": r.completed_at is not None, "version": r.version}
     for k in ("followed_plan", "exit_reason", "exit_followed_plan", "went_well", "went_wrong", "lessons", "would_take_again"):
         setattr(r, k, getattr(data, k))
     if not p.plan_id:
         r.followed_plan = r.followed_plan or "no_plan"
     r.mistakes_json = sorted(set(data.mistakes))
     r.rule_violation_acknowledged = data.rule_violation_acknowledged
+    pr = policy_results(s, p)
+    before_meta = r.metadata_json or {}
+    r.metadata_json = {**before_meta, "policy_results": pr,
+                       "acknowledged_rules": [c["code"] for c in pr["violated"]] if data.rule_violation_acknowledged else []}
     if data.complete:
         missing = [k for k in REQUIRED if not getattr(r, k)]
         if p.rule_violation and not data.rule_violation_acknowledged:
@@ -199,9 +253,22 @@ def review_save(s: Session, position_id: str, data: ReviewIn) -> TradeReview:
                  symbol=p.underlying, account_id=p.account_id, position_id=p.id, source={"review_id": r.id})
     r.updated_at = utcnow()
     s.flush()
+    after = {k: getattr(r, k) for k in ("followed_plan", "exit_reason", "exit_followed_plan", "went_well", "went_wrong",
+                                        "lessons", "would_take_again", "rule_violation_acknowledged")}
     s.add(AuditEvent(entity_type="review", entity_id=r.id, action="edit" if before else "create", before_json=before,
-                     after_json={"completed": r.completed_at is not None}))
+                     after_json={**after, "mistakes": r.mistakes_json, "completed": r.completed_at is not None,
+                                 "version": r.version}))
     return r
+
+
+def review_history(s: Session, position_id: str) -> list[dict]:
+    """Every saved version of the review (oldest first), from the audit trail: nothing is overwritten unrecorded."""
+    r = review_get(s, position_id)
+    if r is None:
+        return []
+    rows = s.scalars(select(AuditEvent).where(AuditEvent.entity_type == "review", AuditEvent.entity_id == r.id)
+                     .order_by(AuditEvent.at, AuditEvent.id))
+    return [{"at": a.at, "action": a.action, "before": a.before_json, "after": a.after_json} for a in rows]
 
 
 def pending_reviews(s: Session, account_id: str) -> list[dict]:

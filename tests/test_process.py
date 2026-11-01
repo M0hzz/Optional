@@ -83,19 +83,31 @@ def progress(client, account):
 def test_a_day_with_no_trades_can_score_full_marks(client, account):
     set_policy(client, account, max_daily_realized_loss="100")
     sc = complete_day(client, account)
-    items = {i["code"]: i["status"] for i in sc["items"]}
+    items = {i["code"]: i["state"] for i in sc["items"]}
     assert sc["score"] == 100 and sc["met"] == sc["applicable"] == 5
-    assert items["REVIEW_POSITIONS"] == items["REVIEW_EXPIRATIONS"] == items["INVALIDATION_BEFORE_ENTRY"] == "na"
+    assert items["REVIEW_POSITIONS"] == items["REVIEW_EXPIRATIONS"] == items["INVALIDATION_BEFORE_ENTRY"] == "NOT_APPLICABLE"
     assert not any(i["group"] == "trade" for i in sc["items"])
     p = progress(client, account)
     codes = {a["code"] for a in p["recent_awards"]}
     assert {"DAILY_THESIS", "EOD_REVIEW", "ALL_OBJECTIVES"} <= codes
 
 
+def _code_without_docs(module) -> str:
+    """The module's code with every docstring and comment removed (AST round trip)."""
+    import ast
+
+    tree = ast.parse(inspect.getsource(module))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef, ast.AsyncFunctionDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(getattr(first, "value", None), ast.Constant) \
+                    and isinstance(first.value.value, str):
+                node.body = node.body[1:] or [ast.Pass()]
+    return ast.unparse(tree).lower()
+
+
 def test_scoring_code_never_reads_profit_or_loss():
-    code = inspect.getsource(pe).replace(pe.__doc__ or "", "").lower()          # the code, without its documentation
-    code = "\n".join(line.split("#")[0] for line in code.splitlines())         # and without comments
-    code = code.replace('"""pure: the day\'s components and score from the loaded facts. reads no profit or loss."""', "")
+    code = _code_without_docs(pe)
     code = code.replace("max_daily_realized_loss", "").replace("maximum daily realized loss", "")   # a policy setting, not P&L
     for word in ("pnl", "realized", "profit", "net_premium", "exit_value", "quantity", "fill_price"):
         assert word not in code, word
@@ -140,8 +152,8 @@ def test_unplanned_and_rule_breaking_trades_earn_nothing(client, account):
     p = progress(client, account)
     assert not [a for a in p["recent_awards"] if a["code"] in pe.POSITION_CODES]
     sc = p["today"]
-    trade = {i["code"]: i["status"] for i in sc["items"] if i["group"] == "trade"}
-    assert trade["PLANNED"] == "not_met" and trade["WITHIN_POLICY"] == "not_met"
+    trade = {i["code"]: i["state"] for i in sc["items"] if i["group"] == "trade"}
+    assert trade["PLANNED"] == "VIOLATED" and trade["WITHIN_POLICY"] == "VIOLATED"
 
 
 def test_more_trades_in_a_day_never_earn_more(client, account):
@@ -196,12 +208,12 @@ def test_objectives_validation_and_rest_day(client, account):
     fut = client.post(f"{API}/accounts/{account['id']}/objectives/CHECK_DATA", json={"day": (today_et() + timedelta(days=1)).isoformat()})
     assert fut.status_code == 422
     rest = tick(client, account, "REST_DAY")
-    assert rest["rest_day"] and rest["score"] is None and all(i["status"] == "na" for i in rest["items"])
+    assert rest["rest_day"] and rest["score"] is None and all(i["state"] == "NOT_APPLICABLE" for i in rest["items"])
 
 
 def test_today_shows_pending_not_failed(client, account):
     sc = client.get(f"{API}/accounts/{account['id']}/process-score").json()
-    assert sc["in_progress"] and {i["status"] for i in sc["items"] if i["code"] == "CHECK_DATA"} == {"pending"}
+    assert sc["in_progress"] and {i["state"] for i in sc["items"] if i["code"] == "CHECK_DATA"} == {"TO_DO"}
 
 
 def test_journal_edit_history_and_dates(client, account):

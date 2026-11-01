@@ -352,7 +352,29 @@ Each position opened that day adds four items:
 
 Reviews add one item: no closed position waits more than 2 days.
 
-**Daily process score** = items met ÷ items that apply. With no trades the trade items don't apply, so a quiet day can reach **100%**. Today's open items show as *to do*, not as failures. **Rest day** marks a day as not scored; it doesn't break your streak.
+Every item has one of four results:
+
+| Result | Counts? | Credit? | Meaning |
+|---|---|---|---|
+| **Met** | yes | yes | done |
+| **Not met** (VIOLATED) | yes | no | not done, or done against the rule |
+| **Unknown** | yes | no | the data to judge it is missing (for example no risk check was recorded); shown, never treated as a pass |
+| **Doesn't apply** (NOT_APPLICABLE) | no | — | left out of the score (no open positions, no entries, imported history) |
+
+**Daily process score** = met ÷ (met + not met + unknown). With no trades the trade items don't apply, so a quiet day can reach **100%**. For today only, actionable items not done yet show as **To do**; that state is never stored for a finished day. **Rest day** marks a day as not scored; it doesn't break your streak. Days follow the time zone in your preferences.
+
+### Finished days are stored (score history)
+
+When a day ends, in your time zone, its score is stored and never changes silently. Each stored day keeps:
+
+- the account date and time zone;
+- the scoring rules and version (`process-score/v1`);
+- when it was calculated, and whether it was backfilled (calculated more than a day after the day ended);
+- the input snapshot: record ids and yes/no facts, never text;
+- each item's result, the numerator, the denominator, the percentage and the day's points;
+- the ids of the records it was computed from.
+
+If a record behind a finished day changes, a **new revision** is stored. It references the one it supersedes and says what changed, for example "Write a daily market thesis: MET → VIOLATED; points for the day 5 → 0". Earlier revisions stay. Examples of such changes: you archive or restore a thesis, or add a record for a past day. Ordinary edits that don't change the evidence add no revision; rewording a journal entry is one. A day stored under an older scoring version is never recomputed. Click a bar in the progress sparkline to see a day's revisions.
 
 ### Points, level, streak, achievements
 
@@ -360,12 +382,35 @@ Points come only from process. Each one, and the daily caps, are listed on the *
 
 - **What earns points:** a plan before entry, a defined maximum loss, staying within policy, liquid contracts, waiting for confirmation, skipping an armed setup, a completed review, following the planned exit, an honest review of a rule break, the daily thesis, the end-of-day review, and all objectives met.
 - **What never counts:** profit or loss, size, the number of trades, and time on screen. Tests check that P&L is never read by the scoring code, and that changing a realized P&L changes nothing.
-- **Points never go down.** A broken rule earns nothing and asks for a review, so hiding a losing trade can never pay.
+- **Earned points never go down for legitimate progress.** A broken rule earns nothing and asks for a review, so hiding a losing trade can never pay.
+- **The points ledger is append-only.** Each award records:
+  - the rule and its version (`points-policy/v1`);
+  - the subject;
+  - the source records;
+  - the evidence;
+  - the day and time zone;
+  - whether it was backfilled.
+
+  Nothing is edited or deleted. Changes are separate entries that reference the original and give a reason, who made the change (you or the automatic sync), the time, and the linked audit record. There are three kinds:
+  - **revocation:** removes an award whose evidence no longer holds, or that was wrong (a duplicate, say);
+  - **correction:** changes an award's points by a stated amount;
+  - **replacement:** restores revoked points when their evidence holds again.
+
+  The progress panel shows **lifetime awarded**, **revoked or corrected**, and **current effective** points. Levels use the effective points.
+- **What happens when a scored record changes:**
+  - Archiving a daily thesis or end-of-day review revokes its points.
+  - Archiving a position as *entered in error* revokes that position's points.
+  - Changing a review answer that earned points revokes that award, for example the exit is no longer marked as planned.
+  - Each revocation gives the reason, and the day gets a new score revision.
+  - Restoring the record adds a replacement.
+  - Archiving a closed position, or a plan after it was skipped, is housekeeping. Those points are kept, and the ledger says why.
+  - Editing text or tags changes nothing.
+- **Revoking by hand:** in the ledger (**Points ledger** in the progress panel) you can revoke an award with a reason. The automatic sync never undoes your revocation.
 - **Daily caps:** at most three positions and three skipped setups earn points per day, so more trades never earn more.
 
 **Streak:** consecutive scheduled days at 80% or better.
 
-**Achievements** reward discipline only:
+**Achievements** reward discipline only. Each is awarded once and stored with its rule version (`achievement-rules/v1`) and its evidence (the record ids that met the goal):
 
 - five planned trades in a row;
 - ten reviews;
@@ -398,14 +443,23 @@ The **mission report** brings together:
 - the position;
 - its plan and the planned-versus-actual comparison;
 - the entry risk check;
-- the review;
+- the review, and every earlier saved version of it;
+- the **policy results**. Each risk result recorded at entry is listed with:
+  - the rule code and name;
+  - PASS, WARNING, BLOCKED or UNKNOWN;
+  - the observed value and the limit;
+  - the explanation;
+  - the policy revision;
+  - whether you recorded an explicit override when you entered the position.
+
+  Positions entered without a plan, or with a plan written after the entry, are marked **unplanned**;
 - journal notes;
 - the timeline;
-- the points it earned.
+- its points ledger entries, including any revocations.
 
 Realized P&L is shown for the record and labelled *never scored*.
 
-**Journal** (Archives) holds daily theses, end-of-day reviews, decisions, lessons and notes. An entry can be linked to a position or a plan. Edits keep the earlier text in the audit log; entries are archived, never deleted.
+**Journal** (Archives) holds daily theses, end-of-day reviews, decisions, lessons and notes. An entry can be linked to a position or a plan. Edits keep the earlier text in the audit log; entries are archived, never deleted. **Show archived** lists archived entries, which can be restored.
 
 ## Importing positions from scans.yaml
 

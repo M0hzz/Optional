@@ -245,7 +245,8 @@ caption { text-align: left; padding: 4px 0; }
 .objectives li { display: block; line-height: 1.5; }
 .objectives li .btn { margin-left: 4px; }
 .objectives li.met { color: var(--ok); }
-.objectives li.na { color: var(--muted); }
+.objectives li.not_applicable { color: var(--muted); }
+.objectives li.unknown { color: var(--warn); }
 .progress-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
 .progress-grid .wide-cell { grid-column: 1 / -1; }
 .level { display: flex; align-items: baseline; gap: 8px; font-size: 15px; }
@@ -253,7 +254,11 @@ caption { text-align: left; padding: 4px 0; }
 .bar { height: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 6px 0; }
 .bar span { display: block; height: 100%; background: var(--accent); }
 .spark { display: flex; align-items: flex-end; gap: 3px; height: 44px; margin-top: 6px; }
-.spark-bar { width: 9px; border-radius: 2px; background: var(--border); display: inline-block; }
+.spark-bar { width: 9px; border-radius: 2px; background: var(--border); display: inline-block; border: 0; padding: 0; cursor: pointer; }
+.spark-bar:focus-visible { outline: 2px solid var(--accent, var(--info)); outline-offset: 1px; }
+.facts.tight { gap: 2px 12px; margin: 4px 0; }
+details.revision { border-top: 1px solid var(--border); padding: 6px 0; }
+details.revision summary { cursor: pointer; }
 .spark-bar.good { background: var(--ok); }
 .spark-bar.low { background: var(--warn); }
 .spark-bar.rest { background: var(--info); opacity: .5; }

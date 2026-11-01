@@ -263,7 +263,12 @@ def close_position(position_id: str, body: PositionClose, request: Request, s: W
 
 @router.post("/positions/{position_id}/archive", response_model=PositionOut, tags=["positions"])
 def archive_position(position_id: str, body: PositionArchive, request: Request, s: Write):
-    return _pos(request, s, svc.archive_position(s, position_id, body))
+    from ..process import engine as pe
+    from ..process.service import tz_of
+
+    p = svc.archive_position(s, position_id, body)
+    pe.refresh(s, p.account_id, tz_of(s))          # an entered-in-error archive revokes that position's points, with the reason
+    return _pos(request, s, p)
 
 
 @router.get("/positions/{position_id}/valuation", tags=["positions"])

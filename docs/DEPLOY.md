@@ -114,6 +114,28 @@ defaults apply (small-account limits below $1,000 of account value).
 and achievement tables only. Points for positions, plans and reviews you already have are counted the first
 time the dashboard loads.
 
+**Completing Phase 4 (migration `0005`):** the same steps. Back up first:
+`python scripts/portfolio_db.py backup`. Migration `0005`:
+
+- adds the stored score history (`daily_scores`);
+- extends the points ledger with its audit columns;
+- makes the score history, the ledger and the achievements append-only (database triggers).
+
+Existing points are kept as legacy awards. The first time the dashboard loads, finished days from the last 90 days are stored and flagged as backfilled.
+
+**Trying an upgrade on a copy first (Docker):** never test an upgrade on your only database.
+
+```bash
+mkdir -p ~/optlab-upgrade-test
+python scripts/portfolio_db.py backup ~/optlab-upgrade-test/optlab.sqlite
+OPTLAB_DATA_DIR=~/optlab-upgrade-test OPTLAB_API_PORT=8601 OPTLAB_RESEARCH_PORT=8519 \
+  docker compose up -d --build
+curl -s http://127.0.0.1:8601/api/v1/health      # "revision": "0005"
+docker compose down
+```
+
+The copy is migrated; `./data` is untouched. Use a different port from your running API.
+
 ## Database: migrations, backups, restore
 
 - The API applies **forward** migrations at startup, under a lock, and never downgrades or resets.

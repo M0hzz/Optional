@@ -11,8 +11,9 @@ import { Dashboard } from "../views/Dashboard";
 import { EventFeed, MonitorPanel } from "../views/MonitorWidgets";
 import { RiskPanel } from "../components/RiskReport";
 import { PlanDetail, PlansView } from "../views/Plans";
-import { DisciplinePanel, ProgressPanel } from "../views/Process";
-import type { Progress } from "../api/types";
+import { DisciplinePanel, LedgerView, PolicyResultsTable, ProgressPanel, ScoreRevisions } from "../views/Process";
+import type { DayScore, LedgerEntry, PolicyResults, Progress } from "../api/types";
+import { fireEvent } from "@testing-library/react";
 import type { Plan, RiskReport } from "../api/types";
 
 function wrap(ui: ReactNode, mode: "professional" | "colony" = "professional") {
@@ -281,22 +282,39 @@ describe("plans", () => {
   });
 });
 
+const AWARD: LedgerEntry = { id: "e1", entry_type: "award", code: "DAILY_THESIS", rule_version: "points-policy/v1", category: "research", points: 5,
+  subject_type: "day", subject_id: "2026-11-02", source_ids: ["j1"], evidence: { journal_ids: ["j1"] }, day: "2026-11-02", timezone: "America/New_York",
+  backfill: false, description: "Wrote the daily market thesis: 2026-11-02", references_id: null, reason: null, actor: "system:process-sync", audit_id: "a1",
+  awarded_at: "2026-11-02T15:00:00Z", note: null };
+const REVOKED: LedgerEntry = { ...AWARD, id: "e2", entry_type: "revocation", points: -5, references_id: "e1", description: "Revoked: Wrote the daily market thesis: 2026-11-02",
+  reason: "the daily thesis for 2026-11-02 was archived (entry j1)", awarded_at: "2026-11-03T15:00:00Z" };
 const PROGRESS: Progress = {
-  points: { total: 65, by_category: { discipline: 30, research: 5, risk_control: 20, review: 10 } },
+  versions: { process_score: "process-score/v1", points_policy: "points-policy/v1", achievement_rules: "achievement-rules/v1" },
+  points: { lifetime_awarded: 70, revoked_or_corrected: -5, effective: 65, total: 65, by_category: { discipline: 30, research: 5, risk_control: 20, review: 10 },
+            entries: { award: 8, revocation: 1, correction: 0, replacement: 0 } },
   level: { level: 2, colony_name: "Outpost", points_for_level: 50, points_for_next: 150, progress: 0.15 },
   streak: { current: 3, best: 5, threshold: 80 },
-  achievements: [{ code: "FIRST_PLAN", name: "First mission briefed", description: "Arm your first plan.", goal: 1, progress: 1, earned_at: "2026-11-02T15:00:00Z" },
-                 { code: "REVIEWS_TEN", name: "Ten mission reports", description: "Complete ten reviews.", goal: 10, progress: 3, earned_at: null }],
-  recent_awards: [{ code: "DAILY_THESIS", category: "research", points: 5, description: "Wrote the daily market thesis: 2026-11-02", day: "2026-11-02", awarded_at: "2026-11-02T15:00:00Z" }],
+  achievements: [{ code: "FIRST_PLAN", name: "First mission briefed", description: "Arm your first plan.", goal: 1, progress: 1, earned_at: "2026-11-02T15:00:00Z", rule_version: "achievement-rules/v1", evidence: { armed_plan_ids: ["p1"] } },
+                 { code: "REVIEWS_TEN", name: "Ten mission reports", description: "Complete ten reviews.", goal: 10, progress: 3, earned_at: null, rule_version: "achievement-rules/v1", evidence: null }],
+  recent_awards: [REVOKED, AWARD],
   themes: [{ id: "default", unlock_level: 1, unlocked: true }, { id: "aurora", unlock_level: 3, unlocked: false }],
-  new: { awards: 0, achievements: [] },
-  today: { day: "2026-11-02", rest_day: false, score: 100, met: 5, applicable: 5, in_progress: true, items: [
-    { code: "REVIEW_POSITIONS", label: "Review open positions", group: "objective", status: "na", detail: "no open positions", kind: "manual", subject_id: null },
-    { code: "CHECK_DATA", label: "Confirm data-source status", group: "objective", status: "met", detail: "", kind: "manual", subject_id: null },
-    { code: "DAILY_THESIS", label: "Write a daily market thesis", group: "objective", status: "met", detail: "written", kind: "auto", subject_id: null },
-    { code: "INVALIDATION_BEFORE_ENTRY", label: "Record invalidation before entry", group: "objective", status: "na", detail: "no positions opened", kind: "auto", subject_id: null },
+  new: { ledger: {}, achievements: [] },
+  today: { day: "2026-11-02", timezone: "America/New_York", version: "process-score/v1", rest_day: false, score: 100, met: 5, applicable: 5, unknown: 0, in_progress: true, points: 5, stored: false, items: [
+    { code: "REVIEW_POSITIONS", label: "Review open positions", group: "objective", state: "NOT_APPLICABLE", detail: "no open positions", kind: "manual", subject_id: null },
+    { code: "CHECK_DATA", label: "Confirm data-source status", group: "objective", state: "MET", detail: "", kind: "manual", subject_id: null },
+    { code: "DAILY_THESIS", label: "Write a daily market thesis", group: "objective", state: "MET", detail: "written", kind: "auto", subject_id: null },
+    { code: "INVALIDATION_BEFORE_ENTRY", label: "Record invalidation before entry", group: "objective", state: "NOT_APPLICABLE", detail: "no positions opened", kind: "auto", subject_id: null },
   ] },
 };
+const STORED: DayScore = { ...PROGRESS.today, day: "2026-11-01", in_progress: false, stored: true, id: "s1", revision: 1, supersedes_id: null, correction_reason: null,
+  calculated_at: "2026-11-02T05:00:00Z", backfill: false, score: 80, met: 4, unknown: 1, items: [
+    { code: "WITHIN_POLICY", label: "XYZ: within the risk policy", group: "trade", state: "UNKNOWN", detail: "no risk check was recorded", kind: "auto", subject_id: "x" },
+    { code: "REVIEW_POSITIONS", label: "Review open positions", group: "objective", state: "NOT_APPLICABLE", detail: "no open positions", kind: "manual", subject_id: null }] };
+const PR: PolicyResults = { overall: "BLOCKED", policy_revision: 2, policy_id: "rp", evaluated_at: null, override_recorded: true, unplanned: true, plan: null,
+  violated: [], unknown: [], checks: [
+    { code: "MAX_LOSS", name: "Maximum loss per position", result: "BLOCKED", value: "$400.00", limit: "$100.00", explanation: "Above your limit.", source: "policy", policy_revision: 2, override_recorded: true },
+    { code: "OPEN_POSITIONS", name: "Open positions", result: "PASS", value: "1", limit: "5", explanation: "Within the limit.", source: "policy", policy_revision: 2, override_recorded: false }] };
+PR.violated = [PR.checks[0]];
 
 describe("process and progression", () => {
   it("a day without trades shows 100% with the trade items not applicable, and offers a rest day", async () => {
@@ -316,6 +334,45 @@ describe("process and progression", () => {
     expect(screen.getByText("Ten mission reports")).toBeInTheDocument();
     expect(screen.getByText("3/10")).toBeInTheDocument();
     expect(screen.queryByText(/profit/i)).toBeNull();
+  });
+  it("shows lifetime, revoked and effective points, and revocations with their reason", async () => {
+    mockFetch([[/progress/, json(PROGRESS)], [/process-score\/history/, json([])]]);
+    wrap(<ProgressPanel account={ACCOUNT} />);
+    await waitFor(() => expect(screen.getByLabelText("Points breakdown")).toBeInTheDocument());
+    expect(screen.getByText("Lifetime awarded").nextSibling?.textContent).toBe("70");
+    expect(screen.getByText("Revoked or corrected").nextSibling?.textContent).toBe("-5");
+    expect(screen.getByText("Current effective").nextSibling?.textContent).toBe("65");
+    fireEvent.click(screen.getByText("Recent points"));
+    expect(screen.getByText(/was archived \(entry j1\)/)).toBeInTheDocument();
+    expect(screen.getByText("revocation")).toBeInTheDocument();
+    expect(screen.getByText(/process-score\/v1 · points-policy\/v1 · achievement-rules\/v1/)).toBeInTheDocument();
+  });
+  it("the ledger keeps the original award next to its revocation", async () => {
+    mockFetch([[/ledger/, json({ summary: PROGRESS.points, versions: PROGRESS.versions, entries: [REVOKED, AWARD] })]]);
+    wrap(<LedgerView accountId={ACCOUNT.id} />);
+    await waitFor(() => expect(screen.getByText(/Append-only/)).toBeInTheDocument());
+    expect(screen.getByText("award")).toBeInTheDocument();
+    expect(screen.getByText("revocation")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Revoke/ })).toHaveLength(1);      // only the award can be revoked
+  });
+  it("score revisions show what changed, and UNKNOWN is distinct from not applicable", async () => {
+    const rev2: DayScore = { ...STORED, id: "s2", revision: 2, supersedes_id: "s1", correction_reason: "Write a daily market thesis: MET → VIOLATED", score: 60 };
+    mockFetch([[/scores\//, json([STORED, rev2])]]);
+    wrap(<ScoreRevisions accountId={ACCOUNT.id} day="2026-11-01" />);
+    await waitFor(() => expect(screen.getByText("Revision 2")).toBeInTheDocument());
+    expect(screen.getByText("Revision 1")).toBeInTheDocument();
+    expect(screen.getByText(/What changed: Write a daily market thesis: MET → VIOLATED/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Unknown: counted, no credit/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Doesn't apply/).length).toBeGreaterThan(0);
+  });
+  it("a review lists each policy result with value, limit, revision and the override", () => {
+    wrap(<PolicyResultsTable pr={PR} reviewed />);
+    expect(screen.getByText("Maximum loss per position")).toBeInTheDocument();
+    expect(screen.getByText("$400.00")).toBeInTheDocument();
+    expect(screen.getByText("$100.00")).toBeInTheDocument();
+    expect(screen.getByText(/risk policy revision 2/)).toBeInTheDocument();
+    expect(screen.getByText(/An explicit override was recorded/)).toBeInTheDocument();
+    expect(screen.getByText("recorded")).toBeInTheDocument();
   });
   it("the dashboard leaves out hidden widgets", async () => {
     mockFetch([[/preferences/, json({ terminology: "professional", timezone: "America/New_York", active_account_id: null, theme: "default",

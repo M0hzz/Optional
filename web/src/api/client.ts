@@ -2,7 +2,7 @@
 import type {
   Account, AlertRule, Analysis, AuditEntry, Contract, ContractMonitor, ContractQuote, DataSources, EventItem, EventPage,
   ImportReport, JournalEntryT, LegIn, MissionReport, MonitorRunInfo, PendingReview, Progress, Review, DayScore, Plan, PolicyPayload, PolicySettings, RiskDashboard, RiskReport, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
-  Preferences, RuleSet, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
+  LedgerEntry, PointsSummary, Preferences, RuleSet, ScoreHistoryDay, Versions, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
 } from "./types";
 
 export interface FieldError { field: string; code: string; message: string }
@@ -87,13 +87,20 @@ export const api = {
   },
   // ---------------------------------------------------------------- process (Phase 4)
   progress: (accountId: string) => request<Progress>("GET", `/accounts/${accountId}/progress`),
-  scoreHistory: (accountId: string, days = 30) => request<{ day: string; score: number | null; rest_day: boolean; met: number; applicable: number; scheduled: boolean }[]>("GET", `/accounts/${accountId}/process-score/history` + q({ days })),
+  scoreHistory: (accountId: string, days = 30) => request<ScoreHistoryDay[]>("GET", `/accounts/${accountId}/process-score/history` + q({ days })),
+  scoreRevisions: (accountId: string, day: string) => request<DayScore[]>("GET", `/accounts/${accountId}/scores/${day}`),
+  ledger: (accountId: string, p: { subject_id?: string; entry_type?: string; limit?: number } = {}) =>
+    request<{ summary: PointsSummary; versions: Versions; entries: LedgerEntry[] }>("GET", `/accounts/${accountId}/ledger` + q(p)),
+  revokeEntry: (accountId: string, entryId: string, reason: string) => request<LedgerEntry>("POST", `/accounts/${accountId}/ledger/${entryId}/revoke`, { reason }),
+  correctEntry: (accountId: string, entryId: string, reason: string, points: number) =>
+    request<LedgerEntry>("POST", `/accounts/${accountId}/ledger/${entryId}/correct`, { reason, points }),
   setObjective: (accountId: string, code: string, b: { day?: string; done: boolean; note?: string | null }) =>
     request<DayScore>("POST", `/accounts/${accountId}/objectives/${code}`, b),
-  journal: (p: { account_id: string; kind?: string[]; position_id?: string; plan_id?: string; limit?: number }) => request<JournalEntryT[]>("GET", "/journal" + q(p)),
+  journal: (p: { account_id: string; kind?: string[]; position_id?: string; plan_id?: string; include_archived?: boolean; limit?: number }) => request<JournalEntryT[]>("GET", "/journal" + q(p)),
   createJournal: (b: Record<string, unknown>) => request<JournalEntryT>("POST", "/journal", b),
   updateJournal: (id: string, b: Record<string, unknown>) => request<JournalEntryT>("PATCH", `/journal/${id}`, b),
   archiveJournal: (id: string, version: number) => request<JournalEntryT>("POST", `/journal/${id}/archive`, { version }),
+  restoreJournal: (id: string, version: number) => request<JournalEntryT>("POST", `/journal/${id}/restore`, { version }),
   pendingReviews: (accountId: string) => request<PendingReview[]>("GET", `/accounts/${accountId}/reviews/pending`),
   reviews: (accountId: string) => request<(Review & { position: { id: string; name: string; underlying: string; strategy_name: string; closed_at: string | null; plan_id: string | null; rule_violation: boolean } })[]>("GET", `/accounts/${accountId}/reviews`),
   saveReview: (positionId: string, b: Record<string, unknown>) => request<Review>("PUT", `/positions/${positionId}/review`, b),
