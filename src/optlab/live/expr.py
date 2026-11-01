@@ -29,8 +29,23 @@ class ExprError(ValueError):
     pass
 
 
+def _pow(a, b):
+    """Power in floating point: Python's exact integer power can take forever (2 ** 2 ** 40), so plain numbers
+    are converted to float first, and an overflow is infinity rather than an error or a hang."""
+    if isinstance(a, (int, float)) and not isinstance(a, bool) and isinstance(b, (int, float)) and not isinstance(b, bool):
+        try:
+            v = float(a) ** float(b)
+            return float("nan") if isinstance(v, complex) else v
+        except OverflowError:
+            return float("inf")
+        except ZeroDivisionError:
+            return float("nan")
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        return np.power(np.asarray(a, dtype=float) if not hasattr(a, "astype") else a.astype(float), b)
+
+
 _BINOPS = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
-           ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow}
+           ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: _pow}
 _CMPOPS = {ast.Lt: operator.lt, ast.LtE: operator.le, ast.Gt: operator.gt, ast.GtE: operator.ge,
            ast.Eq: operator.eq, ast.NotEq: operator.ne}
 _ALLOWED = (ast.Expression, ast.BoolOp, ast.BinOp, ast.UnaryOp, ast.Compare, ast.Call, ast.Name, ast.Constant,

@@ -1,0 +1,15 @@
+Word,Seq_num,Word Count,Word Proportion,Average Proportion,Std Dev,Doc Count,Negative,Positive,Uncertainty,Litigious,Strong_Modal,Weak_Modal,Constraining,Complexity,Syllables,Source
+GAIN,1,1,0,0,0,1,0,2009,0,0,0,0,0,0,1,test
+GAINS,2,1,0,0,0,1,0,2009,0,0,0,0,0,0,1,test
+STRONG,3,1,0,0,0,1,0,2009,0,0,0,0,0,0,1,test
+IMPROVED,4,1,0,0,0,1,0,2009,0,0,0,0,0,0,2,test
+RECORD,5,1,0,0,0,1,0,0,0,0,0,0,0,0,2,test
+LOSS,6,1,0,0,0,1,2009,0,0,0,0,0,0,0,1,test
+DECLINE,7,1,0,0,0,1,2009,0,0,0,0,0,0,0,2,test
+WEAK,8,1,0,0,0,1,2009,0,0,0,0,0,0,0,1,test
+LAWSUIT,9,1,0,0,0,1,2009,0,0,2009,0,0,0,0,2,test
+MAY,10,1,0,0,0,1,0,0,2009,0,0,0,0,0,1,test
+UNCERTAIN,11,1,0,0,0,1,0,0,2009,0,0,0,0,0,3,test
+REQUIRED,12,1,0,0,0,1,0,0,0,0,0,0,2009,0,2,test
+DILUTION,13,1,0,0,0,1,2009,0,0,0,0,0,0,0,3,test
+ABLE,14,1,0,0,0,1,0,-2020,0,0,0,0,0,0,2,test

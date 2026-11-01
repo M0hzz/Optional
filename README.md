@@ -37,9 +37,10 @@ before connecting real feeds. Switch `data.source` to `openbb` when ready.
 python -m venv .venv && source .venv/bin/activate      # Python 3.10+
 pip install -r requirements.txt
 python scripts/ingest.py           # builds data/market.duckdb (synthetic by default)
-python -m pytest                   # 170 tests
+python -m pytest                   # all tests (offline, deterministic)
 python scripts/demo.py             # terminal tour: scan → price → size → backtest → allocate
-streamlit run app/streamlit_app.py # the dashboard
+PYTHONPATH=src python -m optlab.api   # the portfolio dashboard: http://127.0.0.1:8600
+streamlit run app/streamlit_app.py # the Research Lab (Streamlit)
 python scripts/monitor.py --once   # one live scan pass (see "Live monitor" below)
 ```
 
@@ -53,6 +54,7 @@ bash scripts/setup_remote.sh       # Linux: link + services for the dashboard, m
 ```
 
 Steps for macOS and Windows, daily commands and troubleshooting: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
+Docker Compose is a documented alternative: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ### Real data
 
@@ -98,7 +100,62 @@ key with `obb.user.credentials`.
 
 ---
 
-## The dashboard
+## The portfolio dashboard (primary interface)
+
+A FastAPI + React app at `http://127.0.0.1:8600` (Tailscale: `https://<name>/`) for recording and
+inspecting what you actually hold. Informational only: it never places orders.
+
+- **Accounts** with manually entered values (cash, buying power, account value), capital at risk and
+  upcoming expirations.
+- **Positions** of any shape: stock and up to 12 option legs, with fills, fees and fill times. The strategy
+  is recognised deterministically (22 named strategies, otherwise *Custom*), with exact maximum gain and
+  loss (or *Unlimited* / *Unknown*, never $0), breakevens and buying-power effect, before you save.
+- **Close, edit, archive** with a full before/after history; edits are conflict-checked.
+- **Watched contracts** you're researching, with quotes and entry conditions checked every pass.
+- **Monitoring** (Phase 2): every open position is checked on a schedule and gets a status (Stale data,
+  Exit condition met, Action required, Watch, Hold) with the exact reasons; snapshots every pass, P&L and
+  Greeks history, alert rules, an event feed with acknowledgement, desktop and browser notifications, and
+  live updates. Positions in scans.yaml can be imported once; the YAML monitor then skips them.
+- **Trade plans** (Phase 3): write the plan first (thesis, trigger, confirmation, invalidation, planned
+  risk and size); arm it once it's complete and passes the risk check; the monitor tells you when it
+  qualifies or is invalidated; converting it records the position and compares planned with actual.
+- **Risk policy** (Phase 3): your limits per position and for the account (losses per day and week, open
+  risk, counts, Greeks, liquidity, expirations, earnings, no margin, no averaging down without a plan),
+  with small-account limits below $1,000. Every check says PASS, WARNING, BLOCKED or UNKNOWN and why.
+- **Hardened** (Phase 7):
+  - The API refuses foreign hosts (DNS rebinding) and cross-site changes, limits request sizes, and sends a strict Content-Security-Policy.
+  - Pages pass WCAG 2.1 AA checks.
+  - `scripts/portfolio_db.py verify` checks backups, restores and migrations.
+  - See [docs/SECURITY.md](docs/SECURITY.md).
+- **Historical analysis** (Phase 6): open the Historical Signal Explorer from a plan, position, alert rule, watched contract or event, with the conditions it uses. It shows:
+  - exact and near matches;
+  - forward returns, favourable and adverse moves;
+  - win/loss distributions;
+  - trend, market, volatility and time-of-day breakdowns;
+  - data coverage;
+  - bias checks, including a truncation test that proves no look-ahead.
+
+  Click a match for its chart. Descriptive only.
+- **News and official events** (Phase 5):
+  - Sources: SEC filings, Federal Reserve releases and FOMC dates, BLS and BEA releases and calendars, company feeds, and optional Finnhub.
+  - Processing: de-duplicated, mapped to symbols with relevance, classified, and scored with the Loughran–McDonald dictionary (the matched words are shown).
+  - Results feed symbol features that monitoring rules can use as confirmation, never alone.
+  - News never produces a trade signal.
+- **Discipline and progress** (Phase 4): a configurable command center; daily objectives and a daily
+  process score (a day without trades can score 100%); points, levels, streaks and achievements earned from
+  process only, never from profit or the number of trades; post-trade reviews (mission reports) that list
+  each risk result and override; a journal; and a Learn page explaining every term, status and score.
+  Finished days are stored as immutable, versioned score revisions, and the points ledger is append-only.
+  Revocations, corrections and replacements are separate entries with reasons.
+- **CSV import** (preview, then atomic commit) and export.
+- Values from delayed Cboe quotes, always labelled with source, delay and age; stale data is never shown as safe.
+- Professional or Colony terminology (labels only; financial terms stay in the tooltips).
+
+Money is stored exactly (integer $0.0001 units). Data: `data/optlab.sqlite` (SQLite, WAL, Alembic
+migrations). Guides: [docs/PORTFOLIO.md](docs/PORTFOLIO.md) (using it), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+[docs/DEPLOY.md](docs/DEPLOY.md) (systemd, Docker Compose, backups). API documentation: `/api/docs`.
+
+## The Research Lab (Streamlit)
 
 Two sections, picked at the top of the page. The app opens in **Live** while the NYSE is open and in
 **Research** otherwise; switch any time. Only the view you pick runs, so pages load faster.
@@ -141,6 +198,9 @@ Research › Overlay setup or in `overlay.yaml`; switch it off with **Show overl
 ---
 
 ## Live monitor
+
+(The dashboard's portfolio monitor, above, now covers positions; positions you import from scans.yaml into
+the dashboard are skipped here. This monitor keeps running the scans and any YAML positions not imported.)
 
 `scripts/monitor.py` runs the scans and position checks in **`scans.yaml`** on a
 schedule (default 09:30–16:00 New York time, weekdays, every 60 seconds) and sends
@@ -336,6 +396,12 @@ Paper account first.
 
 ```
 config.yaml               settings and risk limits
+src/optlab/portfolio/     portfolio domain: models, money, recognize (strategies), quotes, valuation, service,
+                          csv_import, db (SQLite + Alembic)
+src/optlab/api/           FastAPI app (/api/v1) serving the dashboard
+web/                      React + TypeScript dashboard (web/dist is the committed build)
+migrations/               Alembic migrations for data/optlab.sqlite
+Dockerfile, docker-compose.yml, .env.example   Docker Compose alternative
 src/optlab/
   data/        store.py (DuckDB) · sources.py (OpenBB, synthetic) · chain.py
   filings/     insiders.py · company.py (EdgarTools)
