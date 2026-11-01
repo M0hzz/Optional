@@ -188,6 +188,121 @@ snapshots, one point per pass, with status changes marked. Snapshots are kept in
 snapshot* days (default 30), then thinned to one per hour; snapshots where the status changed are always
 kept.
 
+## Trade plans (missions)
+
+**Trade plans** (sidebar; *Missions* in Colony mode) are written *before* a position exists. A plan holds:
+
+- **Idea:** symbol, thesis, direction, intended strategy, setup type and market regime.
+- **Entry:**
+  - the trigger and confirmation, in words and as conditions the monitor checks;
+  - an entry zone, the maximum debit or minimum credit, the liquidity limits and a delta range.
+- **Risk and exit:**
+  - planned maximum loss and size, and the expiration range;
+  - target, invalidation (in words, as conditions and as a price), time stop, and how long the plan is valid.
+- **Context:** event risks, related news, a chart link (https only) and notes.
+- **Planned legs (optional):** with them, the risk check can use quotes, capital and liquidity.
+
+| State | Meaning | Who moves it |
+|---|---|---|
+| ✎ Draft | Being written; the only editable state | you |
+| ◎ Armed | Complete and risk-checked; the monitor watches the trigger | you (Arm) |
+| ◔ Waiting | The trigger holds; waiting for confirmation | monitor or you |
+| ✓ Qualified | Trigger and confirmation hold: entering now follows the plan | monitor or you |
+| ✕ Invalidated | The idea was proven wrong (reason kept) | monitor or you |
+| ◉ Converted | Became a position | you (Convert) |
+| ⤼ Skipped | You chose not to take it (reason required): a legitimate outcome | you |
+| ⌛ Expired | Its validity ended first | monitor or you |
+| ▣ Archived | Put away | you |
+
+**Arming** requires the checklist to be complete and the risk check not to be BLOCKED.
+
+- **Required:** thesis, direction, strategy, a trigger, an invalidation, the planned maximum loss and size, and an expiration range for options.
+- **Recommended:** confirmation, target, an entry price limit and a plan expiry.
+
+To change an armed plan, move it back to **Draft**, edit it, and arm it again. That way the armed version is always the risk-checked one.
+
+**The monitor** checks armed, waiting and qualified plans each pass. It uses the same confirmation passes as positions.
+
+- **Invalidation:** any invalidation condition holds, or the price crosses the invalidation price against the direction. The plan becomes Invalidated.
+- **Trigger:** all trigger conditions hold and the price is inside the entry zone.
+  - If the confirmation conditions also hold, the plan becomes Qualified.
+  - With no confirmation conditions, it becomes Waiting and you confirm it yourself.
+- **Trigger stops holding:** the plan goes back to Armed.
+- **Expiry:** any plan whose expiry has passed becomes Expired.
+
+Missing data never moves a plan. Qualified and invalidated plans notify you.
+
+**Convert to position** records the position you actually entered, with your real fills. The plan stays exactly as written and gets a **planned versus actual** table. Each aspect is marked *as planned* or *deviated*:
+
+- strategy;
+- size;
+- maximum loss;
+- entry price (debit/credit per share);
+- entry zone (the underlying at entry);
+- expirations;
+- timing: after the plan qualified, or before;
+- whether you were still inside the plan's validity.
+
+**Duplicate** starts a new draft from any plan. From a watched contract, **Plan it** starts a plan for that contract.
+
+## Risk policy
+
+**Risk** (sidebar; *Colony defense*) shows how the account stands against your policy, and every open position against it. Each check gives a result and a plain reason with the value and the limit:
+
+| Result | Meaning |
+|---|---|
+| ✓ Pass | Within the limit |
+| ⚠ Warning | At or above *Warn at* (default 80%) of a limit, or a rule set to warn |
+| ⛔ Blocked | Breaks a limit. optlab can't and doesn't stop a broker order; it tells you, and won't arm such a plan |
+| ? Unknown | Data is missing (no account value, no quotes, no recent Greeks). Never counted as a pass |
+
+### Limits
+
+Each limit is optional; an empty one isn't checked.
+
+- **Per position:**
+  - capital (buying-power effect) and maximum loss;
+  - risk as a % of the account;
+  - contracts per leg.
+- **Rules:**
+  - defined risk only;
+  - naked short options;
+  - margin: when not allowed, the capital must fit in cash.
+- **Account-wide:**
+  - total open risk ($ and %);
+  - daily and weekly realized loss: once reached, no new risk until the period resets (days and weeks in your display time zone, weeks starting Monday);
+  - open positions, positions per underlying and per correlated group (editable, with defaults for index ETFs and mega-cap tech);
+  - net delta and daily theta decay, from the monitor's latest Greeks.
+- **Contract quality:** minimum open interest and maximum spread per leg (needs quotes).
+- **Days to expiration:** minimum and maximum.
+- **Earnings before expiration:** off, warn or block.
+- **Adding to a losing position:** allow, warn, or require a new written plan.
+
+### Small-account mode
+
+Small-account mode is on by default and applies while the account value is below $1,000 (both are editable). It adds the stricter of its own limits:
+
+- defined risk only, and no naked shorts;
+- no margin;
+- one contract per leg;
+- $100 maximum loss and $300 maximum capital per position;
+- 10% of the account per position;
+- spreads of 10% or less, and open interest of 100 or more;
+- no averaging down without a new plan.
+
+The page says whether it applies and why. Without an account value it can't tell: enter one.
+
+### Where checks happen
+
+- **Recording a position:** the form shows the check live. A BLOCKED position can still be recorded, because it may already have happened at the broker, but only with an explicit acknowledgement. It is then flagged *recorded against the policy*, with a warning event.
+- **Arming a plan.**
+- **Every monitoring pass:** for the account limits. A limit getting close or being reached raises one event, again only after it has cleared.
+
+Positions imported from CSV or scans.yaml are history, not new decisions: they aren't risk-checked when
+imported (the risk page still checks them against the current policy).
+
+**Revisions.** Saving the policy adds a revision; earlier risk checks keep the revision they used. History: `GET /api/v1/accounts/{id}/risk-policy/history`.
+
 ## Importing positions from scans.yaml
 
 **Import scans.yaml** (Monitor panel) shows the `positions:` of the project's scans.yaml with their

@@ -116,6 +116,12 @@ inspecting what you actually hold. Informational only: it never places orders.
   Exit condition met, Action required, Watch, Hold) with the exact reasons; snapshots every pass, P&L and
   Greeks history, alert rules, an event feed with acknowledgement, desktop and browser notifications, and
   live updates. Positions in scans.yaml can be imported once; the YAML monitor then skips them.
+- **Trade plans** (Phase 3): write the plan first (thesis, trigger, confirmation, invalidation, planned
+  risk and size); arm it once it's complete and passes the risk check; the monitor tells you when it
+  qualifies or is invalidated; converting it records the position and compares planned with actual.
+- **Risk policy** (Phase 3): your limits per position and for the account (losses per day and week, open
+  risk, counts, Greeks, liquidity, expirations, earnings, no margin, no averaging down without a plan),
+  with small-account limits below $1,000. Every check says PASS, WARNING, BLOCKED or UNKNOWN and why.
 - **CSV import** (preview, then atomic commit) and export.
 - Values from delayed Cboe quotes, always labelled with source, delay and age; stale data is never shown as safe.
 - Professional or Colony terminology (labels only; financial terms stay in the tooltips).

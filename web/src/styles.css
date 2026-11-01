@@ -215,3 +215,22 @@ label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--t
 fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; }
 fieldset legend { padding: 0 6px; color: var(--muted); }
 @media (max-width: 900px) { .grid-4 { grid-template-columns: repeat(2, 1fr); } .grid-3 { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- Phase 3: plans and risk */
+.risk-panel { border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: 6px; padding: 10px 12px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+.risk-panel.risk-blocked { border-left-color: var(--bad); }
+.risk-panel.risk-warning, .risk-panel.risk-unknown { border-left-color: var(--warn); }
+.risk-panel.risk-pass { border-left-color: var(--ok); }
+.risk-panel p { margin: 0; }
+.risk-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.checklist { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 4px 16px; }
+.checklist li.ok { color: var(--ok); }
+.checklist li.error { color: var(--bad); }
+.checklist li.warning { color: var(--warn); }
+.checklist li .small { color: var(--muted); }
+.tabs { display: inline-flex; gap: 4px; }
+.text-blocks h4 { margin: 8px 0 4px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .5px; }
+.text-blocks p { margin: 0; }
+.text-blocks pre { margin: 4px 0 0; white-space: pre-wrap; }
+.plain-link { text-decoration: none; }
+caption { text-align: left; padding: 4px 0; }

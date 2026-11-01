@@ -1,7 +1,7 @@
 // Thin typed client for /api/v1. Errors arrive as {error: {code, message, field_errors, details}}.
 import type {
   Account, AlertRule, Analysis, AuditEntry, Contract, ContractMonitor, ContractQuote, DataSources, EventItem, EventPage,
-  ImportReport, LegIn, MonitorRunInfo, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
+  ImportReport, LegIn, MonitorRunInfo, Plan, PolicyPayload, PolicySettings, RiskDashboard, RiskReport, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
   Preferences, RuleSet, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
 } from "./types";
 
@@ -63,7 +63,7 @@ export const api = {
   analyze: (b: { underlying: string; legs: LegIn[]; account_id?: string | null; cash_secured?: boolean; include_quotes?: boolean }) =>
     request<Analysis>("POST", "/positions/analyze", b),
   positionAnalysis: (id: string) => request<Analysis>("GET", `/positions/${id}/analysis`),
-  createPosition: (b: { account_id: string; underlying: string; name?: string | null; opened_at?: string | null; legs: LegIn[]; cash_secured: boolean; acknowledge_risk: boolean; notes?: string | null }, idempotencyKey: string) =>
+  createPosition: (b: { account_id: string; underlying: string; name?: string | null; opened_at?: string | null; legs: LegIn[]; cash_secured: boolean; acknowledge_risk: boolean; acknowledge_rule_violation?: boolean; notes?: string | null }, idempotencyKey: string) =>
     request<Position>("POST", "/positions", b, { "Idempotency-Key": idempotencyKey }),
   updatePosition: (id: string, b: Record<string, unknown>) => request<Position>("PATCH", `/positions/${id}`, b),
   closePosition: (id: string, b: { version: number; closed_at?: string | null; legs: { leg_id: string; close_price?: string | null; close_fees?: string; expired_worthless?: boolean }[]; notes?: string | null }) =>
@@ -85,6 +85,23 @@ export const api = {
     const f = new FormData(); f.append("file", file);
     return request<ImportReport>("POST", `/imports/positions/preview${q({ account_id: accountId })}`, f);
   },
+  // ---------------------------------------------------------------- plans and risk (Phase 3)
+  plans: (p: { account_id?: string; state?: string[]; symbol?: string; page_size?: number }) => request<Page<Plan>>("GET", "/plans" + q(p)),
+  plan: (id: string) => request<Plan>("GET", `/plans/${id}`),
+  createPlan: (b: Record<string, unknown>) => request<Plan>("POST", "/plans", b),
+  updatePlan: (id: string, b: Record<string, unknown>) => request<Plan>("PATCH", `/plans/${id}`, b),
+  transitionPlan: (id: string, b: { version: number; to: string; reason?: string | null }) => request<Plan>("POST", `/plans/${id}/transition`, b),
+  assessPlan: (id: string) => request<Plan>("POST", `/plans/${id}/assess`),
+  duplicatePlan: (id: string) => request<Plan>("POST", `/plans/${id}/duplicate`),
+  convertPlan: (id: string, b: Record<string, unknown>) => request<{ plan: Plan; position: Position; risk: RiskReport }>("POST", `/plans/${id}/convert`, b),
+  planTimeline: (id: string) => request<TimelineItem[]>("GET", `/plans/${id}/timeline`),
+  riskPolicy: (accountId: string) => request<PolicyPayload>("GET", `/accounts/${accountId}/risk-policy`),
+  saveRiskPolicy: (accountId: string, settings: PolicySettings, notes?: string | null) =>
+    request<PolicyPayload>("PUT", `/accounts/${accountId}/risk-policy`, { settings, notes: notes ?? null }),
+  riskPolicyHistory: (accountId: string) => request<{ id: string; revision: number; created_at: string; superseded_at: string | null; notes: string | null; settings: PolicySettings }[]>("GET", `/accounts/${accountId}/risk-policy/history`),
+  riskDashboard: (accountId: string) => request<RiskDashboard>("GET", `/accounts/${accountId}/risk`),
+  evaluateRisk: (b: { account_id: string; underlying: string; legs: LegIn[]; cash_secured?: boolean; plan_id?: string | null }) =>
+    request<RiskReport>("POST", "/risk/evaluate", b),
   // ---------------------------------------------------------------- monitoring (Phase 2)
   monitorStatus: () => request<MonitorStatus>("GET", "/monitor/status"),
   runMonitor: () => request<{ run_id: string; ok: boolean; seconds: number; positions: number; contracts: number; rules: number; events: number; notified: number; errors: string[] }>("POST", "/monitor/run"),

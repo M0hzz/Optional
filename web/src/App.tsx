@@ -8,7 +8,9 @@ import { CreateAccountForm } from "./forms/AccountForms";
 import { useRoute, navigate } from "./lib/router";
 import { TermsContext, TERMS, type Mode } from "./lib/terms";
 import { Dashboard } from "./views/Dashboard";
+import { PlanDetail, PlansView } from "./views/Plans";
 import { PositionDetail } from "./views/PositionDetail";
+import { RiskView } from "./views/Risk";
 
 function researchUrl(ds?: DataSources): string {
   if (ds?.research_lab_url) return ds.research_lab_url;
@@ -60,6 +62,8 @@ function Shell() {
   const active = list.find((a) => a.id === prefs.data?.active_account_id) ?? list.find((a) => a.is_default) ?? list[0];
   useEffect(() => { document.title = mode === "colony" ? "optlab · Command center" : "optlab"; }, [mode]);
   const posMatch = /^\/positions\/([0-9a-f-]{36})$/.exec(route);
+  const planMatch = /^\/plans\/([0-9a-f-]{36})$/.exec(route);
+  const section = posMatch ? "dash" : planMatch || route === "/plans" ? "plans" : route === "/risk" ? "risk" : "dash";
 
   return (
     <TermsContext.Provider value={mode}>
@@ -67,7 +71,9 @@ function Shell() {
         <aside className="sidebar" aria-label="Navigation">
           <div className="brand"><span aria-hidden>◈</span> optlab</div>
           <nav>
-            <a href="#/" className={!posMatch ? "active" : ""}>{mode === "colony" ? TERMS.dashboard.colony : TERMS.dashboard.pro}</a>
+            <a href="#/" className={section === "dash" ? "active" : ""}>{mode === "colony" ? TERMS.dashboard.colony : TERMS.dashboard.pro}</a>
+            <a href="#/plans" className={section === "plans" ? "active" : ""}>{mode === "colony" ? TERMS.plans.colony : TERMS.plans.pro}</a>
+            <a href="#/risk" className={section === "risk" ? "active" : ""}>{mode === "colony" ? TERMS.risk.colony : TERMS.risk.pro}</a>
             <a href={researchUrl(sources.data)} target="_blank" rel="noreferrer">
               <Tip text={TERMS.research.meaning}><span>Research Lab ↗</span></Tip>
             </a>
@@ -111,7 +117,11 @@ function Shell() {
                 <Empty>Create your account to start recording positions. You can add more accounts later.</Empty>
                 <CreateAccountForm onDone={(a) => { setPrefs.mutate({ active_account_id: a.id }); navigate("/"); }} />
               </section>
-            ) : posMatch ? <PositionDetail id={posMatch[1]} /> : <Dashboard account={active} />}
+            ) : posMatch ? <PositionDetail id={posMatch[1]} />
+              : planMatch ? <PlanDetail id={planMatch[1]} />
+              : route === "/plans" ? <PlansView account={active} />
+              : route === "/risk" ? <RiskView account={active} />
+              : <Dashboard account={active} />}
         </main>
       </div>
     </TermsContext.Provider>

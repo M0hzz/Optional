@@ -10,6 +10,8 @@ import { ImportDialog } from "../forms/ImportDialog";
 import { PositionForm } from "../forms/PositionForm";
 import { date, dateTime, money, num, pct, price } from "../lib/format";
 import { navigate } from "../lib/router";
+import { RiskBadge } from "../components/RiskReport";
+import { PlanForm } from "../forms/PlanForm";
 import { useRefetchInterval } from "../lib/live";
 import { useTerms } from "../lib/terms";
 import { AlertRulesList, EventFeed, MonitorPanel } from "./MonitorWidgets";
@@ -67,6 +69,13 @@ function AccountOverview({ account }: { account: Account }) {
           <Card label={<TermLabel k="attention" />} warn={ov.data.monitoring.attention > 0}
                 sub={Object.entries(ov.data.monitoring.statuses).map(([k, n]) => `${n} ${k.replace(/_/g, " ").toLowerCase()}`).join(" · ")}>
             {ov.data.monitoring.attention}
+          </Card>
+          <Card label={<TermLabel k="risk" />} warn={ov.data.risk.overall !== "PASS"} sub={ov.data.risk.small_account_active ? "Small-account limits apply" : ov.data.risk.policy_revision ? `Policy revision ${ov.data.risk.policy_revision}` : "Default policy"}>
+            <a href="#/risk" className="plain-link"><RiskBadge r={ov.data.risk.overall} label={{ PASS: "Within limits", WARNING: "Close to a limit", BLOCKED: "Limit reached", UNKNOWN: "Can't check" }[ov.data.risk.overall]} /></a>
+          </Card>
+          <Card label="Realized today / this week" sub={ov.data.risk.checks.filter((c) => c.code === "DAILY_LOSS" || c.code === "WEEKLY_LOSS").map((c) => `${c.label.replace("realized loss", "limit")} ${c.limit}`).join(" · ")}
+                warn={ov.data.risk.checks.some((c) => (c.code === "DAILY_LOSS" || c.code === "WEEKLY_LOSS") && c.result !== "PASS")}>
+            <Pnl value={ov.data.risk.realized_today} /> <span className="muted-text">/</span> <Pnl value={ov.data.risk.realized_week} />
           </Card>
           <Card label={<Tip text="Sum of realized profit and loss of closed and archived positions, after fees."><span className="term" tabIndex={0}>Realized P&amp;L<span className="info" aria-hidden>ⓘ</span></span></Tip>}>
             <Pnl value={ov.data.realized_pnl_total} />
@@ -174,7 +183,9 @@ function PositionsWidget({ account }: { account: Account }) {
                 <td>{p.lifecycle === "OPEN" ? <StatusBadge m={p.monitor} /> : <LifecycleBadge lifecycle={p.lifecycle} />}
                     {p.monitor?.reasons[0] && p.lifecycle === "OPEN" && <div className="muted-text small clip reason" title={p.monitor.reasons.join("\n")}>{p.monitor.reasons[0]}</div>}</td>
                 <td><a href={`#/positions/${p.id}`} onClick={(e) => e.stopPropagation()}>{p.name}</a>
-                    {!p.defined_risk && <span className="badge bad small-badge" title="Not defined risk">◇ undefined risk</span>}</td>
+                    {!p.defined_risk && <span className="badge bad small-badge" title="Not defined risk">◇ undefined risk</span>}
+                    {p.rule_violation && <span className="badge bad small-badge" title="Recorded although it broke your risk policy">⛔ against policy</span>}
+                    {p.plan_id && <a className="badge info small-badge" href={`#/plans/${p.plan_id}`} onClick={(e) => e.stopPropagation()} title="Came from a plan">◎ planned</a>}</td>
                 <td className="mono">{p.underlying}</td>
                 <td>{p.strategy_name}{!p.strategy_exact && <span className="muted-text small"> (custom)</span>}</td>
                 <td className="mono">{p.net_premium === null ? <Unavailable /> : <>{money(p.net_premium?.replace("-", ""))} <span className="muted-text small">{p.premium_type.toLowerCase()}</span></>}</td>
@@ -231,6 +242,7 @@ function WatchedWidget({ account }: { account: Account }) {
   const [editing, setEditing] = useState<Contract | null>(null);
   const [archiving, setArchiving] = useState<Contract | null>(null);
   const [alerts, setAlerts] = useState<Contract | null>(null);
+  const [planning, setPlanning] = useState<Contract | null>(null);
   const [quoted, setQuoted] = useState<Record<string, boolean>>({});
   const qc = useQueryClient();
   const toast = useToast();
@@ -264,6 +276,7 @@ function WatchedWidget({ account }: { account: Account }) {
                   <td className="row-actions">
                     <button className="btn ghost small" onClick={() => setEditing(c)}>Edit</button>
                     <button className="btn ghost small" onClick={() => setAlerts(c)}>Alerts</button>
+                    <button className="btn ghost small" onClick={() => setPlanning(c)}>Plan it</button>
                     <button className="btn ghost small" onClick={() => setArchiving(c)}>Archive</button>
                   </td>
                 </tr>);
@@ -274,6 +287,16 @@ function WatchedWidget({ account }: { account: Account }) {
       <Modal open={adding} onOpenChange={setAdding} title="Watch a contract" wide><ContractForm accountId={account.id} onDone={() => setAdding(false)} /></Modal>
       <Modal open={!!editing} onOpenChange={(o) => !o && setEditing(null)} title={`Edit ${editing?.occ_symbol ?? ""}`} wide>
         {editing && <ContractForm accountId={account.id} existing={editing} onDone={() => setEditing(null)} />}
+      </Modal>
+      <Modal open={!!planning} onOpenChange={(o) => !o && setPlanning(null)} title={`Plan a trade in ${planning?.occ_symbol ?? ""}`} wide>
+        {planning && <PlanForm accountId={account.id}
+          prefill={{ symbol: planning.underlying, intended_strategy: planning.option_right === "CALL" ? "LONG_CALL" : "LONG_PUT",
+                     direction: planning.option_right === "CALL" ? "bullish" : "bearish", invalidation: planning.invalidation ?? "",
+                     max_entry_debit: planning.target_entry?.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "") ?? "",
+                     confirmation_conditions: "", expiration_from: planning.expiration, expiration_to: planning.expiration, planned_contracts: "1" }}
+          prefillLegs={[{ asset_type: "OPTION", side: "BUY", quantity: 1, option_right: planning.option_right, strike: planning.strike,
+                          expiration: planning.expiration, fill_price: planning.target_entry, fees: "0" }]}
+          onDone={(pl) => { setPlanning(null); navigate(`/plans/${pl.id}`); }} />}
       </Modal>
       <Modal open={!!alerts} onOpenChange={(o) => !o && setAlerts(null)} title={`Alerts on ${alerts?.occ_symbol ?? ""}`} wide>
         {alerts && <AlertRulesList contractId={alerts.id} accountId={account.id} />}

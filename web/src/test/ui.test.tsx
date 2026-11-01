@@ -9,6 +9,9 @@ import { BoundedValue, FreshnessBadge, StatusBadge, TermLabel, ToastProvider } f
 import { TermsContext } from "../lib/terms";
 import { Dashboard } from "../views/Dashboard";
 import { EventFeed, MonitorPanel } from "../views/MonitorWidgets";
+import { RiskPanel } from "../components/RiskReport";
+import { PlanDetail, PlansView } from "../views/Plans";
+import type { Plan, RiskReport } from "../api/types";
 
 function wrap(ui: ReactNode, mode: "professional" | "colony" = "professional") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -31,7 +34,7 @@ const POSITION: Position = {
   direction: "bearish", lifecycle: "OPEN", opened_at: "2026-11-02T14:00:00Z", closed_at: null, archived_at: null,
   archive_reason: null, net_premium: "-250.0000", premium_type: "CREDIT", fees: "0.0000",
   max_loss: { state: "unbounded", value: null }, max_gain: { state: "bounded", value: "250.0000" }, defined_risk: false,
-  risk_acknowledged: true, realized_pnl: null, monitoring_enabled: true, monitor: null, nearest_expiration: "2026-12-18",
+  risk_acknowledged: true, realized_pnl: null, monitoring_enabled: true, monitor: null, plan_id: null, entry_risk: null, rule_violation: false, nearest_expiration: "2026-12-18",
   days_to_expiration: 46, notes: null, source: "manual", created_at: "", updated_at: "", version: 1, legs: [],
 };
 
@@ -50,7 +53,9 @@ const OVERVIEW = { account_id: ACCOUNT.id, account_name: "Main", snapshot: null,
   unbounded_risk_positions: 0, unknown_risk_positions: 0, capital_at_risk: "0.0000", capital_at_risk_complete: true,
   capital_at_risk_pct_of_buying_power: null, realized_pnl_total: "0.0000", upcoming_expirations: [], strategies: {},
   monitoring: { statuses: {}, attention: 0, open_pnl: null, open_pnl_positions: 0, open_pnl_complete: true, greeks: null,
-                last_checked_at: null, label: "ESTIMATED" } };
+                last_checked_at: null, label: "ESTIMATED" },
+  risk: { overall: "PASS" as const, summary: "The account is within its limits.", checks: [], realized_today: "0.0000",
+          realized_week: "0.0000", small_account_active: false, small_account_reason: "Small-account mode is off.", policy_revision: null } };
 const page = (items: unknown[]) => ({ items, total: items.length, page: 1, page_size: 200 });
 
 const MON: MonitorView = {
@@ -211,5 +216,65 @@ describe("monitor panel", () => {
     expect(screen.getByText(/No pass yet/)).toBeInTheDocument();
     expect(screen.getByText(/delayed ~15 min/)).toBeInTheDocument();
     expect(screen.getByText(/Outside the monitoring window/)).toBeInTheDocument();
+  });
+});
+
+const BLOCKED: RiskReport = {
+  overall: "BLOCKED", policy_revision: 2, small_account_active: true, small_account_reason: "Small-account mode is on: account value $800.00 is below $1,000.00.",
+  summary: "Breaks your risk policy.", checks: [
+    { code: "MAX_LOSS", label: "Maximum loss per position", result: "BLOCKED", reason: "Maximum loss $410.00 is over the limit of $100.00.", value: "$410.00", limit: "$100.00", source: "small account" },
+    { code: "OPEN_INTEREST", label: "Open interest", result: "UNKNOWN", reason: "Can't check the open interest: no quotes for the legs yet.", value: null, limit: "100", source: "small account" },
+    { code: "DEFINED_RISK", label: "Defined risk", result: "PASS", reason: "Maximum loss is known: $410.00.", value: "$410.00", limit: null, source: "policy" }],
+};
+
+const PLAN: Plan = {
+  id: "01a19000-0000-7000-8000-0000000000aa", account_id: ACCOUNT.id, symbol: "XYZ", title: "XYZ bull put", state: "DRAFT",
+  state_changed_at: "2026-11-02T14:00:00Z", fields: {
+    thesis: "Support at 95", direction: "bullish", intended_strategy: "PUT_CREDIT_SPREAD", market_regime: null, setup_type: null,
+    trigger: "Bounce", trigger_conditions: "price > 99", confirmation: null, confirmation_conditions: null, entry_zone_low: null,
+    entry_zone_high: null, max_entry_debit: null, min_entry_credit: "0.9000", max_spread_pct: null, min_volume: null, min_open_interest: null,
+    target: null, target_price: null, invalidation: null, invalidation_conditions: null, invalidation_price: "92.0000",
+    planned_max_loss: "450.0000", planned_contracts: 1, expiration_from: null, expiration_to: null, delta_min: null, delta_max: null,
+    time_stop: null, event_risks: null, related_news: null, chart_reference: "javascript:alert(1)", notes: null, expires_at: null },
+  legs: [], expires_at: null, outcome_reason: null, risk: BLOCKED,
+  validation: { ready: false, errors: [{ item: "Planned size", ok: false, level: "error", detail: "How many contracts." }], warnings: [],
+                checklist: [{ item: "Thesis", ok: true, level: "error", detail: "" }, { item: "Planned size", ok: false, level: "error", detail: "How many contracts." }] },
+  position_id: null, converted_at: null, comparison: null, allowed_transitions: ["ARCHIVED", "ARMED", "SKIPPED"], monitor: null,
+  archived_at: null, created_at: "2026-11-02T14:00:00Z", updated_at: "2026-11-02T14:00:00Z", version: 1,
+};
+
+describe("risk checks", () => {
+  it("show the overall result and each finding with its reason, blocked first, in words", () => {
+    wrap(<RiskPanel report={BLOCKED} />);
+    expect(screen.getAllByText("Blocked").length).toBeGreaterThan(0);
+    expect(screen.getByText("Maximum loss $410.00 is over the limit of $100.00.")).toBeInTheDocument();
+    expect(screen.getByText(/no quotes for the legs yet/)).toBeInTheDocument();
+    expect(screen.getByText(/below \$1,000.00/)).toBeInTheDocument();
+    const rows = screen.getAllByRole("row").map((r) => r.textContent ?? "");
+    expect(rows[1]).toContain("Maximum loss per position");          // BLOCKED sorts before UNKNOWN and PASS
+  });
+});
+
+describe("plans", () => {
+  it("lists plans with their state and risk", async () => {
+    mockFetch([[/\/plans/, json({ ...page([{ ...PLAN, state: "ARMED", validation: null }]) })]]);
+    wrap(<PlansView account={ACCOUNT} />);
+    await waitFor(() => expect(screen.getByText("XYZ bull put")).toBeInTheDocument());
+    expect(screen.getByRole("table")).toHaveTextContent("Armed");
+    expect(screen.getByRole("table")).toHaveTextContent("Blocked");
+  });
+  it("shows the empty state", async () => {
+    mockFetch([[/\/plans/, json(page([]))]]);
+    wrap(<PlansView account={ACCOUNT} />);
+    await waitFor(() => expect(screen.getByText(/No active plans/)).toBeInTheDocument());
+  });
+  it("a draft shows its checklist and only the allowed actions, and never renders a script link", async () => {
+    mockFetch([[/\/plans\/[^/]+\/timeline/, json([])], [/\/plans\//, json(PLAN)]]);
+    wrap(<PlanDetail id={PLAN.id} />);
+    await waitFor(() => expect(screen.getByText("Checklist")).toBeInTheDocument());
+    expect(screen.getByText(/How many contracts/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Arm" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Convert/ })).toBeNull();
+    expect(screen.queryByRole("link", { name: /Chart/ })).toBeNull();          // javascript: is shown as text, not a link
   });
 });

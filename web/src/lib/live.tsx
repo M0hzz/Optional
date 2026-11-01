@@ -54,14 +54,14 @@ export function LiveProvider({ children, onEvent }: { children: ReactNode; onEve
     es.addEventListener("event", (m) => {
       const e = JSON.parse((m as MessageEvent).data) as EventItem;
       touch("events", "monitor-status", "overview", "timeline", "positions", "position", "position-monitor", "contracts",
-            "contract-monitor", "alert-rules");
+            "contract-monitor", "alert-rules", "plans", "plan", "plan-timeline", "risk");
       cb.current?.(e);
       if (e.notify && browserNotificationsOn() && notificationSupport() === "granted") {
         try { new Notification(e.title, { body: e.message.slice(0, 300), tag: e.id }); } catch { /* ignore */ }
       }
     });
     es.addEventListener("pass", () => touch("positions", "position", "overview", "monitor-status", "snapshots",
-                                            "position-monitor", "contract-monitor", "alert-rules"));
+                                            "position-monitor", "contract-monitor", "alert-rules", "plans", "plan", "risk"));
     es.onerror = () => setState(es.readyState === EventSource.CLOSED ? "offline" : "connecting");
     es.onopen = () => setState("live");
     return () => { es.close(); if (timer.current !== null) window.clearTimeout(timer.current); };

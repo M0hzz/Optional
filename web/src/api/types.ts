@@ -26,6 +26,8 @@ export interface Overview {
   monitoring: { statuses: Record<string, number>; attention: number; open_pnl: Money | null; open_pnl_positions: number;
                 open_pnl_complete: boolean; greeks: Record<string, number> | null; last_checked_at: string | null;
                 label: string };
+  risk: { overall: RiskResult; summary: string; checks: RiskCheck[]; realized_today: Money; realized_week: Money;
+          small_account_active: boolean; small_account_reason: string; policy_revision: number | null };
 }
 
 export interface LegIn {
@@ -49,6 +51,69 @@ export interface Position {
   realized_pnl: Money | null; monitoring_enabled: boolean; nearest_expiration: string | null;
   days_to_expiration: number | null; notes: string | null; source: string; created_at: string; updated_at: string;
   version: number; legs: Leg[]; monitor: MonitorView | null;
+  plan_id: string | null; entry_risk: RiskReport | null; rule_violation: boolean;
+}
+
+// ------------------------------------------------------------------ plans and risk (Phase 3)
+export type RiskResult = "PASS" | "WARNING" | "BLOCKED" | "UNKNOWN";
+export interface RiskCheck { code: string; label: string; result: RiskResult; reason: string; value: string | null; limit: string | null; source: string | null }
+export interface RiskReport {
+  overall: RiskResult; checks: RiskCheck[]; policy_revision: number | null; policy_id?: string | null;
+  small_account_active: boolean; small_account_reason: string; evaluated_at?: string; summary: string;
+}
+
+export type PlanState = "DRAFT" | "ARMED" | "WAITING" | "QUALIFIED" | "INVALIDATED" | "CONVERTED" | "SKIPPED" | "EXPIRED" | "ARCHIVED";
+export interface PlanFieldsT {
+  thesis: string | null; direction: "bullish" | "bearish" | "neutral" | "volatility" | null; intended_strategy: string | null;
+  market_regime: string | null; setup_type: string | null; trigger: string | null; trigger_conditions: string | null;
+  confirmation: string | null; confirmation_conditions: string | null; entry_zone_low: Money | null; entry_zone_high: Money | null;
+  max_entry_debit: Money | null; min_entry_credit: Money | null; max_spread_pct: number | null; min_volume: number | null;
+  min_open_interest: number | null; target: string | null; target_price: Money | null; invalidation: string | null;
+  invalidation_conditions: string | null; invalidation_price: Money | null; planned_max_loss: Money | null;
+  planned_contracts: number | null; expiration_from: string | null; expiration_to: string | null; delta_min: number | null;
+  delta_max: number | null; time_stop: string | null; event_risks: string | null; related_news: string | null;
+  chart_reference: string | null; notes: string | null; expires_at: string | null;
+}
+export interface ChecklistItem { item: string; ok: boolean; level: "error" | "warning"; detail: string }
+export interface ComparisonItem { aspect: string; planned: string; actual: string; result: "as_planned" | "deviated" | "not_compared"; note: string }
+export interface Plan {
+  id: string; account_id: string; symbol: string; title: string; state: PlanState; state_changed_at: string;
+  fields: PlanFieldsT; legs: LegIn[]; expires_at: string | null; outcome_reason: string | null; risk: RiskReport | null;
+  validation: { ready: boolean; errors: ChecklistItem[]; warnings: ChecklistItem[]; checklist: ChecklistItem[] } | null;
+  position_id: string | null; converted_at: string | null;
+  comparison: { items: ComparisonItem[]; as_planned: number; deviated: number; compared: number; converted_from: string;
+                plan_snapshot: Record<string, unknown> } | null;
+  allowed_transitions: PlanState[];
+  monitor: { checked_at: string | null; trigger?: RuleResult[]; confirmation?: RuleResult[]; invalidation?: RuleResult[];
+             pending: { state: string; passes: number } | null; note?: string } | null;
+  archived_at: string | null; created_at: string; updated_at: string; version: number;
+}
+
+export interface PolicySettings {
+  max_capital_per_position: Money | null; max_loss_per_position: Money | null; max_risk_pct_per_position: number | null;
+  max_contracts_per_position: number | null; defined_risk_only: boolean; allow_naked_short_options: boolean; allow_margin: boolean;
+  max_total_open_risk: Money | null; max_total_open_risk_pct: number | null; max_daily_realized_loss: Money | null;
+  max_weekly_realized_loss: Money | null; max_open_positions: number | null; max_positions_per_underlying: number | null;
+  max_positions_per_group: number | null; correlation_groups: Record<string, string[]>; max_net_delta: number | null;
+  max_negative_theta: number | null; min_open_interest: number | null; max_spread_pct: number | null; min_dte: number | null;
+  max_dte: number | null; earnings: "off" | "warn" | "block"; averaging_down: "allow" | "warn" | "require_plan";
+  warn_at_pct: number; small_account_mode: boolean; small_account_threshold: Money;
+  small_account: { max_capital_per_position: Money | null; max_loss_per_position: Money | null; max_risk_pct_per_position: number | null;
+                   max_contracts_per_position: number | null; max_spread_pct: number | null; min_open_interest: number | null;
+                   defined_risk_only: boolean; allow_naked_short_options: boolean; allow_margin: boolean;
+                   averaging_down: "allow" | "warn" | "require_plan" };
+}
+export interface PolicyPayload {
+  settings: PolicySettings; revision: number | null; id: string | null; created_at: string | null; notes: string | null;
+  is_default: boolean; defaults: PolicySettings;
+  effective: { limits: PolicySettings; source: Record<string, string>; small_account_active: boolean; small_account_reason: string };
+}
+export interface RiskDashboard {
+  utilization: RiskReport; policy: { revision: number | null; is_default: boolean }; small_account_active: boolean;
+  small_account_reason: string; account_value: Money | null; cash: Money | null; open_risk: Money; open_unbounded: number;
+  realized_today: Money; realized_week: Money; live_plans: number; rule_violations: number;
+  positions: { id: string; name: string; underlying: string; overall: RiskResult; checks: RiskCheck[]; entry_risk: RiskResult | null;
+               rule_violation: boolean; plan_id: string | null; max_loss: Bounded }[];
 }
 
 // ------------------------------------------------------------------ monitoring (Phase 2)

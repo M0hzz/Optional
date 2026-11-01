@@ -143,6 +143,33 @@ Every table that records facts carries `created_at`, `updated_at`, `source`, `so
 `metadata_json`; editable ones carry `version`. Indexes: account, underlying, lifecycle, expiration,
 OCC symbol, status, `(entity_type, entity_id, at)` on the audit log, and every foreign key.
 
+## Planning layer (`src/optlab/planning`, Phase 3)
+
+| Module | Responsibility |
+|---|---|
+| `policy.py` | Policy settings (money as exact decimal strings), small-account limits merged by strictness (`effective`), revisions in `risk_policies` |
+| `riskcheck.py` | Candidate (legs or plan) and portfolio state → checks with PASS / WARNING / BLOCKED / UNKNOWN, value, limit and source; account utilization for the dashboard and events |
+| `plans.py` | Plan fields, checklist validation, the state machine, risk assessment, conversion with the planned-versus-actual comparison, duplication |
+| `monitor.py` | Called by the monitoring pass: trigger / confirmation / invalidation / expiry for plans; risk-limit events |
+| `schemas.py` | API models for plans and policies |
+| `api/plan_routes.py` | `/plans`, `/accounts/{id}/risk-policy`, `/accounts/{id}/risk`, `/risk/evaluate` |
+
+Recording a position (`POST /positions`, CSV excluded) and converting a plan run the same check; the result
+is stored on the position (`entry_risk_json`, `rule_violation`). The portfolio state comes from the
+database (latest account values, open positions, positions closed today and this week) and the monitor's
+latest fresh snapshots (open P&L, Greeks), never from a fresh network call.
+
+## Database (Phase 3, migration `0003`)
+
+| Table / column | Contents |
+|---|---|
+| `risk_policies` | One row per revision per account: settings JSON, notes, created, superseded (unique account + revision) |
+| `trade_plans` | Versioned plans: fields (prices in units), condition text, planned legs JSON, state and when it changed, expiry, outcome reason, last risk check, linked position, conversion time, comparison JSON, archived |
+| `positions.plan_id` | The plan it came from (`SET NULL` if the plan is removed) |
+| `positions.entry_risk_json`, `rule_violation` | The risk check when it was recorded; whether it was recorded against the policy |
+
+Plan events carry the plan id in their source data; a plan's timeline merges them with its audit log.
+
 ## Database (Phase 2, migration `0002`)
 
 | Table | Contents |
@@ -186,5 +213,6 @@ erDiagram
 
 - Phase 2 (this): monitoring, snapshots, statuses, alert rules, events, notifications, live updates,
   scans.yaml import. The YAML monitor keeps running the scans and the YAML positions you haven't imported.
-- Not yet: trade plans and risk policies (Phase 3), process scoring and achievements (Phase 4), news
+- Phase 3: trade plans, risk policies and checks, plan conversion and comparison, risk dashboard.
+- Not yet: process scoring and achievements (Phase 4; the plan comparisons and rule-violation flags are its inputs), news
   (Phase 5), historical-signal drill-downs (Phase 6). Scans still live in scans.yaml and the Research Lab.

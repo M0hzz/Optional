@@ -105,6 +105,11 @@ schedule). Nothing to install or start separately.
   migration `0002` at startup (it switches monitoring on for open positions). The new frontend is in
   `web/dist` (committed).
 
+**Upgrading to Phase 3:** the same steps (`git pull`, `pip install -r requirements.txt`,
+`python scripts/portfolio_db.py backup`, restart `optlab-api`). Migration `0003` adds the plan and policy
+tables and three columns to `positions`; it changes no existing data. Until you save a risk policy the
+defaults apply (small-account limits below $1,000 of account value).
+
 ## Database: migrations, backups, restore
 
 - The API applies **forward** migrations at startup, under a lock, and never downgrades or resets.

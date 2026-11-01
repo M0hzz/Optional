@@ -10,6 +10,7 @@ import { PositionForm } from "../forms/PositionForm";
 import { date, dateTime, money, num, pct, price } from "../lib/format";
 import { useRefetchInterval } from "../lib/live";
 import { navigate } from "../lib/router";
+import { RiskBadge, RiskPanel } from "../components/RiskReport";
 import { HistoryChart, MonitoringSection, PositionAlerts, Timeline } from "./PositionMonitoring";
 
 export function PositionDetail({ id }: { id: string }) {
@@ -54,6 +55,9 @@ export function PositionDetail({ id }: { id: string }) {
           <div><dt>Maximum gain</dt><dd><BoundedValue b={p.max_gain} kind="gain" /></dd></div>
           <div><dt>Defined risk</dt><dd>{p.defined_risk ? <span className="badge ok">◆ Yes</span> : <span className="badge bad">◇ No</span>}</dd></div>
           {p.realized_pnl !== null && <div><dt>Realized P&amp;L</dt><dd><Pnl value={p.realized_pnl} /></dd></div>}
+          <div><dt>Plan</dt><dd>{p.plan_id ? <a href={`#/plans/${p.plan_id}`}>◎ open the plan (and planned vs actual)</a> : <span className="muted-text">recorded without a plan</span>}</dd></div>
+          <div><dt>Risk check at entry</dt><dd>{p.entry_risk ? <RiskBadge r={p.entry_risk.overall} /> : <span className="muted-text">not checked</span>}
+            {p.rule_violation && <span className="badge bad"> ⛔ recorded against the policy</span>}</dd></div>
         </dl>
         {p.notes && <div className="notes"><strong>Notes</strong><p className="pre">{p.notes}</p></div>}
       </section>
@@ -93,6 +97,9 @@ export function PositionDetail({ id }: { id: string }) {
 
       <PositionAlerts p={p} />
       <Timeline p={p} />
+      {p.entry_risk && p.entry_risk.overall !== "PASS" && (
+        <section className="panel"><details><summary><h3 className="inline">Risk check when recorded</h3></summary><RiskPanel report={p.entry_risk} /></details></section>
+      )}
       <AuditPanel id={p.id} version={p.version} />
 
       <Modal open={editing} onOpenChange={setEditing} title={`Edit ${p.name}`} wide>

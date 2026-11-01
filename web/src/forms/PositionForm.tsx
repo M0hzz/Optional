@@ -2,8 +2,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, api } from "../api/client";
-import type { Analysis, Position } from "../api/types";
+import type { Analysis, Plan, Position, RiskReport } from "../api/types";
 import { AnalysisPanel } from "../components/AnalysisPanel";
+import { RiskPanel } from "../components/RiskReport";
 import { FieldErrors, Loading, useToast } from "../components/ui";
 import { useTerms } from "../lib/terms";
 import { LegEditor, legErrors, localToIso, newLeg, toLegIn, type LegDraft } from "./LegEditor";
@@ -37,17 +38,29 @@ function fromPosition(p: Position): LegDraft[] {
 }
 const stripZeros = (s: string) => s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 
-export function PositionForm({ accountId, existing, onDone }: { accountId: string; existing?: Position; onDone: (p: Position) => void }) {
+function fromPlan(p: Plan): LegDraft[] {
+  if (!p.legs.length) return TEMPLATES["Long call"]();
+  return p.legs.map((l) => newLeg({
+    asset_type: l.asset_type, side: l.side, quantity: String(l.quantity), option_right: l.option_right ?? "CALL",
+    strike: l.strike ? stripZeros(l.strike) : "", expiration: l.expiration ?? "", fill_price: l.fill_price ? stripZeros(l.fill_price) : "",
+    fees: stripZeros(l.fees ?? "0"),
+  }));
+}
+
+/** Record a position, edit one, or (with `plan`) convert a plan into the position you actually entered. */
+export function PositionForm({ accountId, existing, plan, onDone }: { accountId: string; existing?: Position; plan?: Plan; onDone: (p: Position) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const { t } = useTerms();
-  const [underlying, setUnderlying] = useState(existing?.underlying ?? "");
-  const [name, setName] = useState(existing?.name ?? "");
+  const [underlying, setUnderlying] = useState(existing?.underlying ?? plan?.symbol ?? "");
+  const [name, setName] = useState(existing?.name ?? plan?.title ?? "");
+  const [ackRule, setAckRule] = useState(false);
+  const [entryPrice, setEntryPrice] = useState("");
   const [openedAt, setOpenedAt] = useState(isoToLocal(existing?.opened_at ?? null));
   const [notes, setNotes] = useState(existing?.notes ?? "");
   const [cashSecured, setCashSecured] = useState(false);
   const [ack, setAck] = useState(false);
-  const [legs, setLegs] = useState<LegDraft[]>(existing ? fromPosition(existing) : TEMPLATES["Put credit spread"]());
+  const [legs, setLegs] = useState<LegDraft[]>(existing ? fromPosition(existing) : plan ? fromPlan(plan) : TEMPLATES["Put credit spread"]());
   const [correction, setCorrection] = useState("");
   const idemKey = useRef(crypto.randomUUID());          // one key per form session: a double submit can't create twice
 
@@ -61,25 +74,39 @@ export function PositionForm({ accountId, existing, onDone }: { accountId: strin
     enabled: valid && debounced === payload, staleTime: 30_000, retry: false,
   });
 
+  const risk = useQuery<RiskReport, ApiError>({
+    queryKey: ["risk-eval", debounced, plan?.id],
+    queryFn: () => api.evaluateRisk({ account_id: accountId, underlying: debounced.underlying, legs: debounced.legs,
+                                      cash_secured: debounced.cash_secured, plan_id: plan?.id ?? null }),
+    enabled: !existing && valid && debounced === payload, staleTime: 30_000, retry: false,
+  });
   const save = useMutation<Position, ApiError>({
-    mutationFn: () => existing
+    mutationFn: () => plan
+      ? api.convertPlan(plan.id, { version: plan.version, legs: payload.legs, opened_at: localToIso(openedAt), name: name.trim() || null,
+                                   cash_secured: cashSecured, acknowledge_risk: ack, acknowledge_rule_violation: ackRule,
+                                   underlying_price_at_entry: entryPrice.trim() || null, notes: notes.trim() || null }).then((r) => r.position)
+      : existing
       ? api.updatePosition(existing.id, { version: existing.version, name: name.trim() || null, notes: notes.trim() || null,
                                           legs: payload.legs, cash_secured: cashSecured, acknowledge_risk: ack,
                                           correction_reason: correction.trim() || null })
       : api.createPosition({ account_id: accountId, underlying: payload.underlying, name: name.trim() || null,
                              opened_at: localToIso(openedAt), legs: payload.legs, cash_secured: cashSecured,
-                             acknowledge_risk: ack, notes: notes.trim() || null }, idemKey.current),
+                             acknowledge_risk: ack, acknowledge_rule_violation: ackRule, notes: notes.trim() || null }, idemKey.current),
     onSuccess: (p) => {
       qc.invalidateQueries({ queryKey: ["positions"] });
       qc.invalidateQueries({ queryKey: ["overview"] });
       qc.invalidateQueries({ queryKey: ["position", p.id] });
+      qc.invalidateQueries({ queryKey: ["plans"] });
+      qc.invalidateQueries({ queryKey: ["plan"] });
+      qc.invalidateQueries({ queryKey: ["risk"] });
       toast(existing ? "Position updated" : `${t("position")} recorded: ${p.name}`);
       onDone(p);
     },
   });
 
   const needsAck = preview.data?.requires_risk_acknowledgement ?? false;
-  const blocked = !valid || (preview.data?.errors.length ?? 0) > 0 || (needsAck && !ack) || save.isPending;
+  const ruleBroken = !existing && risk.data?.overall === "BLOCKED";
+  const blocked = !valid || (preview.data?.errors.length ?? 0) > 0 || (needsAck && !ack) || (ruleBroken && !ackRule) || save.isPending;
   const serverLegErrors: Record<number, string[]> = {};
   save.error?.fieldErrors.forEach((f) => {
     const m = /^legs[.[](\d+)/.exec(f.field);
@@ -99,7 +126,7 @@ export function PositionForm({ accountId, existing, onDone }: { accountId: strin
       )}
       <div className="grid-3">
         <label>Underlying symbol
-          <input value={underlying} onChange={(e) => setUnderlying(e.target.value)} placeholder="SPY" disabled={!!existing}
+          <input value={underlying} onChange={(e) => setUnderlying(e.target.value)} placeholder="SPY" disabled={!!existing || !!plan}
                  aria-invalid={!!underlying && !valid && !/^[A-Za-z]/.test(underlying)} autoFocus={!existing} />
         </label>
         <label>Name <span className="muted-text small">optional</span>
@@ -107,6 +134,9 @@ export function PositionForm({ accountId, existing, onDone }: { accountId: strin
         </label>
         {!existing && <label>Opened at <span className="muted-text small">default: now</span>
           <input type="datetime-local" value={openedAt} onChange={(e) => setOpenedAt(e.target.value)} />
+        </label>}
+        {plan && <label>Underlying price at entry <span className="muted-text small">optional; default: the current snapshot</span>
+          <input inputMode="decimal" value={entryPrice} onChange={(e) => setEntryPrice(e.target.value)} />
         </label>}
       </div>
       <LegEditor legs={legs} onChange={(l) => { setLegs(l); setAck(false); }} serverErrors={serverLegErrors} />
@@ -133,6 +163,18 @@ export function PositionForm({ accountId, existing, onDone }: { accountId: strin
           : preview.data ? <AnalysisPanel a={preview.data} /> : null}
       </section>
 
+      {!existing && valid && (
+        <section aria-label="Risk check" className="preview">
+          {risk.isPending ? <Loading what="Checking your risk policy" /> : risk.isError ? <FieldErrors error={risk.error} />
+            : <RiskPanel report={risk.data} title="Risk policy check" />}
+        </section>
+      )}
+      {ruleBroken && (
+        <label className="check danger-box">
+          <input type="checkbox" checked={ackRule} onChange={(e) => setAckRule(e.target.checked)} />
+          <span>This breaks my risk policy. I'm recording it because it <strong>already happened at the broker</strong>; flag it for review.</span>
+        </label>
+      )}
       {needsAck && (
         <label className="check danger-box">
           <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
@@ -143,7 +185,7 @@ export function PositionForm({ accountId, existing, onDone }: { accountId: strin
       <FieldErrors error={save.error} />
       <div className="actions">
         <button type="submit" className="btn primary" disabled={blocked}>
-          {save.isPending ? "Saving…" : existing ? "Save changes" : `Record ${t("position").toLowerCase()}`}
+          {save.isPending ? "Saving…" : existing ? "Save changes" : plan ? `Convert to ${t("position").toLowerCase()}` : `Record ${t("position").toLowerCase()}`}
         </button>
       </div>
     </form>
