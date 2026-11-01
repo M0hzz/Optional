@@ -122,6 +122,15 @@ inspecting what you actually hold. Informational only: it never places orders.
 - **Risk policy** (Phase 3): your limits per position and for the account (losses per day and week, open
   risk, counts, Greeks, liquidity, expirations, earnings, no margin, no averaging down without a plan),
   with small-account limits below $1,000. Every check says PASS, WARNING, BLOCKED or UNKNOWN and why.
+- **Historical analysis** (Phase 6): open the Historical Signal Explorer from a plan, position, alert rule, watched contract or event, with the conditions it uses. It shows:
+  - exact and near matches;
+  - forward returns, favourable and adverse moves;
+  - win/loss distributions;
+  - trend, market, volatility and time-of-day breakdowns;
+  - data coverage;
+  - bias checks, including a truncation test that proves no look-ahead.
+
+  Click a match for its chart. Descriptive only.
 - **News and official events** (Phase 5):
   - Sources: SEC filings, Federal Reserve releases and FOMC dates, BLS and BEA releases and calendars, company feeds, and optional Finnhub.
   - Processing: de-duplicated, mapped to symbols with relevance, classified, and scored with the Loughran–McDonald dictionary (the matched words are shown).

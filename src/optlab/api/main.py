@@ -114,6 +114,8 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
                 app.state.runner.stop()
             if app.state.news_runner is not None:
                 app.state.news_runner.stop()
+            if app.state.analysis_jobs is not None:
+                app.state.analysis_jobs.shutdown()
             db.dispose()
             if instance:
                 instance.release()
@@ -126,6 +128,7 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
     app.state.engine = None
     app.state.runner = None
     app.state.news_runner = None
+    app.state.analysis_jobs = None
     app.state.engine_options = engine_options or {}
     app.state.max_upload = int(os.environ.get("OPTLAB_MAX_UPLOAD_BYTES", 1_000_000))
     app.state.research_url = os.environ.get("OPTLAB_RESEARCH_URL") or None
@@ -174,6 +177,7 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
     from .plan_routes import router as plan_router
     from .process_routes import router as process_router
     from .news_routes import router as news_router
+    from .analysis_routes import router as analysis_router
     from .routes import router
 
     app.include_router(router, prefix="/api/v1")
@@ -181,6 +185,7 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
     app.include_router(plan_router, prefix="/api/v1")
     app.include_router(process_router, prefix="/api/v1")
     app.include_router(news_router, prefix="/api/v1")
+    app.include_router(analysis_router, prefix="/api/v1")
 
     if web_dist is not None and (web_dist / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")

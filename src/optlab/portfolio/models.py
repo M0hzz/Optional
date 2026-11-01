@@ -811,3 +811,32 @@ class SymbolNewsFeature(Base):
     features_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
     model_version: Mapped[str | None] = mapped_column(String(80))
     updated_at: Mapped[datetime] = mapped_column(default=utcnow, onupdate=utcnow)
+
+
+# ------------------------------------------------------------------ historical analysis (Phase 6, migration 0007)
+class AnalysisRun(Base):
+    """One historical analysis: the exact strategy searched (and its version), where it was opened from, the
+    data used, and the results. A finished run is never recomputed; running again creates a new run."""
+    __tablename__ = "analysis_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    subject_type: Mapped[str] = mapped_column(String(16))           # plan | position | alert_rule | contract | event | manual
+    subject_id: Mapped[str | None] = mapped_column(String(36))
+    title: Mapped[str] = mapped_column(String(200))
+    strategy_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    strategy_version: Mapped[str] = mapped_column(String(16))
+    excluded_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)   # live-only clauses left out, and why
+    direction: Mapped[str | None] = mapped_column(String(16))
+    focus_horizon: Mapped[str] = mapped_column(String(8))
+    source: Mapped[str] = mapped_column(String(16))                 # yahoo | archive | synthetic
+    status: Mapped[str] = mapped_column(String(10), default="queued")   # queued | running | done | error
+    error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    started_at: Mapped[datetime | None]
+    finished_at: Mapped[datetime | None]
+    seconds: Mapped[float | None] = mapped_column(Float)
+    result_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    matches_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    __table_args__ = (Index("ix_analysis_runs_subject", "subject_type", "subject_id", "created_at"),
+                      CheckConstraint("status IN ('queued', 'running', 'done', 'error')", name="ck_analysis_runs_status"),
+                      CheckConstraint("subject_type IN ('plan', 'position', 'alert_rule', 'contract', 'event', 'manual')",
+                                      name="ck_analysis_runs_subject"))

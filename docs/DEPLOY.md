@@ -165,6 +165,18 @@ Set up:
 
 Migration `0006` adds the news tables only. Docker images include the new requirements; rebuild with `docker compose up -d --build`.
 
+## Historical analysis (Phase 6)
+
+**Upgrading:**
+
+1. `git pull`
+2. `python scripts/portfolio_db.py backup`
+3. `systemctl --user restart optlab-api`
+
+Migration `0007` adds the `analysis_runs` table only. No new packages are needed.
+
+Runs execute in a background thread of the API, one at a time. In live mode, bars come from Yahoo and are cached in `data/history.duckdb` (shared with the Research Lab's Signal Explorer).
+
 ## Database: migrations, backups, restore
 
 - The API applies **forward** migrations at startup, under a lock, and never downgrades or resets.

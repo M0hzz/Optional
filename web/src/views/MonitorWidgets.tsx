@@ -1,6 +1,7 @@
 // Monitor panel (status, schedule, last pass, "Run now", settings), the event feed with acknowledgement,
 // and the alert-rule list. Everything here is informational: nothing places orders.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { analysisHref } from "./Analysis";
 import { useState } from "react";
 import { ApiError, api } from "../api/client";
 import type { AlertRule, EventItem, MonitorStatus, RuleResult, Severity } from "../api/types";
@@ -202,6 +203,8 @@ function EventRow({ e, onAck, busy, showPosition }: { e: EventItem; onAck: () =>
         {showPosition && e.position_id && <a href={`#/positions/${e.position_id}`} onClick={(x) => { x.preventDefault(); navigate(`/positions/${e.position_id}`); }}>open position</a>}
         {notifyText(e) && <span>{notifyText(e)}</span>}
         {e.ack_note && <span>note: {e.ack_note}</span>}
+        {(e.alert_rule_id || e.contract_id || typeof e.source?.plan_id === "string" || (e.position_id && e.type !== "NEWS")) &&
+          <a href={analysisHref("event", e.id)}>historical analysis</a>}
       </div>
       {rules && rules.length > 0 && (
         <details className="small"><summary>Source data</summary><RuleTable rules={rules} /></details>
@@ -259,6 +262,7 @@ export function AlertRulesList({ accountId, positionId, contractId }: { accountI
                 : <span className="badge ok">● armed</span>}</td>
               <td className="row-actions">
                 <button className="btn ghost small" onClick={() => toggle.mutate(r)}>{r.enabled ? "Pause" : "Resume"}</button>
+                <a className="btn ghost small" href={analysisHref("alert_rule", r.id)}>History</a>
                 <button className="btn ghost small" onClick={() => setEditing(r)}>Edit</button>
                 <button className="btn ghost small" onClick={() => setArchiving(r)}>Archive</button>
               </td>

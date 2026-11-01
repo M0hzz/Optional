@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api } from "./api/client";
-import type { Account, DataSources, EventItem, MonitorStatus, Preferences, Progress, ThemeId } from "./api/types";
+import type { Account, DataSources, EventItem, MonitorStatus, Preferences, Progress, SubjectType, ThemeId } from "./api/types";
 import { Empty, ErrorState, Loading, Tip, useToast } from "./components/ui";
 import { LiveProvider, useLiveState, useRefetchInterval } from "./lib/live";
 import { CreateAccountForm } from "./forms/AccountForms";
@@ -13,6 +13,7 @@ import { AcademyView, DebriefView, JournalView, MissionReportView } from "./view
 import { PositionDetail } from "./views/PositionDetail";
 import { RiskView } from "./views/Risk";
 import { NewsView } from "./views/News";
+import { AnalysisList, AnalysisNew, AnalysisRunView, ManualNew } from "./views/Analysis";
 
 function researchUrl(ds?: DataSources): string {
   if (ds?.research_lab_url) return ds.research_lab_url;
@@ -77,11 +78,14 @@ function Shell() {
   const posMatch = /^\/positions\/([0-9a-f-]{36})$/.exec(route);
   const planMatch = /^\/plans\/([0-9a-f-]{36})$/.exec(route);
   const reportMatch = /^\/reports\/([0-9a-f-]{36})$/.exec(route);
+  const anManual = /^\/analysis\/new\/manual\/([A-Za-z0-9.^%-]{1,20})$/.exec(route);
+  const anNew = /^\/analysis\/new\/(plan|position|alert_rule|contract|event)\/([0-9a-f-]{36})$/.exec(route);
+  const anRun = /^\/analysis\/([0-9a-f-]{36})$/.exec(route);
   const section = posMatch ? "dash" : planMatch || route === "/plans" ? "plans" : route === "/risk" ? "risk"
-    : reportMatch || route === "/debrief" ? "debrief" : route === "/journal" ? "journal" : route === "/news" ? "news" : route === "/learn" ? "learn" : "dash";
+    : reportMatch || route === "/debrief" ? "debrief" : route === "/journal" ? "journal" : route === "/news" ? "news" : route.startsWith("/analysis") ? "analysis" : route === "/learn" ? "learn" : "dash";
   const theme = prefs.data?.theme ?? "default";
   useEffect(() => { document.documentElement.dataset.colorTheme = theme; }, [theme]);
-  const nav = (key: "dashboard" | "plans" | "risk" | "debrief" | "journal" | "news" | "academy", href: string, sec: string) => (
+  const nav = (key: "dashboard" | "plans" | "risk" | "debrief" | "journal" | "news" | "analysis" | "academy", href: string, sec: string) => (
     <a href={href} className={section === sec ? "active" : ""}>{mode === "colony" ? TERMS[key].colony : TERMS[key].pro}</a>);
 
   return (
@@ -91,7 +95,7 @@ function Shell() {
           <div className="brand"><span aria-hidden>◈</span> optlab</div>
           <nav>
             {nav("dashboard", "#/", "dash")}{nav("plans", "#/plans", "plans")}{nav("risk", "#/risk", "risk")}
-            {nav("debrief", "#/debrief", "debrief")}{nav("journal", "#/journal", "journal")}{nav("news", "#/news", "news")}{nav("academy", "#/learn", "learn")}
+            {nav("debrief", "#/debrief", "debrief")}{nav("journal", "#/journal", "journal")}{nav("news", "#/news", "news")}{nav("analysis", "#/analysis", "analysis")}{nav("academy", "#/learn", "learn")}
             <a href={researchUrl(sources.data)} target="_blank" rel="noreferrer">
               <Tip text={TERMS.research.meaning}><span>Research Lab ↗</span></Tip>
             </a>
@@ -144,6 +148,10 @@ function Shell() {
               : route === "/debrief" ? <DebriefView account={active} />
               : route === "/journal" ? <JournalView account={active} />
               : route === "/news" ? <NewsView account={active} />
+              : route === "/analysis" ? <AnalysisList />
+              : anManual ? <ManualNew symbol={decodeURIComponent(anManual[1])} />
+              : anNew ? <AnalysisNew type={anNew[1] as SubjectType} id={anNew[2]} />
+              : anRun ? <AnalysisRunView id={anRun[1]} />
               : route === "/learn" ? <AcademyView />
               : <Dashboard account={active} />}
         </main>

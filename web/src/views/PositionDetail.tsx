@@ -13,6 +13,7 @@ import { navigate } from "../lib/router";
 import { RiskBadge, RiskPanel } from "../components/RiskReport";
 import { HistoryChart, MonitoringSection, PositionAlerts, Timeline } from "./PositionMonitoring";
 import { SymbolNews } from "./News";
+import { AnalysisLink } from "./Analysis";
 
 export function PositionDetail({ id }: { id: string }) {
   const q = useQuery<Position, ApiError>({ queryKey: ["position", id], queryFn: () => api.position(id), refetchInterval: useRefetchInterval() });
@@ -42,6 +43,7 @@ export function PositionDetail({ id }: { id: string }) {
             {p.lifecycle === "CLOSED" && <button className="btn small" onClick={() => setArchiving("closed")}>Archive…</button>}
             {p.lifecycle === "OPEN" && <button className="btn small ghost" onClick={() => setArchiving("entered_in_error")}>Entered in error…</button>}
             {p.lifecycle !== "OPEN" && p.archive_reason !== "entered_in_error" && <a className="btn small primary" href={`#/reports/${p.id}`}>Mission report</a>}
+            <AnalysisLink type="position" id={p.id} />
           </div>
         </div>
         <dl className="facts">

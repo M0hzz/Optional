@@ -2,7 +2,7 @@
 import type {
   Account, AlertRule, Analysis, AuditEntry, Contract, ContractMonitor, ContractQuote, DataSources, EventItem, EventPage,
   ImportReport, JournalEntryT, LegIn, MissionReport, MonitorRunInfo, PendingReview, Progress, Review, DayScore, Plan, PolicyPayload, PolicySettings, RiskDashboard, RiskReport, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
-  CalendarItem, LedgerEntry, NewsArticle, NewsFeatures, NewsPage, NewsSources, PointsSummary, Preferences, RuleSet, ScoreHistoryDay, Versions, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
+  AnalysisDraft, AnalysisRun, CalendarItem, LedgerEntry, MatchWindow, NewsArticle, NewsFeatures, NewsPage, NewsSources, PointsSummary, Preferences, RuleSet, ScoreHistoryDay, Versions, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
 } from "./types";
 
 export interface FieldError { field: string; code: string; message: string }
@@ -157,6 +157,13 @@ export const api = {
   newsSources: () => request<NewsSources>("GET", "/news/sources"),
   setNewsSource: (code: string, enabled: boolean) => request<{ code: string; enabled: boolean; status: string }>("PATCH", `/news/sources/${code}`, { enabled }),
   refreshNews: () => request<Record<string, unknown>>("POST", "/news/refresh"),
+  // ---------------------------------------------------------------- historical analysis (Phase 6)
+  analysisDraft: (p: { subject_type: string; subject_id?: string; symbol?: string }) => request<AnalysisDraft>("GET", "/analysis/draft" + q(p)),
+  createAnalysis: (b: Record<string, unknown>) => request<{ id: string; status: string; strategy_version: string; source: string }>("POST", "/analysis/runs", b),
+  startAnalysis: (id: string) => request<{ id: string; status: string }>("POST", `/analysis/runs/${id}/start`),
+  analysisRuns: (p: { subject_type?: string; subject_id?: string; limit?: number } = {}) => request<AnalysisRun[]>("GET", "/analysis/runs" + q(p)),
+  analysisRun: (id: string) => request<AnalysisRun>("GET", `/analysis/runs/${id}`),
+  matchWindow: (id: string, n: number) => request<MatchWindow>("GET", `/analysis/runs/${id}/matches/${n}/bars`),
   yamlPreview: (accountId: string) => request<{ path: string; rows: YamlRow[] }>("POST", "/imports/scans-yaml/preview" + q({ account_id: accountId })),
   yamlCommit: (accountId: string, acknowledgeRisk: boolean, key: string) =>
     request<{ imported: { id: string; name: string }[]; rows: YamlRow[] }>(

@@ -1,6 +1,7 @@
 // Trade plans (missions): the list, one plan's page with its state machine, checklist, risk check, monitor
 // conditions, conversion into a position and the planned-versus-actual comparison.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AnalysisLink } from "./Analysis";
 import { useState } from "react";
 import { ApiError, api } from "../api/client";
 import type { Account, Plan, PlanState, RuleResult, TimelineItem } from "../api/types";
@@ -132,6 +133,7 @@ export function PlanDetail({ id }: { id: string }) {
                         onClick={() => (ACTION[s]!.reason || s === "ARCHIVED" ? setPending(s) : move.mutate(s))} disabled={move.isPending}>{ACTION[s]!.label}</button>
               </Tip>))}
             <button className="btn small ghost" onClick={() => dup.mutate()}>Duplicate</button>
+            <AnalysisLink type="plan" id={p.id} />
           </div>
         </div>
         {move.error && pending === null && (riskErr ? <RiskPanel report={riskErr} title="Can't arm: the risk check is blocked" /> : <FieldErrors error={move.error} />)}

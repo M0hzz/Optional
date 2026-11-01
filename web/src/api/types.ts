@@ -384,3 +384,42 @@ export interface NewsFeatures {
   features: null | Record<string, number | string | boolean | null | string[]>;
   rule_values: Record<string, number | boolean | string | null>; why_missing: Record<string, string>; meanings: Record<string, string>;
 }
+
+// ------------------------------------------------------------------ historical analysis (Phase 6)
+export type SubjectType = "plan" | "position" | "alert_rule" | "contract" | "event" | "manual";
+export interface AnalysisCondition { id: string; expression: string; origin?: string | null; required: boolean; weight: number; tolerance_type: "none" | "absolute" | "percent_distance"; tolerance: number }
+export interface Excluded { expression: string; origin: string; reason: string }
+export interface AnalysisDraft {
+  subject: { type: SubjectType; id: string | null; label: string; link: string | null };
+  name: string; symbols: string[]; timeframe: string; start: string; end: string; conditions: AnalysisCondition[]; excluded: Excluded[];
+  notes: string[]; direction: "bullish" | "bearish" | null; horizons: string[]; focus_horizon: string; dedupe_bars: number;
+  include_near: boolean; minimum_score: number; required_mode: "strict" | "tolerant"; source: string; entry?: { opened_at: string; note: string };
+}
+export interface HorizonStats {
+  horizon: string; group: "all" | "exact" | "near"; signals: number; incomplete: number; mean_return_pct: number | null; median_return_pct: number | null;
+  p25_return_pct: number | null; p75_return_pct: number | null; best_pct: number | null; worst_pct: number | null; up_pct: number | null; down_pct: number | null;
+  mean_favorable_pct: number | null; mean_adverse_pct: number | null; median_realized_vol_pct: number | null; low_sample: boolean;
+  win_pct?: number | null; wins?: number; losses?: number; mean_win_pct?: number | null; mean_loss_pct?: number | null;
+}
+export interface DistBin { from_pct: number; to_pct: number; count: number; kind: "win" | "loss" | null; open_low: boolean; open_high: boolean }
+export interface Breakdown { dimension: string; subset: string; signals: number; median_return_pct: number | null; mean_return_pct: number | null; up_pct: number | null; win_pct?: number | null; low_sample: boolean; keys: string[] }
+export interface BiasCheck { code: string; title: string; status: "pass" | "warn" | "fail"; detail: string }
+export interface CoverageRow { symbol: string; source: string; first_bar: string | null; last_bar: string | null; bars_in_range: number; missing_bars: number; warmup_requested: number; warmup_available: number; incomplete_bars_dropped: number; adjusted: boolean; warnings: string[] }
+export interface AnalysisMatch {
+  n: number; key: string; symbol: string; timestamp: string; match_type: "exact" | "near"; score: number | null; passed: number; near: number; failed: number;
+  conditions: Record<string, { status: string; value: number | null; score: number | null }>; explanation: string | null; thinned: boolean;
+  forward: Record<string, { return_pct: number | null; favorable_pct: number | null; adverse_pct: number | null }>; labels: Record<string, string>; is_entry: boolean;
+}
+export interface AnalysisRun {
+  id: string; subject_type: SubjectType; subject_id: string | null; title: string; strategy_version: string; direction: string | null; focus_horizon: string;
+  source: string; status: "queued" | "running" | "done" | "error"; error: string | null; created_at: string; started_at: string | null; finished_at: string | null;
+  seconds: number | null; counts: { matches: number; exact: number; near: number; thinned: number; bars_evaluated: number; not_evaluable: number; stored: number } | null;
+  strategy: { name: string; symbols: string[]; timeframe: string; range: { start: string; end: string }; conditions: { id: string; expression: string; required: boolean; weight: number; tolerance?: { type: string; value: number } }[];
+    matching: { minimum_score: number; include_near: boolean; required_mode: string }; forward: { horizons: string[]; dedupe_bars: number } } | null;
+  excluded?: Excluded[];
+  result?: { version: string; horizons: HorizonStats[]; distributions: { horizon: string; signals: number; bins: DistBin[]; note?: string | null }[];
+    breakdowns: Breakdown[]; bias: BiasCheck[]; coverage: CoverageRow[]; warnings: string[]; definitions: string; origins?: Record<string, string | null>;
+    truncation: { checked: number; mismatches: number; details: string[] } } | Record<string, never>;
+  matches?: AnalysisMatch[];
+}
+export interface MatchWindow { match: AnalysisMatch; bars: { t: string; o: number | null; h: number | null; l: number | null; c: number | null; v: number | null }[]; signal_index: number; horizon_ends: Record<string, number | null>; timeframe: string; note: string }

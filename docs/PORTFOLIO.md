@@ -530,6 +530,62 @@ When the news itself is unavailable (no source fetched yet, or all failing), the
 
 Each story is announced once.
 
+## Historical analysis (Phase 6)
+
+**Historical analysis** (colony: *Survey records*) opens the Historical Signal Explorer from your dashboard objects. It answers "when did these conditions hold before, and what did price do afterwards?". It's descriptive: never a forecast or a recommendation.
+
+**Opening it:** use the **Historical analysis** / **History** button on:
+- a plan (its trigger and confirmation conditions);
+- a position (its plan's conditions, or its monitoring rules if it has no plan);
+- an alert rule;
+- a watched contract (its entry conditions);
+- an event in the alerts and events feed (the rule, plan, contract or position behind it).
+
+Or start from scratch on the **Historical analysis** page.
+
+**What's searched:** live conditions are split at their top-level `and`. Each part is kept if it has price/volume history (prices, volume, moving averages, RSI, MACD, Bollinger bands and the other studies). The rest is listed under *Left out of the historical search* with the reason, which makes the search looser than the live rule:
+- position values (P&L, Greeks, days to expiration);
+- option quotes (bid/ask, IV, delta, open interest);
+- chain statistics;
+- earnings dates;
+- news;
+- a plan's invalidation conditions.
+
+Everything in the draft can be edited before running: symbols (up to 10), bars, date range, conditions, near-match tolerance, weights, horizons, thinning and direction.
+
+**Results:**
+- **Bias checks** (see below).
+- **Matches:** exact and near matches; signals thinned because they overlap the previous one.
+- **What price did afterwards:** per horizon and per exact / near / all. It shows signals, median, mean, the middle half, the share up, the win rate (with a direction), and the average favourable and adverse move. Fewer than 20 signals is marked *low sample*.
+- **Distribution** of returns at each horizon (wins and losses coloured when a direction is set).
+- **Breakdowns** at the focus horizon:
+  - trend (close vs its 200-bar average);
+  - market (SPY vs its 50-bar average);
+  - volatility (ATR percentile: low / middle / high);
+  - time of day (intraday bars).
+
+  Click a row to list its matches.
+- **Matching bars:** each with its condition results, the focus-horizon return and its labels. Your own entry bar is marked when a position's analysis includes it. Click a match for a price chart around it, with the signal and every horizon's end marked.
+- **Data coverage:** first and last bar, bars, missing bars, warm-up and warnings per symbol.
+
+**Bias checks** (each pass, warn or fail, with the details):
+
+| Check | What it means |
+|---|---|
+| Conditions use only past and current bars | A truncation test: sampled signals are re-evaluated with every later bar removed; any difference fails it |
+| Forward returns start at the signal bar's close | Nothing from before the signal was complete; no fills assumed |
+| Only completed bars | Bars still in progress are dropped |
+| Horizons past the end of the data are left out | Not counted as zero |
+| Overlapping signals thinned | Warns when the thinning is shorter than the longest horizon (windows overlap) |
+| Enough signals | Warns under 30 completed signals at the focus horizon |
+| Near matches reported separately | Exact and near never mixed silently |
+| Survivorship | Always a warning: symbols chosen today leave out delisted companies |
+| Split- and dividend-adjusted prices | Past prices differ from what was quoted then; percentages are unaffected |
+| Many variations tried | Warns when 5 or more other versions were run for the same object in 30 days |
+| Synthetic data | Fails in synthetic mode: generated bars say nothing about real markets |
+
+**Runs are stored:** every run keeps its exact strategy and version, data source and results, and is never recomputed. Running again creates a new run. In live mode the search uses real history (Yahoo, cached in `data/history.duckdb`) and never synthetic bars.
+
 ## Importing positions from scans.yaml
 
 **Import scans.yaml** (Monitor panel) shows the `positions:` of the project's scans.yaml with their

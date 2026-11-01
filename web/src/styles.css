@@ -294,3 +294,8 @@ ul.plain { list-style: none; margin: 0; padding: 0; }
 .banner.warn { border-color: var(--warn); background: var(--warn-bg); }
 .bad-text { color: var(--bad); }
 .calendar li { margin-bottom: 4px; }
+
+/* ---------------------------------------------------------------- historical analysis (Phase 6) */
+.bias-list li { padding: 5px 0; border-bottom: 1px solid var(--border); }
+.focus-row td { background: var(--panel-2); }
+.link-btn { background: none; border: 0; color: inherit; cursor: pointer; padding: 0 2px; }

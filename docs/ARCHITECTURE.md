@@ -195,6 +195,26 @@ The revision is added only when that revision was computed under the current sco
 
 The monitor reads the stored features once per pass (`features.load_rule_values`). News never makes a network call inside a monitoring pass, and a rule can't consist of news names alone (`monitoring/rules.validate`).
 
+## Analysis layer (`src/optlab/analysis`, Phase 6)
+
+| Module | Responsibility |
+|---|---|
+| `translate.py` | Live conditions → historical clauses (split at top-level `and`); clauses without price history are excluded with the reason |
+| `drafts.py` | A draft per dashboard object (plan, position, alert rule, watched contract, event, manual): symbol, timeframe, range, conditions with default near tolerances, horizons, thinning |
+| `stats.py` | stats-v1: direction-aware favourable / adverse and wins, horizon statistics, distributions, regime / volatility / market / time-of-day labels (from the signal bar and earlier only), the truncation test, bias checks, coverage |
+| `service.py` | Form validation (→ `history.strategy.parse_strategy`), `execute` (explorer search + forward behaviour + statistics), stored runs, a one-thread background job runner, the drill-down window |
+| `api/analysis_routes.py` | `GET /analysis/draft`, `GET /analysis/vocabulary`, `POST /analysis/runs` (queued) + `POST /analysis/runs/{id}/start`, `GET /analysis/runs`, `GET /analysis/runs/{id}`, `GET /analysis/runs/{id}/matches/{n}/bars` |
+
+It reuses the Phase 1–5 explorer (`history/explorer.py`, `history/forward.py`, `history/bars.py`) unchanged. The data source follows the quote mode: synthetic quotes use synthetic bars; live mode uses Yahoo plus the local archive, never synthetic bars.
+
+## Database (Phase 6, migration `0007`)
+
+New table only:
+
+| Table | Contents |
+|---|---|
+| `analysis_runs` | subject (type, id), title, the strategy (explorer YAML as JSON) and its version, the excluded clauses, direction, focus horizon, data source, status (queued / running / done / error), timings, the results and up to 2,000 matches |
+
 ## Database (Phase 5, migration `0006`)
 
 New tables only; no existing table changes:
@@ -287,6 +307,8 @@ erDiagram
 - Phase 2 (this): monitoring, snapshots, statuses, alert rules, events, notifications, live updates,
   scans.yaml import. The YAML monitor keeps running the scans and the YAML positions you haven't imported.
 - Phase 3: trade plans, risk policies and checks, plan conversion and comparison, risk dashboard.
+- Phase 6: historical analysis from plans, positions, alert rules, watched contracts and events; forward
+  statistics, distributions, breakdowns, bias checks with a look-ahead truncation test, drill-down charts.
 - Phase 5: news and official events (SEC, Fed, BLS, BEA, company feeds, optional Finnhub), de-duplication,
   symbol mapping, classification, Loughran–McDonald sentiment, symbol features, news-confirmed rules, the
   news page, the dashboard widget and the macro calendar.

@@ -17,6 +17,7 @@ import { useTerms } from "../lib/terms";
 import { AlertRulesList, EventFeed, MonitorPanel } from "./MonitorWidgets";
 import { DisciplinePanel, ProgressPanel } from "./Process";
 import { NewsWidget } from "./News";
+import { analysisHref } from "./Analysis";
 
 const WIDGET_NAMES: Record<WidgetId, { pro: string; colony: string }> = {
   overview: { pro: "Account overview", colony: "Treasury" }, discipline: { pro: "Daily discipline", colony: "Daily orders" },
@@ -315,6 +316,7 @@ function WatchedWidget({ account }: { account: Account }) {
                     <button className="btn ghost small" onClick={() => setEditing(c)}>Edit</button>
                     <button className="btn ghost small" onClick={() => setAlerts(c)}>Alerts</button>
                     <button className="btn ghost small" onClick={() => setPlanning(c)}>Plan it</button>
+                    {c.alert_conditions && <a className="btn ghost small" href={analysisHref("contract", c.id)}>History</a>}
                     <button className="btn ghost small" onClick={() => setArchiving(c)}>Archive</button>
                   </td>
                 </tr>);
