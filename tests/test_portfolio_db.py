@@ -32,7 +32,7 @@ def test_migration_from_empty_matches_the_models_and_rolls_back(db_url):
     from alembic.autogenerate import compare_metadata
     from alembic.migration import MigrationContext
 
-    assert dbm.upgrade(db_url) == dbm.head_revision() == "0002"
+    assert dbm.upgrade(db_url) == dbm.head_revision() == "0003"
     eng = dbm.make_engine(db_url)
     with eng.connect() as c:
         assert compare_metadata(MigrationContext.configure(c), Base.metadata) == []      # no drift
@@ -43,8 +43,8 @@ def test_migration_from_empty_matches_the_models_and_rolls_back(db_url):
     path = dbm.sqlite_path(db_url)
     tables = {r[0] for r in sqlite3.connect(path).execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert tables - {"sqlite_sequence"} == {"alembic_version"}     # sqlite_sequence: SQLite's own AUTOINCREMENT table
-    assert dbm.upgrade(db_url) == "0002"                         # and forward again
-    assert dbm.upgrade(db_url) == "0002"                         # idempotent
+    assert dbm.upgrade(db_url) == dbm.head_revision()            # and forward again
+    assert dbm.upgrade(db_url) == dbm.head_revision()            # idempotent
 
 
 def test_concurrent_startup_migrations_run_once(db_url):
@@ -58,7 +58,7 @@ def test_concurrent_startup_migrations_run_once(db_url):
     ts = [threading.Thread(target=go) for _ in range(4)]
     [t.start() for t in ts]
     [t.join() for t in ts]
-    assert not errors and dbm.current_revision(db_url) == "0002"
+    assert not errors and dbm.current_revision(db_url) == dbm.head_revision()
 
 
 def test_pragmas(database):

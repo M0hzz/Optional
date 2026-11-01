@@ -158,10 +158,12 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
                                                          "server log.", None, None, request.state.request_id), 500)
 
     from .monitor_routes import router as monitor_router
+    from .plan_routes import router as plan_router
     from .routes import router
 
     app.include_router(router, prefix="/api/v1")
     app.include_router(monitor_router, prefix="/api/v1")
+    app.include_router(plan_router, prefix="/api/v1")
 
     if web_dist is not None and (web_dist / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")

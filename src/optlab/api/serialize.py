@@ -58,7 +58,8 @@ def position(p: Position, today: date | None = None, monitor: dict | None = None
                      fill_price=m(lg.fill_price_units), fees=m(lg.fees_units) or "0.0000", filled_at=lg.filled_at,
                      broker_order_id=lg.broker_order_id, occ_symbol=lg.occ_symbol,
                      close_price=m(lg.close_price_units), close_fees=m(lg.close_fees_units), closed_at=lg.closed_at,
-                     notes=lg.notes) for lg in p.legs], monitor=monitor)
+                     notes=lg.notes) for lg in p.legs], monitor=monitor, plan_id=p.plan_id,
+        entry_risk=p.entry_risk_json or None, rule_violation=bool(p.rule_violation))
 
 
 def contract(w: WatchedContract, today: date | None = None) -> ContractOut:

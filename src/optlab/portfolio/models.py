@@ -160,6 +160,12 @@ class Position(Audited, Base):
     # Per-position monitor settings: {"rules": {"exit_when": [...], "action_when": [...], "watch_when": [...]} | None
     # (None = the account-wide defaults), "timeframe": "1d", "notify": true}
     monitor_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    # Phase 3: the plan this position came from, the risk check when it was recorded, and whether it was
+    # recorded although it broke a risk rule (kept honestly, for review)
+    plan_id: Mapped[str | None] = mapped_column(ForeignKey("trade_plans.id", ondelete="SET NULL", use_alter=True,
+                                                           name="fk_positions_plan_id"), index=True)
+    entry_risk_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    rule_violation: Mapped[bool] = mapped_column(Boolean, default=False)
     notes: Mapped[str | None] = mapped_column(Text)
     legs: Mapped[list[PositionLeg]] = relationship(back_populates="position", order_by="PositionLeg.leg_index",
                                                    cascade="all, delete-orphan")
@@ -443,3 +449,84 @@ class MonitorRun(Base):
     ok: Mapped[bool] = mapped_column(Boolean, default=True)
     errors_json: Mapped[list[str]] = mapped_column(JSON, default=list)
     __table_args__ = (Index("ix_monitor_runs_started", "started_at"),)
+
+
+# ====================================================================== Phase 3: trade plans and risk
+class RiskPolicy(Base):
+    """One revision of an account's risk policy. Changing the policy adds a revision and marks the previous
+    one superseded, so every past risk check can be explained by the policy it used."""
+    __tablename__ = "risk_policies"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"))
+    revision: Mapped[int] = mapped_column(Integer)
+    settings_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(default=utcnow)
+    superseded_at: Mapped[datetime | None]
+    __table_args__ = (Index("ix_risk_policies_account_revision", "account_id", "revision", unique=True),)
+
+
+PLAN_STATES = ("DRAFT", "ARMED", "WAITING", "QUALIFIED", "INVALIDATED", "CONVERTED", "SKIPPED", "EXPIRED", "ARCHIVED")
+
+
+class TradePlan(Audited, Base):
+    """A mission: the plan written before a position exists. Prices are per share in $0.0001 units, except
+    planned_max_loss_units (dollars for the whole position). Kept unchanged after conversion."""
+    __tablename__ = "trade_plans"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id", ondelete="RESTRICT"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    state: Mapped[str] = mapped_column(String(16), default="DRAFT", index=True)
+    state_changed_at: Mapped[datetime] = mapped_column(default=utcnow)
+    thesis: Mapped[str | None] = mapped_column(Text)
+    direction: Mapped[str | None] = mapped_column(String(16))           # bullish | bearish | neutral | volatility
+    intended_strategy: Mapped[str | None] = mapped_column(String(40))   # recognize.Strategy value
+    market_regime: Mapped[str | None] = mapped_column(String(80))
+    setup_type: Mapped[str | None] = mapped_column(String(80))
+    trigger: Mapped[str | None] = mapped_column(Text)
+    trigger_conditions: Mapped[str | None] = mapped_column(Text)        # one per line, checked by the monitor
+    confirmation: Mapped[str | None] = mapped_column(Text)
+    confirmation_conditions: Mapped[str | None] = mapped_column(Text)
+    entry_zone_low_units: Mapped[int | None] = mapped_column(BigInteger)
+    entry_zone_high_units: Mapped[int | None] = mapped_column(BigInteger)
+    max_entry_debit_units: Mapped[int | None] = mapped_column(BigInteger)
+    min_entry_credit_units: Mapped[int | None] = mapped_column(BigInteger)
+    max_spread_pct: Mapped[float | None]
+    min_volume: Mapped[int | None] = mapped_column(Integer)
+    min_open_interest: Mapped[int | None] = mapped_column(Integer)
+    target: Mapped[str | None] = mapped_column(Text)
+    target_price_units: Mapped[int | None] = mapped_column(BigInteger)
+    invalidation: Mapped[str | None] = mapped_column(Text)
+    invalidation_conditions: Mapped[str | None] = mapped_column(Text)
+    invalidation_price_units: Mapped[int | None] = mapped_column(BigInteger)
+    planned_max_loss_units: Mapped[int | None] = mapped_column(BigInteger)
+    planned_contracts: Mapped[int | None] = mapped_column(Integer)
+    expiration_from: Mapped[date | None] = mapped_column(Date)
+    expiration_to: Mapped[date | None] = mapped_column(Date)
+    delta_min: Mapped[float | None]
+    delta_max: Mapped[float | None]
+    time_stop: Mapped[date | None] = mapped_column(Date)
+    event_risks: Mapped[str | None] = mapped_column(Text)
+    related_news: Mapped[str | None] = mapped_column(Text)
+    chart_reference: Mapped[str | None] = mapped_column(String(500))
+    notes: Mapped[str | None] = mapped_column(Text)
+    legs_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)    # planned legs (optional)
+    expires_at: Mapped[datetime | None]
+    outcome_reason: Mapped[str | None] = mapped_column(Text)            # why skipped / invalidated
+    risk_json: Mapped[dict[str, Any]] = mapped_column(default=dict)     # the last risk check
+    position_id: Mapped[str | None] = mapped_column(ForeignKey("positions.id", ondelete="SET NULL"), index=True)
+    converted_at: Mapped[datetime | None]
+    comparison_json: Mapped[dict[str, Any]] = mapped_column(default=dict)
+    archived_at: Mapped[datetime | None]
+    __table_args__ = (
+        CheckConstraint("state IN ('DRAFT','ARMED','WAITING','QUALIFIED','INVALIDATED','CONVERTED','SKIPPED','EXPIRED',"
+                        "'ARCHIVED')", name="ck_trade_plans_state"),
+        CheckConstraint("planned_contracts IS NULL OR planned_contracts > 0", name="ck_trade_plans_contracts"),
+        CheckConstraint("planned_max_loss_units IS NULL OR planned_max_loss_units >= 0", name="ck_trade_plans_loss"),
+        CheckConstraint("state != 'CONVERTED' OR converted_at IS NOT NULL",
+                        name="ck_trade_plans_converted"),
+        Index("ix_trade_plans_account_state", "account_id", "state"),
+    )
+    version: Mapped[int] = mapped_column(Integer)
+    __mapper_args__ = {"version_id_col": version}

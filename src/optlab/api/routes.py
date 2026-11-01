@@ -132,6 +132,20 @@ def account_overview(account_id: str, request: Request, s: Read):
                        "open_pnl_complete": pnl_n == len(items),
                        "greeks": {k: round(x, 4) for k, x in greeks.items()} if greeks_ok and items else None,
                        "last_checked_at": newest, "label": "ESTIMATED"}
+    from datetime import datetime, timezone
+
+    from ..planning import plans as pl
+    from ..planning import policy as pol
+    from ..planning import riskcheck as rc
+
+    settings, row = pol.load(s, account_id)
+    port = rc.portfolio_state(s, account_id, datetime.now(timezone.utc), pl._tz(s))
+    eff = pol.effective(settings, port.account_value)
+    util = rc.utilization(eff, port, row)
+    o["risk"] = {"overall": util.overall, "summary": util.summary, "checks": [c.__dict__ for c in util.checks],
+                 "realized_today": fmt(port.realized_today), "realized_week": fmt(port.realized_week),
+                 "small_account_active": eff["small_account_active"], "small_account_reason": eff["small_account_reason"],
+                 "policy_revision": row.revision if row else None}
     return o
 
 
@@ -199,7 +213,25 @@ def create_position(body: PositionIn, request: Request, response: Response, s: W
         response.status_code = prev.status_code
         response.headers["Idempotent-Replay"] = "true"
         return prev.response_json
-    p = svc.create_position(s, body, earnings_date(body.underlying))
+    from ..planning import plans as pl
+
+    earn = earnings_date(body.underlying)
+    rep = None
+    if not svc.analyze_legs(body.legs, body.underlying, svc.context_for(s, body.account_id, body.underlying,
+                                                                         body.cash_secured, earn)).errors:
+        info = None
+        try:
+            info = pl.leg_quotes(quotes_of(request), body.underlying, body.legs)
+        except Exception:                      # quotes are optional for the check: liquidity becomes UNKNOWN
+            info = None
+        _, rep = pl.check_legs(s, body.account_id, body.underlying, body.legs, body.cash_secured, earn, info, False)
+        if rep.overall == "BLOCKED" and not body.acknowledge_rule_violation:
+            raise svc.DomainError("RULE_VIOLATION", "This position breaks your risk policy. Record it anyway only if it "
+                                                    "already happened at the broker (acknowledge_rule_violation): it "
+                                                    "will be flagged for review.", 422, details={"risk": rep.as_dict()})
+    p = svc.create_position(s, body, earn)
+    if rep is not None:
+        pl.record_risk(s, p, rep)
     out = _pos(request, s, p)
     svc.idempotent_store(s, idempotency_key, "positions.create", h, 201, out.model_dump(mode="json"))
     return out

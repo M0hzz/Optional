@@ -21,7 +21,7 @@ def make(client, account, legs, **kw):
 # ------------------------------------------------------------------ system
 def test_health_openapi_and_structured_404(client):
     h = client.get(f"{API}/health").json()
-    assert h["status"] == "ok" and h["database"]["revision"] == h["database"]["head"] == "0002"
+    assert h["status"] == "ok" and h["database"]["revision"] == h["database"]["head"] == "0003"
     assert h["database"]["journal_mode"] == "wal"
     spec = client.get(f"{API}/openapi.json").json()
     assert "/api/v1/positions/analyze" in spec["paths"] and "/api/v1/positions/{position_id}/close" in spec["paths"]

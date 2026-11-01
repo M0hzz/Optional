@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..portfolio.ids import new_id
 from ..portfolio.models import (AlertRule, ContractSnapshot, ContractStatus, Lifecycle, MonitorRun, MonitorState,
-                                Position, PositionSnapshot, WatchedContract, utcnow)
+                                Position, PositionSnapshot, TradePlan, WatchedContract, utcnow)
 from ..portfolio.money import computed_to_units, fmt, from_units
 from ..portfolio.quotes import ChainSnapshot, QuoteService, earnings_date
 from ..portfolio.valuation import PositionValuation, value_position
@@ -159,6 +159,12 @@ class Engine:
                                        .order_by(Position.opened_at)))
             contracts = list(s.scalars(select(WatchedContract).where(WatchedContract.status.in_(WATCHED_STATES))))
             alert_rules = list(s.scalars(select(AlertRule).where(AlertRule.enabled.is_(True), AlertRule.archived_at.is_(None))))
+            plans = list(s.scalars(select(TradePlan).where(
+                TradePlan.state.in_(("ARMED", "WAITING", "QUALIFIED")) | (TradePlan.expires_at.is_not(None)
+                                                                         & TradePlan.state.in_(("DRAFT",))))))
+            from ..portfolio.service import get_preferences
+
+            display_tz = get_preferences(s).get("timezone") or "America/New_York"
             prev = {r.subject_id: (r.data_json or {}).get("metrics") for r in
                     s.scalars(select(MonitorState).where(MonitorState.kind == "position"))}
         today = now.astimezone(ZoneInfo(st.schedule.timezone)).date()
@@ -167,13 +173,14 @@ class Engine:
         alert_rules = [r for r in alert_rules if (r.target_type != "position" or r.position_id in by_pos)
                        and (r.target_type != "contract" or r.contract_id in by_contract)]
         symbols = sorted({p.underlying for p in positions} | {c.underlying for c in contracts if c.expiration >= today}
-                         | {r.symbol for r in alert_rules if r.target_type == "symbol" and r.symbol})
+                         | {r.symbol for r in alert_rules if r.target_type == "symbol" and r.symbol}
+                         | {pl.symbol for pl in plans if pl.state != "DRAFT"})
 
         # ---------------------------------------------------------- fetch (no database lock held)
         with ThreadPoolExecutor(8) as ex:
             snaps: dict[str, ChainSnapshot] = dict(zip(symbols, ex.map(self.quotes.chain, symbols)))
             earn = dict(zip(symbols, ex.map(self._earnings, symbols)))
-        bars = self._bars_needed(st, positions, contracts, alert_rules, now)
+        bars = self._bars_needed(st, positions, contracts, alert_rules, now, plans)
         vals: dict[str, PositionValuation] = {}
         checks: dict[str, PositionCheck] = {}
         for p in positions:
@@ -221,6 +228,25 @@ class Engine:
                                          ctx_cache)
                 new_events += self._write_alert(s, r, ctx, st, now, run_id, by_pos, by_contract)
                 summ.rules += 1
+            # plans (missions) and account risk limits
+            from ..planning.monitor import evaluate_plans, risk_limit_events
+
+            plan_ctx = {}
+            for pl in plans:
+                if pl.state != "DRAFT" and pl.symbol not in plan_ctx:
+                    plan_ctx[pl.symbol] = self._symbol_context(pl.symbol, st.timeframe, snaps, bars, earn, today)
+            try:
+                with s.begin_nested():
+                    new_events += evaluate_plans(s, plans, plan_ctx, st, now, run_id)
+            except Exception as exc:
+                log.exception("plan checks failed")
+                summ.errors.append(f"plans: {type(exc).__name__}: {str(exc)[:160]}")
+            try:
+                with s.begin_nested():
+                    new_events += risk_limit_events(s, st, now, run_id, display_tz)
+            except Exception as exc:
+                log.exception("risk-limit checks failed")
+                summ.errors.append(f"risk limits: {type(exc).__name__}: {str(exc)[:160]}")
             self._monitor_state(s, summ, st, now, run_id, new_events)
             self._retention(s, st, now)
             s.add(MonitorRun(id=run_id, started_at=now, finished_at=None, trigger=summ.trigger, mode=self.quotes.mode,
@@ -254,7 +280,7 @@ class Engine:
             return None
 
     # ------------------------------------------------------------------ bars
-    def _bars_needed(self, st: MonitorSettings, positions, contracts, alert_rules, now) -> dict:
+    def _bars_needed(self, st: MonitorSettings, positions, contracts, alert_rules, now, plans=()) -> dict:
         bn, bf = bar_vocabulary()
         need: dict[str, set[str]] = {}
 
@@ -280,6 +306,11 @@ class Engine:
                 sym = next((c.underlying for c in contracts if c.id == r.contract_id), "")
             if sym:
                 add(sym, r.timeframe, [r.condition], r.target_type)
+        from ..planning.monitor import plan_expressions
+
+        for pl in plans:
+            if pl.state != "DRAFT":
+                add(pl.symbol, st.timeframe, sum(plan_expressions(pl), []), "symbol")
         out: dict[tuple[str, str], tuple[pd.DataFrame | None, str | None]] = {}
         market_now = now.astimezone(ZoneInfo("America/New_York"))
         for tf, syms in need.items():
@@ -510,14 +541,17 @@ class Engine:
             return Context("position", chk.metrics, chk.why_missing, b, berr, r.timeframe, snaps[p.underlying].rows)
         if r.target_type == "contract":
             return cache.get(f"contract:{r.contract_id}")
-        sym = (r.symbol or "").upper()
+        return self._symbol_context((r.symbol or "").upper(), r.timeframe, snaps, bars, earn, today)
+
+    @staticmethod
+    def _symbol_context(sym: str, timeframe: str, snaps, bars, earn, today) -> Context:
         sn = snaps.get(sym)
         price = sn.underlying_price() if sn else None
-        b, berr = bars.get((sym, r.timeframe), (None, None))
+        b, berr = bars.get((sym, timeframe), (None, None))
         names = {"price": None if price is None else float(price),
                  "days_to_earnings": (earn[sym] - today).days if earn.get(sym) else 9999}
         why = {"price": f"no option chain for {sym} ({sn.error if sn else 'not fetched'})"} if price is None else {}
-        return Context("symbol", names, why, b, berr, r.timeframe, sn.rows if sn else None)
+        return Context("symbol", names, why, b, berr, timeframe, sn.rows if sn else None)
 
     def _write_alert(self, s: Session, r: AlertRule, ctx: Context | None, st, now, run_id, by_pos, by_contract) -> list[int]:
         state = _state(s, "alert_rule", r.id)

@@ -365,7 +365,7 @@ def test_migration_0002_enables_open_positions_and_rolls_back(db_url):
                     (pid, life, closed))
     con.commit()
     con.close()
-    assert dbm.upgrade(db_url) == "0002"
+    assert dbm.upgrade(db_url, "0002") == "0002"
     con = sqlite3.connect(path)
     assert dict(con.execute("SELECT id, monitoring_enabled FROM positions")) == {"p1": 1, "p2": 0}
     assert con.execute("SELECT monitor_json FROM positions WHERE id='p1'").fetchone()[0] == "{}"

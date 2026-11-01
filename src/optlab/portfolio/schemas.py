@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Annotated, Generic, Literal, TypeVar
 
-from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, StrictInt
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, StrictInt
 
 from .money import MoneyPrecisionError, parse_decimal, to_units
 
@@ -52,8 +52,9 @@ def _symbol(v: str) -> str:
     return v
 
 
-Money = Annotated[Decimal, BeforeValidator(_money)]
-NonNegMoney = Annotated[Decimal, BeforeValidator(_money), AfterValidator(lambda d: _nonneg(d))]
+_MONEY_OUT = PlainSerializer(lambda d: f"{d:.4f}", return_type=str, when_used="json")   # canonical "250.0000"
+Money = Annotated[Decimal, BeforeValidator(_money), _MONEY_OUT]
+NonNegMoney = Annotated[Decimal, BeforeValidator(_money), AfterValidator(lambda d: _nonneg(d)), _MONEY_OUT]
 UTC = Annotated[datetime, AfterValidator(_aware)]
 Note = Annotated[str | None, AfterValidator(_text)]
 Symbol = Annotated[str, AfterValidator(_symbol)]
@@ -141,6 +142,7 @@ class PositionIn(Strict):
     legs: Annotated[list[LegIn], Field(min_length=1, max_length=12)]
     cash_secured: bool = False
     acknowledge_risk: bool = False
+    acknowledge_rule_violation: bool = False     # record it although it breaks the risk policy (it's flagged)
     notes: Note = None
 
 
@@ -246,6 +248,9 @@ class PositionOut(BaseModel):
     version: int
     legs: list[LegOut]
     monitor: dict | None = None          # effective monitoring status, reasons and latest snapshot (Phase 2)
+    plan_id: str | None = None           # the plan it came from (Phase 3)
+    entry_risk: dict | None = None       # the risk check when it was recorded
+    rule_violation: bool = False         # recorded although it broke the risk policy
 
 
 class AnalysisOut(BaseModel):
