@@ -18,6 +18,13 @@ from .deps import Read, Write
 router = APIRouter()
 
 
+def _refresh(s, account_id: str) -> None:
+    """Bring the points ledger and achievements up to date right after a write that can earn points."""
+    f = pe.load_facts(s, account_id, ps.tz_of(s))
+    pe.sync_awards(s, f)
+    pe.sync_achievements(s, f, pe.streaks(f)["best"])
+
+
 def journal_out(e) -> dict:
     return {"id": e.id, "account_id": e.account_id, "kind": e.kind, "entry_date": e.entry_date, "title": e.title,
             "body": e.body, "tags": e.tags_json, "position_id": e.position_id, "plan_id": e.plan_id,
@@ -69,6 +76,7 @@ def process_history(account_id: str, s: Read, days: Annotated[int, Query(ge=1, l
 def set_objective(account_id: str, code: str, body: ps.ObjectiveIn, s: Write):
     """Tick (or untick) a manual daily objective, or mark a rest day (code REST_DAY)."""
     ps.objective_set(s, account_id, code.upper(), body)
+    _refresh(s, account_id)
     f = pe.load_facts(s, account_id, ps.tz_of(s))
     return pe.score_day(f, body.day or f.today)
 
@@ -93,7 +101,9 @@ def list_journal(s: Read, account_id: str, kind: Annotated[list[str] | None, Que
 
 @router.post("/journal", status_code=201, tags=["journal"])
 def create_journal(body: ps.JournalIn, s: Write):
-    return journal_out(ps.journal_create(s, body))
+    e = ps.journal_create(s, body)
+    _refresh(s, e.account_id)
+    return journal_out(e)
 
 
 @router.patch("/journal/{entry_id}", tags=["journal"])
@@ -129,7 +139,9 @@ def reviews(account_id: str, s: Read, limit: Annotated[int, Query(ge=1, le=500)]
 
 @router.put("/positions/{position_id}/review", tags=["reviews"])
 def save_review(position_id: str, body: ps.ReviewIn, s: Write):
-    return review_out(ps.review_save(s, position_id, body))
+    r = ps.review_save(s, position_id, body)
+    _refresh(s, r.account_id)
+    return review_out(r)
 
 
 @router.get("/positions/{position_id}/report", tags=["reviews"])

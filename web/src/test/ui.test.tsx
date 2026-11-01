@@ -11,6 +11,8 @@ import { Dashboard } from "../views/Dashboard";
 import { EventFeed, MonitorPanel } from "../views/MonitorWidgets";
 import { RiskPanel } from "../components/RiskReport";
 import { PlanDetail, PlansView } from "../views/Plans";
+import { DisciplinePanel, ProgressPanel } from "../views/Process";
+import type { Progress } from "../api/types";
 import type { Plan, RiskReport } from "../api/types";
 
 function wrap(ui: ReactNode, mode: "professional" | "colony" = "professional") {
@@ -276,5 +278,52 @@ describe("plans", () => {
     expect(screen.getByRole("button", { name: "Arm" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Convert/ })).toBeNull();
     expect(screen.queryByRole("link", { name: /Chart/ })).toBeNull();          // javascript: is shown as text, not a link
+  });
+});
+
+const PROGRESS: Progress = {
+  points: { total: 65, by_category: { discipline: 30, research: 5, risk_control: 20, review: 10 } },
+  level: { level: 2, colony_name: "Outpost", points_for_level: 50, points_for_next: 150, progress: 0.15 },
+  streak: { current: 3, best: 5, threshold: 80 },
+  achievements: [{ code: "FIRST_PLAN", name: "First mission briefed", description: "Arm your first plan.", goal: 1, progress: 1, earned_at: "2026-11-02T15:00:00Z" },
+                 { code: "REVIEWS_TEN", name: "Ten mission reports", description: "Complete ten reviews.", goal: 10, progress: 3, earned_at: null }],
+  recent_awards: [{ code: "DAILY_THESIS", category: "research", points: 5, description: "Wrote the daily market thesis: 2026-11-02", day: "2026-11-02", awarded_at: "2026-11-02T15:00:00Z" }],
+  themes: [{ id: "default", unlock_level: 1, unlocked: true }, { id: "aurora", unlock_level: 3, unlocked: false }],
+  new: { awards: 0, achievements: [] },
+  today: { day: "2026-11-02", rest_day: false, score: 100, met: 5, applicable: 5, in_progress: true, items: [
+    { code: "REVIEW_POSITIONS", label: "Review open positions", group: "objective", status: "na", detail: "no open positions", kind: "manual", subject_id: null },
+    { code: "CHECK_DATA", label: "Confirm data-source status", group: "objective", status: "met", detail: "", kind: "manual", subject_id: null },
+    { code: "DAILY_THESIS", label: "Write a daily market thesis", group: "objective", status: "met", detail: "written", kind: "auto", subject_id: null },
+    { code: "INVALIDATION_BEFORE_ENTRY", label: "Record invalidation before entry", group: "objective", status: "na", detail: "no positions opened", kind: "auto", subject_id: null },
+  ] },
+};
+
+describe("process and progression", () => {
+  it("a day without trades shows 100% with the trade items not applicable, and offers a rest day", async () => {
+    mockFetch([[/progress/, json(PROGRESS)]]);
+    wrap(<DisciplinePanel account={ACCOUNT} />);
+    await waitFor(() => expect(screen.getByText("100%")).toBeInTheDocument());
+    expect(screen.getByText(/no positions opened/)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /Confirm data-source status/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Rest day" })).toBeInTheDocument();
+    expect(screen.getByText(/Profit, size and the number of trades never count/)).toBeInTheDocument();
+  });
+  it("progress shows level, streak, points by kind and achievements with their progress", async () => {
+    mockFetch([[/progress/, json(PROGRESS)], [/process-score\/history/, json([])]]);
+    wrap(<ProgressPanel account={ACCOUNT} />, "colony");
+    await waitFor(() => expect(screen.getByText("Outpost")).toBeInTheDocument());
+    expect(screen.getByRole("progressbar", { name: /next level/ })).toHaveAttribute("aria-valuenow", "15");
+    expect(screen.getByText("Ten mission reports")).toBeInTheDocument();
+    expect(screen.getByText("3/10")).toBeInTheDocument();
+    expect(screen.queryByText(/profit/i)).toBeNull();
+  });
+  it("the dashboard leaves out hidden widgets", async () => {
+    mockFetch([[/preferences/, json({ terminology: "professional", timezone: "America/New_York", active_account_id: null, theme: "default",
+                                      dashboard_layout: ["positions", "overview"], hidden_widgets: ["discipline", "progress", "monitor", "events", "contracts"] })],
+               [/overview/, json(OVERVIEW)], [/\/positions/, json(page([]))]]);
+    wrap(<Dashboard account={ACCOUNT} />);
+    await waitFor(() => expect(screen.getByText(/No open positions yet/)).toBeInTheDocument());
+    expect(screen.queryByText("Daily discipline")).toBeNull();
+    expect(screen.queryByText("Watched contracts")).toBeNull();
   });
 });

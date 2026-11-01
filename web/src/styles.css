@@ -234,3 +234,37 @@ fieldset legend { padding: 0 6px; color: var(--muted); }
 .text-blocks pre { margin: 4px 0 0; white-space: pre-wrap; }
 .plain-link { text-decoration: none; }
 caption { text-align: left; padding: 4px 0; }
+
+/* ---------------------------------------------------------------- Phase 4: process and progression */
+.dash-tools { display: flex; justify-content: flex-end; }
+.widget { display: contents; }
+.layout-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; }
+.layout-list li { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--grid); padding: 4px 0; }
+.process-score { font-size: 20px; font-weight: 700; font-family: var(--mono); }
+.objectives { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 6px 18px; }
+.objectives li { display: block; line-height: 1.5; }
+.objectives li .btn { margin-left: 4px; }
+.objectives li.met { color: var(--ok); }
+.objectives li.na { color: var(--muted); }
+.progress-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.progress-grid .wide-cell { grid-column: 1 / -1; }
+.level { display: flex; align-items: baseline; gap: 8px; font-size: 15px; }
+.level-num { font-size: 30px; font-weight: 700; font-family: var(--mono); color: var(--accent); }
+.bar { height: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; margin: 6px 0; }
+.bar span { display: block; height: 100%; background: var(--accent); }
+.spark { display: flex; align-items: flex-end; gap: 3px; height: 44px; margin-top: 6px; }
+.spark-bar { width: 9px; border-radius: 2px; background: var(--border); display: inline-block; }
+.spark-bar.good { background: var(--ok); }
+.spark-bar.low { background: var(--warn); }
+.spark-bar.rest { background: var(--info); opacity: .5; }
+.achievements { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 12px; }
+.achievements li { color: var(--muted); }
+.achievements li.earned { color: var(--warn); }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+.journal { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.journal li { border-bottom: 1px solid var(--grid); padding-bottom: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+/* cosmetic themes (unlocked with the colony level): accent colours only, contrast unchanged */
+:root[data-color-theme="aurora"] { --accent: #4ade80; --accent-2: #15803d; }
+:root[data-color-theme="nebula"] { --accent: #c4b5fd; --accent-2: #6d28d9; }
+:root[data-color-theme="solar"] { --accent: #fbbf24; --accent-2: #b45309; }

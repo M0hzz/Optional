@@ -303,6 +303,110 @@ imported (the risk page still checks them against the current policy).
 
 **Revisions.** Saving the policy adds a revision; earlier risk checks keep the revision they used. History: `GET /api/v1/accounts/{id}/risk-policy/history`.
 
+## Command center, discipline and progress (Phase 4)
+
+**Customize** (top of the dashboard) shows, hides and reorders the widgets. The layout is saved in your preferences, so it applies on every device:
+
+- account overview;
+- daily discipline;
+- progress;
+- monitor;
+- positions;
+- alerts and events;
+- watched contracts.
+
+**Colony mode** renames everything, the navigation included:
+
+| Professional | Colony |
+|---|---|
+| Dashboard | Command center |
+| Trade plans | Missions |
+| Risk | Colony defense |
+| Reviews | Debrief room |
+| Journal | Archives |
+| Learn | Academy |
+
+The financial term always stays next to the colony label and in the tooltips.
+
+### Daily discipline
+
+The objectives:
+
+1. Review open positions.
+2. Review expiration risk.
+3. Confirm data-source status. The Monitor panel's **Confirm data sources** button records it.
+4. Write a daily market thesis.
+5. Define a maximum daily loss in the risk policy.
+6. Record an invalidation before every entry.
+7. Review scheduled events.
+8. Complete the end-of-day review.
+
+The journal-based and policy-based objectives tick themselves; you tick the rest.
+
+Each position opened that day adds four items:
+
+- planned before entry;
+- maximum loss defined in the plan;
+- within the risk policy;
+- entered after the plan qualified.
+
+Reviews add one item: no closed position waits more than 2 days.
+
+**Daily process score** = items met ÷ items that apply. With no trades the trade items don't apply, so a quiet day can reach **100%**. Today's open items show as *to do*, not as failures. **Rest day** marks a day as not scored; it doesn't break your streak.
+
+### Points, level, streak, achievements
+
+Points come only from process. Each one, and the daily caps, are listed on the **Learn** page.
+
+- **What earns points:** a plan before entry, a defined maximum loss, staying within policy, liquid contracts, waiting for confirmation, skipping an armed setup, a completed review, following the planned exit, an honest review of a rule break, the daily thesis, the end-of-day review, and all objectives met.
+- **What never counts:** profit or loss, size, the number of trades, and time on screen. Tests check that P&L is never read by the scoring code, and that changing a realized P&L changes nothing.
+- **Points never go down.** A broken rule earns nothing and asks for a review, so hiding a losing trade can never pay.
+- **Daily caps:** at most three positions and three skipped setups earn points per day, so more trades never earn more.
+
+**Streak:** consecutive scheduled days at 80% or better.
+
+**Achievements** reward discipline only:
+
+- five planned trades in a row;
+- ten reviews;
+- five skipped setups;
+- a month without recording against your policy;
+- every open position documented;
+- no position left open past an expiration for 30 days;
+- an expiration review;
+- five disciplined days;
+- an honest review of a rule break.
+
+**Themes** (aurora, nebula, solar) unlock with the level. They're cosmetic: they change the accent colour only.
+
+### Reviews (mission reports) and journal
+
+**Reviews** (the Debrief room) lists every closed position waiting for a review. Positions recorded against your policy come first, and any waiting more than 2 days are flagged.
+
+A review asks:
+
+- whether you followed the plan;
+- why you exited, and whether that was the planned exit;
+- which mistakes you made (checkboxes);
+- what went well and what went wrong;
+- the lesson;
+- whether you'd take the trade again;
+- for a rule break, your acknowledgement of it.
+
+The **mission report** brings together:
+
+- the position;
+- its plan and the planned-versus-actual comparison;
+- the entry risk check;
+- the review;
+- journal notes;
+- the timeline;
+- the points it earned.
+
+Realized P&L is shown for the record and labelled *never scored*.
+
+**Journal** (Archives) holds daily theses, end-of-day reviews, decisions, lessons and notes. An entry can be linked to a position or a plan. Edits keep the earlier text in the audit log; entries are archived, never deleted.
+
 ## Importing positions from scans.yaml
 
 **Import scans.yaml** (Monitor panel) shows the `positions:` of the project's scans.yaml with their

@@ -1,7 +1,7 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { ApiError, api } from "../api/client";
-import type { Account, Contract, ContractMonitor, ContractQuote, Overview, Position, Valuation } from "../api/types";
+import type { Account, Contract, ContractMonitor, ContractQuote, Overview, Position, Preferences, Valuation, WidgetId } from "../api/types";
 import { BoundedValue, ConfirmDialog, Empty, ErrorState, FreshnessBadge, LifecycleBadge, Loading, Modal, Pnl, StatusBadge,
          TermLabel, Tip, Unavailable, useToast } from "../components/ui";
 import { SnapshotForm } from "../forms/AccountForms";
@@ -15,15 +15,51 @@ import { PlanForm } from "../forms/PlanForm";
 import { useRefetchInterval } from "../lib/live";
 import { useTerms } from "../lib/terms";
 import { AlertRulesList, EventFeed, MonitorPanel } from "./MonitorWidgets";
+import { DisciplinePanel, ProgressPanel } from "./Process";
 
+const WIDGET_NAMES: Record<WidgetId, { pro: string; colony: string }> = {
+  overview: { pro: "Account overview", colony: "Treasury" }, discipline: { pro: "Daily discipline", colony: "Daily orders" },
+  progress: { pro: "Progress", colony: "Colony growth" }, monitor: { pro: "Monitor", colony: "Expedition control" },
+  positions: { pro: "Positions", colony: "Active expeditions" }, events: { pro: "Alerts and events", colony: "Command events" },
+  contracts: { pro: "Watched contracts", colony: "Scouted units" },
+};
+const ALL_WIDGETS = Object.keys(WIDGET_NAMES) as WidgetId[];
+
+/** The command center: configurable widgets (order and visibility are saved in your preferences). */
 export function Dashboard({ account }: { account: Account }) {
+  const { mode } = useTerms();
+  const qc = useQueryClient();
+  const prefs = useQuery<Preferences>({ queryKey: ["prefs"], queryFn: api.preferences });
+  const [customizing, setCustomizing] = useState(false);
+  const order = [...(prefs.data?.dashboard_layout ?? ALL_WIDGETS), ...ALL_WIDGETS.filter((w) => !(prefs.data?.dashboard_layout ?? ALL_WIDGETS).includes(w))];
+  const hidden = new Set(prefs.data?.hidden_widgets ?? []);
+  const save = useMutation({ mutationFn: (p: Partial<Preferences>) => api.setPreferences(p), onSuccess: (p) => qc.setQueryData(["prefs"], p) });
+  const render = (w: WidgetId) => ({
+    overview: <AccountOverview account={account} />, discipline: <DisciplinePanel account={account} />, progress: <ProgressPanel account={account} />,
+    monitor: <MonitorPanel accountId={account.id} />, positions: <PositionsWidget account={account} />,
+    events: <EventFeed accountId={account.id} />, contracts: <WatchedWidget account={account} />,
+  })[w];
+  const move = (w: WidgetId, d: -1 | 1) => {
+    const o = [...order]; const i = o.indexOf(w); const j = i + d;
+    if (j < 0 || j >= o.length) return;
+    [o[i], o[j]] = [o[j], o[i]];
+    save.mutate({ dashboard_layout: o });
+  };
   return (
     <div className="dashboard">
-      <AccountOverview account={account} />
-      <MonitorPanel accountId={account.id} />
-      <PositionsWidget account={account} />
-      <EventFeed accountId={account.id} />
-      <WatchedWidget account={account} />
+      <div className="dash-tools"><button className="btn small ghost" onClick={() => setCustomizing(true)}>⚙ Customize {mode === "colony" ? "command center" : "dashboard"}</button></div>
+      {order.filter((w) => !hidden.has(w)).map((w) => <div key={w} className="widget">{render(w)}</div>)}
+      <Modal open={customizing} onOpenChange={setCustomizing} title="Customize the dashboard">
+        <p className="muted-text small">Show, hide and reorder the widgets. Saved for every browser.</p>
+        <ul className="layout-list">{order.map((w, i) => (
+          <li key={w}>
+            <label className="check"><input type="checkbox" checked={!hidden.has(w)} onChange={(e) => save.mutate({ hidden_widgets: e.target.checked ? [...hidden].filter((x) => x !== w) : [...hidden, w] })} />
+              {WIDGET_NAMES[w][mode === "colony" ? "colony" : "pro"]}</label>
+            <span><button className="btn small ghost" aria-label={`Move ${WIDGET_NAMES[w].pro} up`} disabled={i === 0} onClick={() => move(w, -1)}>↑</button>
+              <button className="btn small ghost" aria-label={`Move ${WIDGET_NAMES[w].pro} down`} disabled={i === order.length - 1} onClick={() => move(w, 1)}>↓</button></span>
+          </li>))}</ul>
+        <div className="actions"><button className="btn" onClick={() => save.mutate({ dashboard_layout: ALL_WIDGETS, hidden_widgets: [] })}>Reset</button></div>
+      </Modal>
     </div>
   );
 }

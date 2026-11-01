@@ -40,6 +40,10 @@ export function MonitorPanel({ accountId }: { accountId: string }) {
     },
     onError: (e) => toast(e instanceof ApiError ? e.message : "The pass failed.", "bad"),
   });
+  const confirmData = useMutation({
+    mutationFn: () => api.setObjective(accountId, "CHECK_DATA", { done: true, note: d ? `${d.quotes.provider}; ${d.last_run ? `last pass ${d.last_run.ok ? "OK" : "failed"}` : "no pass yet"}` : null }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["progress"] }); toast("Data sources confirmed for today"); },
+  });
   const d = st.data;
   const runner = d ? (d.runner.state === "waiting" && !d.window_open ? { icon: "◷", text: "Waiting for the monitoring window", cls: "info" }
                        : (RUNNER[d.runner.state] ?? RUNNER.off)) : null;
@@ -54,6 +58,8 @@ export function MonitorPanel({ accountId }: { accountId: string }) {
           <Tip text="Run one monitoring pass now, whatever the time. Outside market hours quotes are the last session's.">
             <button className="btn small primary" onClick={() => run.mutate()} disabled={run.isPending}>{run.isPending ? "Checking…" : "Run now"}</button>
           </Tip>
+          <Tip text="Confirms today's 'data sources checked' objective: you looked at the quote source, its delay and the last pass.">
+            <button className="btn small" onClick={() => confirmData.mutate()} disabled={confirmData.isPending}>Confirm data sources</button></Tip>
           <button className="btn small" onClick={() => setRules(true)}>Alert rules</button>
           <button className="btn small" onClick={() => setYaml(true)}>Import scans.yaml</button>
           <button className="btn small" onClick={() => setSettings(true)}>Settings</button>

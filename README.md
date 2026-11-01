@@ -122,6 +122,10 @@ inspecting what you actually hold. Informational only: it never places orders.
 - **Risk policy** (Phase 3): your limits per position and for the account (losses per day and week, open
   risk, counts, Greeks, liquidity, expirations, earnings, no margin, no averaging down without a plan),
   with small-account limits below $1,000. Every check says PASS, WARNING, BLOCKED or UNKNOWN and why.
+- **Discipline and progress** (Phase 4): a configurable command center; daily objectives and a daily
+  process score (a day without trades can score 100%); points, levels, streaks and achievements earned from
+  process only, never from profit or the number of trades; post-trade reviews (mission reports); a journal;
+  and a Learn page explaining every term, status and score.
 - **CSV import** (preview, then atomic commit) and export.
 - Values from delayed Cboe quotes, always labelled with source, delay and age; stale data is never shown as safe.
 - Professional or Colony terminology (labels only; financial terms stay in the tooltips).

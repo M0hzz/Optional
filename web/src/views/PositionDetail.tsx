@@ -40,6 +40,7 @@ export function PositionDetail({ id }: { id: string }) {
             {p.lifecycle === "OPEN" && <button className="btn small primary" onClick={() => setClosing(true)}>Close…</button>}
             {p.lifecycle === "CLOSED" && <button className="btn small" onClick={() => setArchiving("closed")}>Archive…</button>}
             {p.lifecycle === "OPEN" && <button className="btn small ghost" onClick={() => setArchiving("entered_in_error")}>Entered in error…</button>}
+            {p.lifecycle !== "OPEN" && p.archive_reason !== "entered_in_error" && <a className="btn small primary" href={`#/reports/${p.id}`}>Mission report</a>}
           </div>
         </div>
         <dl className="facts">

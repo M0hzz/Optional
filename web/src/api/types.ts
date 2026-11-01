@@ -274,7 +274,40 @@ export interface ContractQuote {
 }
 
 export interface Page<T> { items: T[]; total: number; page: number; page_size: number }
-export interface Preferences { terminology: "professional" | "colony"; timezone: string; active_account_id: string | null }
+export type WidgetId = "overview" | "discipline" | "progress" | "monitor" | "positions" | "events" | "contracts";
+export type ThemeId = "default" | "aurora" | "nebula" | "solar";
+export interface Preferences {
+  terminology: "professional" | "colony"; timezone: string; active_account_id: string | null;
+  theme: ThemeId; dashboard_layout: WidgetId[]; hidden_widgets: WidgetId[];
+}
+
+// ------------------------------------------------------------------ process and progression (Phase 4)
+export interface ScoreItem { code: string; label: string; group: "objective" | "trade" | "review"; status: "met" | "not_met" | "na" | "pending"; detail: string; kind: "auto" | "manual"; subject_id: string | null }
+export interface DayScore { day: string; rest_day: boolean; score: number | null; met: number; applicable: number; in_progress: boolean; items: ScoreItem[] }
+export interface Award { code: string; category: string; points: number; description: string; day: string; awarded_at: string }
+export interface Achievement { code: string; name: string; description: string; goal: number; progress: number; earned_at: string | null }
+export interface Progress {
+  points: { total: number; by_category: Record<"discipline" | "research" | "risk_control" | "review", number> };
+  level: { level: number; colony_name: string; points_for_level: number; points_for_next: number; progress: number };
+  streak: { current: number; best: number; threshold: number };
+  achievements: Achievement[]; recent_awards: Award[]; themes: { id: ThemeId; unlock_level: number; unlocked: boolean }[];
+  new: { awards: number; achievements: string[] }; today: DayScore;
+}
+export type JournalKind = "daily_thesis" | "eod_review" | "decision" | "note" | "lesson";
+export interface JournalEntryT {
+  id: string; account_id: string; kind: JournalKind; entry_date: string; title: string | null; body: string; tags: string[];
+  position_id: string | null; plan_id: string | null; archived_at: string | null; created_at: string; updated_at: string; version: number;
+}
+export interface Review {
+  id: string; position_id: string; followed_plan: string | null; exit_reason: string | null; exit_followed_plan: string | null;
+  mistakes: string[]; went_well: string | null; went_wrong: string | null; lessons: string | null;
+  rule_violation_acknowledged: boolean; would_take_again: string | null; completed_at: string | null; version: number;
+}
+export interface PendingReview { position_id: string; name: string; underlying: string; closed_at: string | null; days_waiting: number | null; overdue: boolean; rule_violation: boolean; started: boolean; plan_id: string | null }
+export interface MissionReport {
+  position: Position; plan: Plan | null; review: Review | null; journal: JournalEntryT[]; timeline: TimelineItem[];
+  points: { code: string; points: number; category: string; description: string }[]; pnl_note: string;
+}
 export interface DataSources {
   quotes: { mode: string; provider: string; delay_minutes: number; synthetic: boolean; greeks_source: string };
   research_lab_url: string | null; notes: string[];

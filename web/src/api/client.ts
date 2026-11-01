@@ -1,7 +1,7 @@
 // Thin typed client for /api/v1. Errors arrive as {error: {code, message, field_errors, details}}.
 import type {
   Account, AlertRule, Analysis, AuditEntry, Contract, ContractMonitor, ContractQuote, DataSources, EventItem, EventPage,
-  ImportReport, LegIn, MonitorRunInfo, Plan, PolicyPayload, PolicySettings, RiskDashboard, RiskReport, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
+  ImportReport, JournalEntryT, LegIn, MissionReport, MonitorRunInfo, PendingReview, Progress, Review, DayScore, Plan, PolicyPayload, PolicySettings, RiskDashboard, RiskReport, MonitorSettings, MonitorStatus, Overview, Page, Position, PositionMonitor,
   Preferences, RuleSet, Snapshot, SnapshotRow, TimelineItem, Valuation, Vocabulary, YamlRow,
 } from "./types";
 
@@ -85,6 +85,19 @@ export const api = {
     const f = new FormData(); f.append("file", file);
     return request<ImportReport>("POST", `/imports/positions/preview${q({ account_id: accountId })}`, f);
   },
+  // ---------------------------------------------------------------- process (Phase 4)
+  progress: (accountId: string) => request<Progress>("GET", `/accounts/${accountId}/progress`),
+  scoreHistory: (accountId: string, days = 30) => request<{ day: string; score: number | null; rest_day: boolean; met: number; applicable: number; scheduled: boolean }[]>("GET", `/accounts/${accountId}/process-score/history` + q({ days })),
+  setObjective: (accountId: string, code: string, b: { day?: string; done: boolean; note?: string | null }) =>
+    request<DayScore>("POST", `/accounts/${accountId}/objectives/${code}`, b),
+  journal: (p: { account_id: string; kind?: string[]; position_id?: string; plan_id?: string; limit?: number }) => request<JournalEntryT[]>("GET", "/journal" + q(p)),
+  createJournal: (b: Record<string, unknown>) => request<JournalEntryT>("POST", "/journal", b),
+  updateJournal: (id: string, b: Record<string, unknown>) => request<JournalEntryT>("PATCH", `/journal/${id}`, b),
+  archiveJournal: (id: string, version: number) => request<JournalEntryT>("POST", `/journal/${id}/archive`, { version }),
+  pendingReviews: (accountId: string) => request<PendingReview[]>("GET", `/accounts/${accountId}/reviews/pending`),
+  reviews: (accountId: string) => request<(Review & { position: { id: string; name: string; underlying: string; strategy_name: string; closed_at: string | null; plan_id: string | null; rule_violation: boolean } })[]>("GET", `/accounts/${accountId}/reviews`),
+  saveReview: (positionId: string, b: Record<string, unknown>) => request<Review>("PUT", `/positions/${positionId}/review`, b),
+  report: (positionId: string) => request<MissionReport>("GET", `/positions/${positionId}/report`),
   // ---------------------------------------------------------------- plans and risk (Phase 3)
   plans: (p: { account_id?: string; state?: string[]; symbol?: string; page_size?: number }) => request<Page<Plan>>("GET", "/plans" + q(p)),
   plan: (id: string) => request<Plan>("GET", `/plans/${id}`),

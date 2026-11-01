@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { api } from "./api/client";
-import type { Account, DataSources, EventItem, MonitorStatus, Preferences } from "./api/types";
+import type { Account, DataSources, EventItem, MonitorStatus, Preferences, Progress, ThemeId } from "./api/types";
 import { Empty, ErrorState, Loading, Tip, useToast } from "./components/ui";
 import { LiveProvider, useLiveState, useRefetchInterval } from "./lib/live";
 import { CreateAccountForm } from "./forms/AccountForms";
@@ -9,6 +9,7 @@ import { useRoute, navigate } from "./lib/router";
 import { TermsContext, TERMS, type Mode } from "./lib/terms";
 import { Dashboard } from "./views/Dashboard";
 import { PlanDetail, PlansView } from "./views/Plans";
+import { AcademyView, DebriefView, JournalView, MissionReportView } from "./views/Process";
 import { PositionDetail } from "./views/PositionDetail";
 import { RiskView } from "./views/Risk";
 
@@ -22,6 +23,17 @@ export function App() {
   const toast = useToast();
   const onEvent = (e: EventItem) => { if (e.severity !== "info") toast(e.title, "bad"); };
   return <LiveProvider onEvent={onEvent}><Shell /></LiveProvider>;
+}
+
+function ThemePicker({ accountId, current, onPick }: { accountId: string; current: ThemeId; onPick: (t: ThemeId) => void }) {
+  const prog = useQuery<Progress>({ queryKey: ["progress", accountId], queryFn: () => api.progress(accountId), staleTime: 60_000 });
+  const themes = prog.data?.themes ?? [{ id: "default" as ThemeId, unlock_level: 1, unlocked: true }];
+  return (
+    <label className="small">Theme <span className="muted-text">(cosmetic; unlocks with level)</span>
+      <select value={current} onChange={(e) => onPick(e.target.value as ThemeId)}>
+        {themes.map((t) => <option key={t.id} value={t.id} disabled={!t.unlocked}>{t.id[0].toUpperCase() + t.id.slice(1)}{t.unlocked ? "" : ` (level ${t.unlock_level})`}</option>)}
+      </select></label>
+  );
 }
 
 function AlertCount() {
@@ -63,7 +75,13 @@ function Shell() {
   useEffect(() => { document.title = mode === "colony" ? "optlab · Command center" : "optlab"; }, [mode]);
   const posMatch = /^\/positions\/([0-9a-f-]{36})$/.exec(route);
   const planMatch = /^\/plans\/([0-9a-f-]{36})$/.exec(route);
-  const section = posMatch ? "dash" : planMatch || route === "/plans" ? "plans" : route === "/risk" ? "risk" : "dash";
+  const reportMatch = /^\/reports\/([0-9a-f-]{36})$/.exec(route);
+  const section = posMatch ? "dash" : planMatch || route === "/plans" ? "plans" : route === "/risk" ? "risk"
+    : reportMatch || route === "/debrief" ? "debrief" : route === "/journal" ? "journal" : route === "/learn" ? "learn" : "dash";
+  const theme = prefs.data?.theme ?? "default";
+  useEffect(() => { document.documentElement.dataset.colorTheme = theme; }, [theme]);
+  const nav = (key: "dashboard" | "plans" | "risk" | "debrief" | "journal" | "academy", href: string, sec: string) => (
+    <a href={href} className={section === sec ? "active" : ""}>{mode === "colony" ? TERMS[key].colony : TERMS[key].pro}</a>);
 
   return (
     <TermsContext.Provider value={mode}>
@@ -71,9 +89,8 @@ function Shell() {
         <aside className="sidebar" aria-label="Navigation">
           <div className="brand"><span aria-hidden>◈</span> optlab</div>
           <nav>
-            <a href="#/" className={section === "dash" ? "active" : ""}>{mode === "colony" ? TERMS.dashboard.colony : TERMS.dashboard.pro}</a>
-            <a href="#/plans" className={section === "plans" ? "active" : ""}>{mode === "colony" ? TERMS.plans.colony : TERMS.plans.pro}</a>
-            <a href="#/risk" className={section === "risk" ? "active" : ""}>{mode === "colony" ? TERMS.risk.colony : TERMS.risk.pro}</a>
+            {nav("dashboard", "#/", "dash")}{nav("plans", "#/plans", "plans")}{nav("risk", "#/risk", "risk")}
+            {nav("debrief", "#/debrief", "debrief")}{nav("journal", "#/journal", "journal")}{nav("academy", "#/learn", "learn")}
             <a href={researchUrl(sources.data)} target="_blank" rel="noreferrer">
               <Tip text={TERMS.research.meaning}><span>Research Lab ↗</span></Tip>
             </a>
@@ -98,6 +115,7 @@ function Shell() {
               ))}
               <p className="muted-text small">Labels only. Financial terms stay in the tooltips.</p>
             </fieldset>
+            {active && <ThemePicker accountId={active.id} current={theme} onPick={(t) => setPrefs.mutate({ theme: t })} />}
           </div>
           <div className="sidebar-foot">
             {sources.data && (
@@ -121,6 +139,10 @@ function Shell() {
               : planMatch ? <PlanDetail id={planMatch[1]} />
               : route === "/plans" ? <PlansView account={active} />
               : route === "/risk" ? <RiskView account={active} />
+              : reportMatch ? <MissionReportView id={reportMatch[1]} />
+              : route === "/debrief" ? <DebriefView account={active} />
+              : route === "/journal" ? <JournalView account={active} />
+              : route === "/learn" ? <AcademyView />
               : <Dashboard account={active} />}
         </main>
       </div>

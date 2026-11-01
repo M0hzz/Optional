@@ -159,6 +159,27 @@ is stored on the position (`entry_risk_json`, `rule_violation`). The portfolio s
 database (latest account values, open positions, positions closed today and this week) and the monitor's
 latest fresh snapshots (open P&L, Greeks), never from a fresh network call.
 
+## Process layer (`src/optlab/process`, Phase 4)
+
+| Module | Responsibility |
+|---|---|
+| `engine.py` | Loads an account's facts once (positions, plans, reviews, journal, objective ticks, policy revisions); `score_day` (pure), streaks, the points ledger sync (idempotent, capped per day), levels, achievements, theme unlocks. Never reads P&L (tested on its source and its results) |
+| `service.py` | Journal entries, reviews (mission reports) with completion rules, objective ticks and rest days |
+| `api/process_routes.py` | `/accounts/{id}/progress`, `/process-score`, `/process-score/history`, `/objectives/{code}`, `/awards`, `/journal`, `/reviews`, `/positions/{id}/review`, `/positions/{id}/report` |
+
+Points are derived from records, not from clicks: the ledger is brought up to date after the writes that can
+earn points and whenever progress is read, and the unique index makes every award happen once.
+
+## Database (Phase 4, migration `0004`)
+
+| Table | Contents |
+|---|---|
+| `journal_entries` | Versioned entries: kind, day, title, text, tags, optional position / plan, archived |
+| `trade_reviews` | One per position: plan followed, exit reason and whether planned, mistakes, went well / wrong, lesson, rule-break acknowledgement, would take again, completed |
+| `process_awards` | The points ledger: code, category, points (≥ 0), subject, day; unique per code and subject |
+| `daily_objectives` | Manual objective ticks and rest days, one per account, day and code |
+| `user_achievements` | Achievements earned, once each |
+
 ## Database (Phase 3, migration `0003`)
 
 | Table / column | Contents |
@@ -214,5 +235,7 @@ erDiagram
 - Phase 2 (this): monitoring, snapshots, statuses, alert rules, events, notifications, live updates,
   scans.yaml import. The YAML monitor keeps running the scans and the YAML positions you haven't imported.
 - Phase 3: trade plans, risk policies and checks, plan conversion and comparison, risk dashboard.
-- Not yet: process scoring and achievements (Phase 4; the plan comparisons and rule-violation flags are its inputs), news
+- Phase 4: configurable command center, daily discipline and process score, points, levels, streaks,
+  achievements, themes, reviews (mission reports), journal, the Learn page.
+- Not yet: news
   (Phase 5), historical-signal drill-downs (Phase 6). Scans still live in scans.yaml and the Research Lab.
