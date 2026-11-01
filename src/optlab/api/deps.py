@@ -26,10 +26,15 @@ Write = Annotated[Session, Depends(_write)]
 Read = Annotated[Session, Depends(_read)]
 
 
-def quotes_of(request: Request):
-    """The process-wide QuoteService (created on first use from config.yaml's data.source)."""
-    if request.app.state.quotes is None:
+def quotes_from_app(app):
+    """The process-wide QuoteService (created on first use from config.yaml's data.source), shared by the
+    API and the monitor."""
+    if app.state.quotes is None:
         from ..portfolio.quotes import default_service
 
-        request.app.state.quotes = default_service()
-    return request.app.state.quotes
+        app.state.quotes = default_service()
+    return app.state.quotes
+
+
+def quotes_of(request: Request):
+    return quotes_from_app(request.app)

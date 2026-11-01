@@ -65,7 +65,7 @@ class PositionValuation:
 
 def value_position(position, quotes: QuoteService) -> PositionValuation:
     snap = quotes.chain(position.underlying)
-    now = datetime.now(timezone.utc)
+    now = quotes.wall() if hasattr(quotes, "wall") else datetime.now(timezone.utc)
     legs, reasons = [], []
     under = snap.underlying_price()
     for lg in position.legs:

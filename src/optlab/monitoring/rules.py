@@ -143,7 +143,7 @@ class RuleResult:
 
 
 def _jsonable(d: dict) -> dict:
-    out = {}
+    out: dict[str, Any] = {}
     for k, v in d.items():
         if isinstance(v, (bool, np.bool_)):
             out[k] = bool(v)

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from sqlalchemy import select
@@ -97,7 +97,7 @@ def _legs(pos: dict) -> tuple[list[LegIn], list[str]]:
         qty = Decimal(str(lg.get("qty", 0)))
         if qty == 0 or qty != qty.to_integral_value():
             raise ValueError(f"leg {i + 1}: qty must be a non-zero whole number")
-        side = "BUY" if qty > 0 else "SELL"
+        side: Literal["BUY", "SELL"] = "BUY" if qty > 0 else "SELL"
         price = _money(lg.get("price"), f"leg {i + 1} price")
         if lg.get("root"):
             warns.append(f"leg {i + 1}: root {lg['root']} is kept in the notes; quotes match by expiration, type and strike")
@@ -106,7 +106,8 @@ def _legs(pos: dict) -> tuple[list[LegIn], list[str]]:
         elif typ in ("call", "put"):
             exp = lg.get("expiration")
             exp = exp if isinstance(exp, date) else date.fromisoformat(str(exp))
-            legs.append(LegIn(asset_type="OPTION", side=side, quantity=int(abs(qty)), option_right=typ.upper(),
+            right: Literal["CALL", "PUT"] = "CALL" if typ == "call" else "PUT"
+            legs.append(LegIn(asset_type="OPTION", side=side, quantity=int(abs(qty)), option_right=right,
                               strike=_money(lg.get("strike"), f"leg {i + 1} strike"), expiration=exp, multiplier=100,
                               fill_price=price))
         else:
@@ -201,7 +202,8 @@ def split_imported(positions: list[dict[str, Any]], url: str | None = None) -> t
     done = imported_fingerprints(url)
     if not done:
         return positions, []
-    keep, moved = [], []
+    keep: list[dict] = []
+    moved: list[dict] = []
     for p in positions:
         (moved if fingerprint(p) in done else keep).append(p)
     return keep, [str(p.get("name") or p.get("symbol")) for p in moved]

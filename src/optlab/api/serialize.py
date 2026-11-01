@@ -33,7 +33,7 @@ def bounded(state: str, units: int | None) -> BoundedOut:
     return BoundedOut.model_validate({"state": state, "value": m(units) if state == "bounded" else None})
 
 
-def position(p: Position, today: date | None = None) -> PositionOut:
+def position(p: Position, today: date | None = None, monitor: dict | None = None) -> PositionOut:
     today = today or date.today()
     exps = [lg.expiration for lg in p.legs if lg.expiration is not None]
     future = [e for e in exps if e >= today]
@@ -58,7 +58,7 @@ def position(p: Position, today: date | None = None) -> PositionOut:
                      fill_price=m(lg.fill_price_units), fees=m(lg.fees_units) or "0.0000", filled_at=lg.filled_at,
                      broker_order_id=lg.broker_order_id, occ_symbol=lg.occ_symbol,
                      close_price=m(lg.close_price_units), close_fees=m(lg.close_fees_units), closed_at=lg.closed_at,
-                     notes=lg.notes) for lg in p.legs])
+                     notes=lg.notes) for lg in p.legs], monitor=monitor)
 
 
 def contract(w: WatchedContract, today: date | None = None) -> ContractOut:

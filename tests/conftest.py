@@ -52,6 +52,21 @@ class FakeProvider:
         return df, datetime(2026, 11, 2, 15, 0, tzinfo=timezone.utc)
 
 
+class FakeBars:
+    """Daily bars drifting from 120 down to 100 (RSI low): no network."""
+    name = "fake"
+
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, symbols, timeframe):
+        self.calls += 1
+        idx = pd.date_range("2026-08-01", periods=60, freq="D")
+        df = pd.DataFrame({"open": 1.0, "high": 1.0, "low": 1.0, "close": np.linspace(120, 100, 60), "volume": 1.0},
+                          index=idx)
+        return {s: df for s in symbols}, None
+
+
 @pytest.fixture
 def db_url(tmp_path):
     return f"sqlite:///{tmp_path / 'optlab.sqlite'}"
@@ -86,7 +101,9 @@ def client(db_url, quotes):
     from optlab.api.main import create_app
     from optlab.portfolio.db import Database
 
-    app = create_app(Database(db_url), quotes=quotes, web_dist=None)
+    app = create_app(Database(db_url), quotes=quotes, web_dist=None, monitor=False,
+                     engine_options={"notifier": None, "earnings": lambda s: None, "bars": FakeBars()})
+    app.state.stream_poll = 0.05
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
 

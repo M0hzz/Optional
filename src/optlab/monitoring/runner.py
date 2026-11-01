@@ -77,6 +77,7 @@ class Runner:
         self.last: PassSummary | None = None
         self.state = "stopped"          # stopped | idle (another process runs it) | waiting | running | disabled
         self.detail: str | None = None
+        self.max_sleep = 5.0            # seconds between schedule checks (settings changes apply within this)
 
     def start(self) -> bool:
         if not self.lock.try_acquire():
@@ -130,9 +131,9 @@ class Runner:
                         log.exception("monitor pass crashed")
                     self.next_due = win.next_tick(self.clock())
                 self.state, self.detail = "waiting", None
-            delay = 5.0
+            delay = self.max_sleep
             if self.next_due is not None:
-                delay = max(0.2, min(5.0, (self.next_due - self.clock()).total_seconds()))
+                delay = max(min(0.2, self.max_sleep), min(self.max_sleep, (self.next_due - self.clock()).total_seconds()))
             self._wake.wait(delay)
             self._wake.clear()
         log.info("portfolio monitor stopped")

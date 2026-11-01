@@ -182,7 +182,7 @@ class Engine:
                 b, berr = bars.get((p.underlying, rules_for(p, st)[1]), (None, None))
                 vals[p.id] = v
                 checks[p.id] = check_position(p, v, snaps[p.underlying], st, earn.get(p.underlying), today, b, berr,
-                                              prev.get(p.id), self.quotes.max_age)
+                                              prev.get(p.id), self.quotes.max_age, now)
             except Exception as exc:              # never skip silently: the position becomes STALE DATA
                 log.exception("checking position %s failed", p.id)
                 msg = f"{type(exc).__name__}: {str(exc)[:160]}"
@@ -449,7 +449,7 @@ class Engine:
         ctx_cache[f"contract:{c.id}"] = ctx
         conds = split_conditions(c.alert_conditions)
         results = [ctx.evaluate(x, "condition") for x in conds]
-        fresh = snap.freshness(self.quotes.max_age) if snap else "UNAVAILABLE"
+        fresh = snap.freshness(self.quotes.max_age, now) if snap else "UNAVAILABLE"
         keep = False
         if conds and cur.status in AUTOMATED:
             verdict: bool | None = (None if any(r.result is None for r in results) or fresh in ("UNAVAILABLE", "CACHED")

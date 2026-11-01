@@ -21,6 +21,22 @@ from . import serialize as ser
 from .deps import Read, Write, quotes_of
 
 router = APIRouter()
+
+
+def _views(request: Request, s, positions) -> dict:
+    from datetime import datetime, timezone
+
+    from ..monitoring import settings as msettings
+    from ..monitoring.read import position_views
+    from .monitor_routes import monitor_note
+
+    st = msettings.load(s)
+    now = datetime.now(timezone.utc)
+    return position_views(s, list(positions), st, now, monitor_note(request, st, now))
+
+
+def _pos(request: Request, s, p) -> PositionOut:
+    return ser.position(p, monitor=_views(request, s, [p])[p.id])
 PageNo = Annotated[int, Query(ge=1)]
 PageSize = Annotated[int, Query(ge=1, le=200)]
 IdemKey = Annotated[str | None, Header(alias="Idempotency-Key", max_length=128)]
@@ -41,8 +57,9 @@ def data_sources(request: Request):
     q = quotes_of(request)
     return {"quotes": q.status(), "research_lab_url": request.app.state.research_url,
             "notes": ["Option quotes are delayed about 15 minutes (Cboe through OpenBB) unless a real-time provider is "
-                      "configured.", "Valuations are on-demand estimates; continuous monitoring arrives in Phase 2.",
-                      "Positions in this dashboard are not read by the live monitor (scans.yaml) yet."]}
+                      "configured.", "Position values are estimates from those quotes (mid prices), recorded by the "
+                      "monitor on every pass and shown with their age.",
+                      "Positions imported from scans.yaml are monitored here; the YAML monitor skips them."]}
 
 
 # ------------------------------------------------------------------ accounts
@@ -85,9 +102,36 @@ def add_snapshot(account_id: str, body: SnapshotCreate, s: Write):
 
 
 @router.get("/accounts/{account_id}/overview", tags=["accounts"])
-def account_overview(account_id: str, s: Read):
+def account_overview(account_id: str, request: Request, s: Read):
+    from decimal import Decimal
+
     o = svc.account_overview(s, account_id)
     o["snapshot"] = ser.snapshot(o["snapshot"])
+    items, _ = svc.list_positions(s, account_id, ["OPEN"], page_size=100_000)
+    views = _views(request, s, items)
+    counts: dict[str, int] = {}
+    pnl, pnl_n, greeks, greeks_ok, newest = Decimal(0), 0, {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}, True, None
+    for p in items:
+        v = views[p.id]
+        counts[v["status"]] = counts.get(v["status"], 0) + 1
+        sn = v["snapshot"] if v["status"] not in ("NOT_MONITORED",) and not v["stale_overlay"] else None
+        if sn and sn["open_pnl"] is not None:
+            pnl += Decimal(sn["open_pnl"])
+            pnl_n += 1
+        for k in greeks:
+            g = sn["greeks"].get(k) if sn else None
+            if g is None:
+                greeks_ok = False
+            else:
+                greeks[k] += g
+        if v["checked_at"] and (newest is None or v["checked_at"] > newest):
+            newest = v["checked_at"]
+    o["monitoring"] = {"statuses": counts, "attention": sum(n for k, n in counts.items() if k in
+                                                           ("STALE_DATA", "EXIT_CONDITION_MET", "ACTION_REQUIRED", "WATCH")),
+                       "open_pnl": fmt(pnl) if items else None, "open_pnl_positions": pnl_n,
+                       "open_pnl_complete": pnl_n == len(items),
+                       "greeks": {k: round(x, 4) for k, x in greeks.items()} if greeks_ok and items else None,
+                       "last_checked_at": newest, "label": "ESTIMATED"}
     return o
 
 
@@ -137,16 +181,18 @@ def _quote_legs(request: Request, body: AnalyzeIn) -> dict:
 
 
 @router.get("/positions", response_model=Page[PositionOut], tags=["positions"])
-def list_positions(s: Read, account_id: str | None = None,
+def list_positions(s: Read, request: Request, account_id: str | None = None,
                    lifecycle: Annotated[list[Literal["OPEN", "CLOSED", "ARCHIVED"]] | None, Query()] = None,
                    underlying: str | None = None, strategy: str | None = None, page: PageNo = 1,
                    page_size: PageSize = 50, sort: str = "-opened_at"):
     items, total = svc.list_positions(s, account_id, lifecycle, underlying, strategy, page, page_size, sort)
-    return Page[PositionOut](items=[ser.position(p) for p in items], total=total, page=page, page_size=page_size)
+    views = _views(request, s, items)
+    return Page[PositionOut](items=[ser.position(p, monitor=views[p.id]) for p in items], total=total, page=page,
+                             page_size=page_size)
 
 
 @router.post("/positions", response_model=PositionOut, status_code=201, tags=["positions"])
-def create_position(body: PositionIn, response: Response, s: Write, idempotency_key: IdemKey = None):
+def create_position(body: PositionIn, request: Request, response: Response, s: Write, idempotency_key: IdemKey = None):
     h = svc.request_hash(body.model_dump(mode="json"))
     prev = svc.idempotent_lookup(s, idempotency_key, "positions.create", h)
     if prev:
@@ -154,7 +200,7 @@ def create_position(body: PositionIn, response: Response, s: Write, idempotency_
         response.headers["Idempotent-Replay"] = "true"
         return prev.response_json
     p = svc.create_position(s, body, earnings_date(body.underlying))
-    out = ser.position(p)
+    out = _pos(request, s, p)
     svc.idempotent_store(s, idempotency_key, "positions.create", h, 201, out.model_dump(mode="json"))
     return out
 
@@ -168,24 +214,24 @@ def export_positions(s: Read, account_id: str | None = None,
 
 
 @router.get("/positions/{position_id}", response_model=PositionOut, tags=["positions"])
-def get_position(position_id: str, s: Read):
-    return ser.position(svc.get_position(s, position_id))
+def get_position(position_id: str, request: Request, s: Read):
+    return _pos(request, s, svc.get_position(s, position_id))
 
 
 @router.patch("/positions/{position_id}", response_model=PositionOut, tags=["positions"])
-def update_position(position_id: str, body: PositionUpdate, s: Write):
+def update_position(position_id: str, body: PositionUpdate, request: Request, s: Write):
     p = svc.get_position(s, position_id)
-    return ser.position(svc.update_position(s, position_id, body, earnings_date(p.underlying)))
+    return _pos(request, s, svc.update_position(s, position_id, body, earnings_date(p.underlying)))
 
 
 @router.post("/positions/{position_id}/close", response_model=PositionOut, tags=["positions"])
-def close_position(position_id: str, body: PositionClose, s: Write):
-    return ser.position(svc.close_position(s, position_id, body))
+def close_position(position_id: str, body: PositionClose, request: Request, s: Write):
+    return _pos(request, s, svc.close_position(s, position_id, body))
 
 
 @router.post("/positions/{position_id}/archive", response_model=PositionOut, tags=["positions"])
-def archive_position(position_id: str, body: PositionArchive, s: Write):
-    return ser.position(svc.archive_position(s, position_id, body))
+def archive_position(position_id: str, body: PositionArchive, request: Request, s: Write):
+    return _pos(request, s, svc.archive_position(s, position_id, body))
 
 
 @router.get("/positions/{position_id}/valuation", tags=["positions"])

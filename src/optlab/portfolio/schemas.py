@@ -245,6 +245,7 @@ class PositionOut(BaseModel):
     updated_at: datetime
     version: int
     legs: list[LegOut]
+    monitor: dict | None = None          # effective monitoring status, reasons and latest snapshot (Phase 2)
 
 
 class AnalysisOut(BaseModel):

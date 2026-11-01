@@ -145,7 +145,7 @@ class ContractQuote:
 
 class QuoteService:
     def __init__(self, provider: ChainProvider, mode: str = "live", ttl_seconds: float = 60, max_age_seconds: float = 300,
-                 clock=time.monotonic):
+                 clock=time.monotonic, wall=lambda: datetime.now(timezone.utc)):
         if mode not in ("live", "synthetic"):
             raise ValueError("mode must be live or synthetic")
         if mode == "live" and provider.synthetic:
@@ -153,6 +153,7 @@ class QuoteService:
         if mode == "synthetic" and not provider.synthetic:
             raise ValueError("Synthetic mode only uses the synthetic provider.")
         self.provider, self.mode, self.ttl, self.max_age, self.clock = provider, mode, ttl_seconds, max_age_seconds, clock
+        self.wall = wall                              # timestamps fetched_at (tests inject a fixed clock)
         self._snaps: dict[str, tuple[float, ChainSnapshot]] = {}
         self._locks: dict[str, threading.Lock] = {}
         self._guard = threading.Lock()
@@ -173,7 +174,7 @@ class QuoteService:
                 self.fetch_count += 1
                 rows, src_ts = p.fetch(symbol)
                 snap = ChainSnapshot(symbol, p.name, p.delay_minutes, p.synthetic, p.greeks_source,
-                                     datetime.now(timezone.utc), src_ts, rows)
+                                     self.wall(), src_ts, rows)
                 self._snaps[symbol] = (self.clock(), snap)
                 return snap
             except Exception as exc:                 # outage, rate limit, symbol without options...

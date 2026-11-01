@@ -100,11 +100,12 @@ def deliver(db, seqs: list[int], settings: MonitorSettings, notifier: Notifier |
                                  .order_by(Event.seq)))
         work = [(e.seq, e.title, e.message, e.severity) for e in pending]
     sent = 0
-    results = []
+    results: list[tuple[int, str, str | None]] = []
     for seq, title, body, sev in work:
         if not settings.notifications.desktop or notifier is None:
             results.append((seq, "browser", None))
             continue
+        err: str | None = None
         try:
             ok = notifier(title, body[:400], "critical" if sev == "critical" else "normal")
         except Exception as exc:                       # never let a notification break a pass

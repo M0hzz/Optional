@@ -87,8 +87,9 @@ def metrics_for(p: Position, v: PositionValuation, earnings: date | None, today:
         else:
             dists = []
             for lg in shorts:
-                k = float(from_units(lg.strike_units))
-                dists.append(100 * ((k - price) if lg.option_right and lg.option_right.value == "CALL" else (price - k)) / price)
+                strike = float(from_units(lg.strike_units or 0))
+                call = lg.option_right is not None and lg.option_right.value == "CALL"
+                dists.append(100 * ((strike - price) if call else (price - strike)) / price)
             short_otm = min(dists)
             short_itm = short_otm < 0
     dte_earn = (earnings - today).days if earnings else NO_EARNINGS
@@ -144,9 +145,9 @@ def system_rules(p: Position, price: float | None, today: date, settings: Monito
                    "(expired worthless, assigned or exercised)")
             out.append(RuleResult("system", "expiration", True, {"dte": d}, msg))
         if lg.side.value == "SELL" and price is not None and 0 <= d <= settings.assignment_risk_days:
-            k = float(from_units(lg.strike_units))
+            strike = float(from_units(lg.strike_units or 0))
             call = lg.option_right is not None and lg.option_right.value == "CALL"
-            itm = 100 * ((price - k) if call else (k - price)) / price
+            itm = 100 * ((price - strike) if call else (strike - price)) / price
             if itm > 0:
                 out.append(RuleResult("system", "assignment_risk", True, {"dte": d, "itm_pct": round(itm, 2)},
                                       f"short {name} is {itm:.1f}% in the money with {d} day{'s' if d != 1 else ''} "
@@ -156,7 +157,8 @@ def system_rules(p: Position, price: float | None, today: date, settings: Monito
 
 def check_position(p: Position, v: PositionValuation, snap: ChainSnapshot, settings: MonitorSettings,
                    earnings: date | None, today: date, bars=None, bars_error: str | None = None,
-                   previous: dict | None = None, max_age: float = 300) -> PositionCheck:
+                   previous: dict | None = None, max_age: float = 300,
+                   now=None) -> PositionCheck:
     names, why = metrics_for(p, v, earnings, today)
     rules, timeframe, _ = rules_for(p, settings)
     ctx = Context("position", names, why, bars, bars_error, timeframe, snap.rows)
@@ -164,11 +166,13 @@ def check_position(p: Position, v: PositionValuation, snap: ChainSnapshot, setti
                + [ctx.evaluate(r, "watch") for r in rules.watch_when])
     results += system_rules(p, names["price"], today, settings)
     stale: list[str] = []
-    fresh = snap.freshness(max_age)
+    fresh = snap.freshness(max_age, now)
     if fresh == UNAVAILABLE:
         stale.append(f"option quotes unavailable ({snap.error or 'empty chain'})")
     elif fresh == CACHED:
-        stale.append(f"option quotes are an older snapshot ({snap.error})")
+        age = snap.age_seconds(now)
+        stale.append(f"option quotes are an older snapshot ({snap.error})" if snap.error else
+                     f"option quotes are {int((age or 0) // 60)} min old (limit {int(max_age // 60)} min)")
     if v.status != "AVAILABLE":
         stale += v.reasons or ["the position can't be fully valued"]
     for r in results:

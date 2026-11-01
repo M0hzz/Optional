@@ -14,6 +14,9 @@ Settings (environment variables, all optional)
                            http://127.0.0.1:5173,http://localhost:5173 (the Vite dev server)
     OPTLAB_RESEARCH_URL    link to the Streamlit Research Lab; default: same host, port 8517 (or :8443 over HTTPS)
     OPTLAB_MAX_UPLOAD_BYTES 1000000
+    OPTLAB_MONITOR         on (default) | off: run the portfolio monitor in this process (optlab.monitoring)
+Monitoring: with OPTLAB_MONITOR=on the server runs monitoring passes on the schedule in a background
+thread, holding a per-database monitor lock so passes never run twice (see monitoring/runner.py).
 Authentication: none in Phase 1 (single user, localhost / Tailscale only). Routes take their session
 through `deps.py`, so an auth dependency can be added there without touching the domain layer.
 """
@@ -47,10 +50,40 @@ def error_body(code: str, message: str, field_errors=None, details=None, request
                       "request_id": request_id}}
 
 
+def _engine(app: FastAPI):
+    """The process's monitoring engine, sharing the API's quote service (one chain snapshot per symbol)."""
+    if app.state.engine is None:
+        from ..monitoring.engine import Engine
+        from .deps import quotes_from_app
+
+        app.state.engine = Engine(app.state.db, quotes_from_app(app), **app.state.engine_options)
+    return app.state.engine
+
+
+def run_manual_pass(app: FastAPI):
+    """'Run now': in this process if it runs the monitor (or nobody does); refused if another process does."""
+    from ..monitoring.runner import MonitorLock
+
+    runner = app.state.runner
+    if runner is not None and runner.lock.held:
+        return runner.run_now("manual")
+    lk = MonitorLock(app.state.db.url)
+    if not lk.try_acquire():
+        raise DomainError("MONITOR_ELSEWHERE", f"Another process runs the monitor for this database (pid "
+                                               f"{lk.holder() or '?'}); run the pass there.", 409)
+    try:
+        return _engine(app).run_pass("manual")
+    finally:
+        lk.release()
+
+
 def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool = True, lock: bool = True,
-               web_dist: Path | None = WEB_DIST) -> FastAPI:
+               web_dist: Path | None = WEB_DIST, monitor: bool | None = None,
+               engine_options: dict | None = None) -> FastAPI:
     db = database or dbm.Database()
     instance = dbm.InstanceLock(db.url) if lock else None
+    run_monitor = (os.environ.get("OPTLAB_MONITOR", "on").lower() not in ("off", "0", "false", "no")
+                   if monitor is None else monitor)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -59,25 +92,35 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
         if migrate:
             rev = dbm.upgrade(db.url)
             log.info("database at revision %s", rev)
+        if run_monitor:
+            from ..monitoring.runner import Runner
+
+            app.state.runner = Runner(db, _engine(app))
+            app.state.runner.start()
         try:
             yield
         finally:
+            if app.state.runner is not None:
+                app.state.runner.stop()
             db.dispose()
             if instance:
                 instance.release()
 
     app = FastAPI(title="optlab API", version="1.0.0", lifespan=lifespan,
-                  description="Portfolio, positions and watched contracts. Informational only: no orders are placed.",
+                  description="Portfolio, positions, watched contracts, monitoring and events. Informational only: no orders are placed.",
                   docs_url="/api/docs", redoc_url=None, openapi_url="/api/v1/openapi.json")
     app.state.db = db
     app.state.quotes = quotes
+    app.state.engine = None
+    app.state.runner = None
+    app.state.engine_options = engine_options or {}
     app.state.max_upload = int(os.environ.get("OPTLAB_MAX_UPLOAD_BYTES", 1_000_000))
     app.state.research_url = os.environ.get("OPTLAB_RESEARCH_URL") or None
     origins = [o.strip() for o in os.environ.get("OPTLAB_CORS_ORIGINS", DEFAULT_CORS).split(",") if o.strip()]
     if "*" in origins:
         raise ValueError("OPTLAB_CORS_ORIGINS may not contain '*': list the exact origins.")
     app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-                       allow_headers=["Content-Type", "Idempotency-Key"], allow_credentials=False)
+                       allow_headers=["Content-Type", "Idempotency-Key", "Last-Event-ID"], allow_credentials=False)
 
     @app.middleware("http")
     async def request_id(request: Request, call_next):
@@ -114,9 +157,11 @@ def create_app(database: dbm.Database | None = None, quotes=None, migrate: bool 
         return JSONResponse(error_body("INTERNAL_ERROR", "Something went wrong on the server. The details are in the "
                                                          "server log.", None, None, request.state.request_id), 500)
 
+    from .monitor_routes import router as monitor_router
     from .routes import router
 
     app.include_router(router, prefix="/api/v1")
+    app.include_router(monitor_router, prefix="/api/v1")
 
     if web_dist is not None and (web_dist / "index.html").exists():
         app.mount("/assets", StaticFiles(directory=web_dist / "assets"), name="assets")
