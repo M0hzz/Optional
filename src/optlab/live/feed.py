@@ -83,8 +83,54 @@ def standard_only(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return df[keep] if keep.any() else df
 
 
+CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
+OCC_RE = r"^(?P<root>.+)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$"
+
+
+def cboe_rows(payload: dict) -> pd.DataFrame:
+    """CBOE's delayed-quotes JSON as a raw chain (one row per contract) for finish_chain.
+    Parsed here rather than by OpenBB's CBOE reader, which fails on a chain whose first contract has never
+    traded (its last-trade time is empty), as SPY's often is."""
+    data = (payload or {}).get("data") or {}
+    df = pd.DataFrame.from_records(data.get("options") or [])
+    if df.empty or "option" not in df:
+        raise ValueError("CBOE returned no option contracts")
+    parts = df["option"].astype(str).str.extract(OCC_RE)
+    ok = parts["exp"].notna()
+    df, parts = df[ok], parts[ok]
+    out = pd.DataFrame({
+        "contract": df["option"].astype(str),
+        "expiration": pd.to_datetime(parts["exp"], format="%y%m%d").dt.date,
+        "strike": parts["strike"].astype(float) / 1000,
+        "type": parts["cp"].map({"C": "call", "P": "put"}),
+    })
+    for src, dst in (("bid", "bid"), ("ask", "ask"), ("last_trade_price", "last"), ("volume", "volume"),
+                     ("open_interest", "open_interest"), ("iv", "iv"), ("delta", "delta"), ("gamma", "gamma"),
+                     ("theta", "theta"), ("vega", "vega")):
+        out[dst] = pd.to_numeric(df[src], errors="coerce") if src in df else np.nan
+    never = df["last_trade_time"].isna() if "last_trade_time" in df else out["last"].isna()
+    out.loc[never | (out["last"] <= 0), "last"] = np.nan         # no trade yet: unknown, not a price of 0
+    out["underlying_price"] = pd.to_numeric(pd.Series([data.get("current_price")]), errors="coerce").iloc[0]
+    return out.reset_index(drop=True)
+
+
+def fetch_cboe(symbol: str, timeout: float = 20) -> dict:
+    """The delayed-quotes JSON for a stock/ETF (SPY) or an index (SPX, served as _SPX)."""
+    import requests
+
+    sym = re.sub(r"[^A-Z0-9.]", "", symbol.upper())
+    last = None
+    for name in (sym, f"_{sym}"):
+        r = requests.get(CBOE_URL.format(name), timeout=timeout, headers={"User-Agent": "optlab"})
+        if r.status_code == 200:
+            return r.json()
+        last = r.status_code
+    raise RuntimeError(f"CBOE has no option chain for {sym} (HTTP {last})")
+
+
 class LiveFeed:
-    """Real data via OpenBB. Thread-safe caches; one instance per process."""
+    """Real data: bars via OpenBB/yfinance, option chains from CBOE's delayed quotes (or another OpenBB
+    provider). Thread-safe caches; one instance per process."""
 
     def __init__(self, chain_source: str = "cboe", rate: float = 0.04, bar_ttl: dict | None = None,
                  chain_ttl: float = 50, workers: int = 16):
@@ -154,9 +200,12 @@ class LiveFeed:
         hit = self._chains.get((symbol, source))
         if hit and time.time() - hit[0] < self.chain_ttl:
             return hit[1]
-        raw = self.obb.derivatives.options.chains(symbol, provider=source).to_df().reset_index(drop=True)
-        raw = raw.rename(columns={"contract_symbol": "contract", "option_type": "type", "last_trade_price": "last",
-                                  "implied_volatility": "iv"})
+        if source == "cboe":
+            raw = cboe_rows(fetch_cboe(symbol))
+        else:
+            raw = self.obb.derivatives.options.chains(symbol, provider=source).to_df().reset_index(drop=True)
+            raw = raw.rename(columns={"contract_symbol": "contract", "option_type": "type", "last_trade_price": "last",
+                                      "implied_volatility": "iv"})
         df = finish_chain(standard_only(raw, symbol), symbol, self.rate)
         with self._lock:
             self._chains[(symbol, source)] = (time.time(), df)

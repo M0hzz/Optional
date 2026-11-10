@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from optlab.live.expr import Evaluator, ExprError, truthy
-from optlab.live.feed import SyntheticFeed, finish_chain, standard_only
+from optlab.live.feed import SyntheticFeed, cboe_rows, finish_chain, standard_only
 from optlab.live.indicators import bar_functions
 from optlab.live.monitor import AlertTracker, Schedule
 from optlab.live.scanner import (filter_contracts, load_scan_config, max_loss_of, run_pass, run_positions,
@@ -90,6 +90,25 @@ def test_finish_chain_derived_columns():
     assert put["yield_pct"] == pytest.approx(100 * 1.1 / 90)
     assert put["delta"] < 0 < call["delta"] or np.isnan(call["delta"])  # greeks computed where IV known
     assert np.isnan(call["iv"])                                           # CBOE's 0 means "unknown"
+
+
+def test_cboe_chain_parses_when_the_first_contract_never_traded():
+    def opt(sym, last, when, **kw):
+        return {"option": sym, "bid": 0.96, "ask": 0.99, "iv": 0.27, "open_interest": 10.0, "volume": 0.0, "delta": 0.3,
+                "gamma": 0.01, "vega": 0.1, "theta": -0.02, "last_trade_price": last, "last_trade_time": when, **kw}
+    payload = {"data": {"symbol": "SPY", "current_price": 747.58, "options": [
+        opt("B1SPY261113C00710000", 0.0, None),                    # adjusted contract, never traded: comes first
+        opt("SPY261113C00710000", 38.5, "2026-11-10T09:32:14"),
+        opt("SPY261113P00710500", 0.0, None, delta=-0.2)]}}
+    raw = cboe_rows(payload)
+    assert list(raw["strike"]) == [710.0, 710.0, 710.5] and list(raw["type"]) == ["call", "call", "put"]
+    assert raw["expiration"].iloc[0] == date(2026, 11, 13) and (raw["underlying_price"] == 747.58).all()
+    assert np.isnan(raw["last"].iloc[0]) and raw["last"].iloc[1] == 38.5        # never traded is unknown, not 0
+    ch = finish_chain(standard_only(raw, "SPY"), "SPY", today=date(2026, 11, 10))
+    assert list(ch["contract"]) == ["SPY261113C00710000", "SPY261113P00710500"] and (ch["dte"] == 3).all()
+    assert ch["mid"].iloc[0] == pytest.approx(0.975)
+    with pytest.raises(ValueError, match="no option contracts"):
+        cboe_rows({"data": {"options": []}})
 
 
 # ---------------------------------------------------------------- scanning
