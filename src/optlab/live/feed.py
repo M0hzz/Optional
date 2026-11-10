@@ -114,18 +114,40 @@ def cboe_rows(payload: dict) -> pd.DataFrame:
     return out.reset_index(drop=True)
 
 
-def fetch_cboe(symbol: str, timeout: float = 20) -> dict:
-    """The delayed-quotes JSON for a stock/ETF (SPY) or an index (SPX, served as _SPX)."""
-    import requests
+_CBOE_GATE = threading.BoundedSemaphore(4)       # CBOE answers 429 to bursts: a few requests at a time
 
-    sym = re.sub(r"[^A-Z0-9.]", "", symbol.upper())
-    last = None
+
+def cboe_symbol(symbol: str) -> str:
+    """BRK-B, BRK/B, brk.b -> BRK.B (CBOE writes share classes with a dot); ^SPX -> SPX."""
+    return re.sub(r"[^A-Z0-9.]", "", re.sub(r"[-/ ]", ".", symbol.strip().upper()))
+
+
+def fetch_cboe(symbol: str, timeout: float = 20, retries: int = 4, pause: float = 1.5, get=None) -> dict:
+    """The delayed-quotes JSON for any optionable stock or ETF (SPY, BRK.B) or index (SPX, served as _SPX).
+    A 429 (too many requests) is retried with a growing pause; it never counts as "no such symbol"."""
+    if get is None:
+        import requests
+
+        get = requests.get
+    sym = cboe_symbol(symbol)
+    if not sym:
+        raise ValueError("no symbol")
+    status = None
     for name in (sym, f"_{sym}"):
-        r = requests.get(CBOE_URL.format(name), timeout=timeout, headers={"User-Agent": "optlab"})
-        if r.status_code == 200:
-            return r.json()
-        last = r.status_code
-    raise RuntimeError(f"CBOE has no option chain for {sym} (HTTP {last})")
+        for attempt in range(retries + 1):
+            with _CBOE_GATE:
+                r = get(CBOE_URL.format(name), timeout=timeout, headers={"User-Agent": "optlab"})
+            status = r.status_code
+            if status == 200:
+                return r.json()
+            if status != 429 and status < 500:
+                break                                            # 403/404: not served under this name
+            if attempt < retries:
+                wait = r.headers.get("Retry-After", "")
+                time.sleep(min(float(wait), 30) if wait.replace(".", "", 1).isdigit() else pause * 2 ** attempt)
+        else:
+            raise RuntimeError(f"CBOE is limiting requests right now (HTTP {status} for {sym}); the next pass retries")
+    raise RuntimeError(f"CBOE lists no options for {sym} (HTTP {status}). Check the ticker symbol.")
 
 
 class LiveFeed:

@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 
 from optlab.live.expr import Evaluator, ExprError, truthy
-from optlab.live.feed import SyntheticFeed, cboe_rows, finish_chain, standard_only
+from optlab.live.feed import SyntheticFeed, cboe_rows, cboe_symbol, fetch_cboe, finish_chain, standard_only
 from optlab.live.indicators import bar_functions
 from optlab.live.monitor import AlertTracker, Schedule
 from optlab.live.scanner import (filter_contracts, load_scan_config, max_loss_of, run_pass, run_positions,
@@ -90,6 +90,44 @@ def test_finish_chain_derived_columns():
     assert put["yield_pct"] == pytest.approx(100 * 1.1 / 90)
     assert put["delta"] < 0 < call["delta"] or np.isnan(call["delta"])  # greeks computed where IV known
     assert np.isnan(call["iv"])                                           # CBOE's 0 means "unknown"
+
+
+def test_cboe_symbol_normalizes_share_classes_and_tickers():
+    assert cboe_symbol("BRK-B") == "BRK.B" and cboe_symbol("brk/b") == "BRK.B" and cboe_symbol("BRK.B") == "BRK.B"
+    assert cboe_symbol("^SPX") == "SPX" and cboe_symbol(" iwm ") == "IWM"
+
+
+def test_fetch_cboe_retries_429_and_tries_the_index_prefix():
+    calls = []
+
+    class Resp:
+        def __init__(self, status, headers=None, body=None):
+            self.status_code, self.headers, self._body = status, headers or {}, body
+
+        def json(self):
+            return self._body
+
+    def flaky_then_ok(url, timeout, headers):
+        calls.append(url)
+        if len(calls) < 3:
+            return Resp(429, {"Retry-After": "0"})
+        return Resp(200, body={"data": {"symbol": "SPY", "options": []}})
+
+    out = fetch_cboe("SPY", retries=4, pause=0.01, get=flaky_then_ok)
+    assert out["data"]["symbol"] == "SPY" and len(calls) == 3    # two 429s, then success; same (non-index) name each time
+    assert all(c.endswith("/SPY.json") for c in calls)
+
+    def always_404(url, timeout, headers):
+        return Resp(404)
+
+    with pytest.raises(RuntimeError, match="no options"):
+        fetch_cboe("NOPE", retries=1, pause=0.01, get=always_404)
+
+    def always_429(url, timeout, headers):
+        return Resp(429)
+
+    with pytest.raises(RuntimeError, match="limiting requests"):
+        fetch_cboe("SPY", retries=1, pause=0.01, get=always_429)
 
 
 def test_cboe_chain_parses_when_the_first_contract_never_traded():
