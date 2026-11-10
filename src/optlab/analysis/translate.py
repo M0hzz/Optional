@@ -13,7 +13,7 @@ from ..history.strategy import NOT_HISTORICAL, check_expression
 from ..live.expr import ExprError, parse
 
 POSITION_ONLY = {"pnl", "pnl_pct", "value", "entry", "dte", "short_strike_otm_pct", "position_delta", "position_gamma",
-                 "theta_day", "position_vega", "loss_pct_of_max", "short_itm", "earnings_before_expiry"}
+                 "theta_day", "position_vega", "max_loss", "loss_pct_of_max", "short_itm", "earnings_before_expiry"}
 OPTION_QUOTE = {"bid", "ask", "mid", "last", "open_interest", "oi", "iv", "delta", "abs_delta", "gamma", "theta", "vega",
                 "spread", "spread_pct", "max_spread_pct", "min_open_interest", "strike", "underlying_price", "intrinsic",
                 "extrinsic", "breakeven", "otm_pct", "target_entry"}
