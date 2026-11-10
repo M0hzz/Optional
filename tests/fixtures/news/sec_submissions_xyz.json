@@ -1,6 +1,0 @@
-{"name": "Example Widgets Inc.", "tickers": ["XYZ"], "filings": {"recent": {
- "accessionNumber": ["0000101-26-000002", "0000101-26-000003", "0000101-25-000009"],
- "filingDate": ["2026-10-28", "2026-10-29", "2025-01-02"],
- "acceptanceDateTime": ["2026-10-28T20:05:00.000Z", "2026-10-29T21:10:00.000Z", "2025-01-02T12:00:00.000Z"],
- "form": ["S-3", "4", "8-K"], "items": ["", "", "5.02"],
- "primaryDocument": ["s3.htm", "form4.xml", "old8k.htm"]}}}
