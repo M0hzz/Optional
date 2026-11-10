@@ -216,15 +216,24 @@ python scripts/monitor.py --synthetic --once   # offline test
 
 In `scans.yaml`:
 
+- **trade_size** — the most one trade may cost or risk, in dollars (for example `250`; about 80 and up
+  works). Option scans then list only what one trade of fits, priced at natural prices (buy at the ask, sell
+  at the bid), with the cost of one and how many fit. Leave it out for no limit.
 - **schedule** — start, end, timezone, days, every_seconds.
 - **watchlists** — named symbol lists, inline or from a file
   (`file:watchlists/liquid_options.txt`, ~60 liquid optionable names to start from).
 - **scans** — each has a watchlist, a bar `timeframe` (1m, 5m, 15m, 30m, 1h, 1d, 1wk),
   `stock` conditions on the security and optional `options` filters on its chain
   (type, DTE range, delta range, open interest, spread, any extra conditions, sort, top N).
+  `options.side` (`buy` or `sell`) says what the scan does with the contract, and `options.max_width`
+  (dollars between strikes) turns it into a vertical spread: a debit spread when buying, a credit spread
+  when selling. The widest spread that fits `trade_size` is used. Selling without `max_width` is a
+  cash-secured put or covered call, which ties up the price of 100 shares.
 - **positions** — your open trades (legs with strike, expiration, qty, entry price).
   Each pass marks them from the live chain and returns **EXIT** if any `exit_when`
-  condition is true, **WATCH** if any `watch_when` is, else **HOLD**.
+  condition is true, **WATCH** if any `watch_when` is, else **HOLD**. The default rules are percentages,
+  so they work for an $80 option as well as a large trade, and use `entry` (+ debit paid, − credit
+  received) to tell bought trades from sold ones.
 
 Conditions are plain text: `close > sma(200) and rsi(14) < 40`,
 `crosses_above(ema(9), ema(21))`, `iv > hv(20) * 1.2 and open_interest >= 500`.

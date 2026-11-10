@@ -71,9 +71,14 @@ rules** on the position page). Names you can use (the editor lists them, with me
 
 `pnl`, `pnl_pct`, `value`, `entry`, `dte`, `short_strike_otm_pct`, `position_delta`, `position_gamma`,
 `theta_day`, `position_vega`, `days_to_earnings`, `earnings_before_expiry`, `price`, `max_spread_pct`,
-`min_open_interest`, `loss_pct_of_max`, `short_itm`, the chain values `atm_iv`, `skew`,
+`min_open_interest`, `max_loss`, `loss_pct_of_max`, `short_itm`, the chain values `atm_iv`, `skew`,
 `put_call_volume`, `put_call_oi`, `option_volume`, and every price-bar study (`rsi(14)`, `sma(50)`,
 `ema(9)`, `close`, ...) on the timeframe you choose (completed bars only, by default).
+
+The built-in defaults are percentages, so they fit a trade of $80 as well as a large one: exit at
+`pnl_pct >= 50`, at `loss_pct_of_max >= 50` (half of the most the trade can lose), and, for sold premium
+only (`entry < 0`), at `pnl_pct <= -200` or `dte <= 21`; watch a short strike within 3%, earnings before
+expiration, and a bought trade (`entry > 0`) with 7 days or fewer left.
 
 A rule that uses a value which doesn't apply (the short-strike distance of a position with no short
 legs) simply doesn't fire. A rule that uses a value which applies but is missing is *unknown*, and the

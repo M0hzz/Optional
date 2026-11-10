@@ -44,12 +44,12 @@ def show(result, verbose: bool) -> None:
     else:
         parts.append("no scan hits")
     for r in result.positions.to_dict("records"):
-        pnl = f" {r['pnl_pct']:+.0f}%" if pd.notna(r.get("pnl_pct")) else ""
+        pnl = f" {r['pnl_pct']:+.1f}%" if pd.notna(r.get("pnl_pct")) else ""
         parts.append(f"{r['position']}: {r['status']}{pnl}")
     print(" | ".join(parts), flush=True)
     if verbose and not result.hits.empty:
         cols = ["scan", "symbol", "price", "expiration", "strike", "type", "bid", "ask", "delta", "iv",
-                "open_interest", "annualized_yield", "details"]
+                "open_interest", "annualized_yield", "structure", "capital", "contracts", "details"]
         with pd.option_context("display.width", 250, "display.max_columns", 20, "display.max_colwidth", 70):
             print(result.hits[[c for c in cols if c in result.hits]].round(3).to_string(index=False))
     if verbose and not result.positions.empty:

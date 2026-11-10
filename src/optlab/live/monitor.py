@@ -126,6 +126,9 @@ class AlertTracker:
                 r = g.iloc[0]
                 body += (f"\n{len(g)} contract(s), best: {r['expiration']} {r['strike']:g} {r['type']} "
                          f"bid {r['bid']:.2f} Δ {r['delta']:+.2f} OI {int(r['open_interest'])}")
+                if pd.notna(r.get("capital")):
+                    n = f", {int(r['contracts'])} fit your trade size" if pd.notna(r.get("contracts")) else ""
+                    body += f"\n{r['structure']}: ${r['capital']:,.2f} for one{n}"
             elif g["details"].iloc[0]:
                 body += f"\n{g['details'].iloc[0]}"
             out.append((f"Scan hit: {scan}", body, "normal"))
@@ -147,7 +150,7 @@ class AlertTracker:
                   and ts - p["exit_at"] >= self.repeat * 60):
                 title = f"EXIT (still): {name}"
             if title:
-                pnl = f" P&L {r['pnl']:+,.0f} ({r['pnl_pct']:+.0f}%)" if pd.notna(r.get("pnl")) else ""
+                pnl = f" P&L {'−' if r['pnl'] < 0 else '+'}${abs(r['pnl']):,.2f} ({r['pnl_pct']:+.1f}%)" if pd.notna(r.get("pnl")) else ""
                 out.append((title, (r["reasons"] or "all conditions OK") + pnl,
                             "critical" if status in ("EXIT", "ERROR") else "normal"))
                 if status == "EXIT":

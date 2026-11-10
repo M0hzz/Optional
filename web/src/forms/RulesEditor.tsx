@@ -65,7 +65,7 @@ export function RulesEditor({ value, onChange, onInvalid }: { value: RuleSet; on
   useEffect(() => { onInvalid(bad.exit + bad.action + bad.watch > 0); }, [bad, onInvalid]);
   return (
     <div className="rules-editor">
-      <ListEditor title="Exit when (any) → Exit condition met" help="For example pnl_pct >= 50 (half the credit), pnl_pct <= -200, dte <= 21."
+      <ListEditor title="Exit when (any) → Exit condition met" help="For example pnl_pct >= 50 (up half), loss_pct_of_max >= 50 (lost half of the most it can lose), entry < 0 and dte <= 21 (sold premium near expiry)."
         items={value.exit_when} onChange={(x) => onChange({ ...value, exit_when: x })} onErrors={(n) => setBad((b) => (b.exit === n ? b : { ...b, exit: n }))} />
       <ListEditor title="Action required when (any)" help="Your own action checks. Built-in: an option leg expiring today or expired, and short options in the money near expiration."
         items={value.action_when} onChange={(x) => onChange({ ...value, action_when: x })} onErrors={(n) => setBad((b) => (b.action === n ? b : { ...b, action: n }))} />

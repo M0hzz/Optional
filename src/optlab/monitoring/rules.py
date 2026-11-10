@@ -46,6 +46,7 @@ POSITION_NAMES = {
     "price": "underlying price",
     "max_spread_pct": "widest bid/ask spread among the option legs, % of mid",
     "min_open_interest": "smallest open interest among the option legs",
+    "max_loss": "the most the position can lose, in dollars (bounded risk only)",
     "loss_pct_of_max": "current loss as a % of the maximum loss (bounded risk only; 0 when profitable)",
     "short_itm": "true if any short option leg is in the money",
 }
@@ -270,7 +271,7 @@ def fmt_value(name: str, v) -> str:
         f = float(v)
         if name.endswith("_pct") or name == "loss_pct_of_max":
             return f"{f:+.1f}%" if name == "pnl_pct" else f"{f:.1f}%"
-        if name in ("pnl", "value", "entry", "theta_day", "position_vega"):
+        if name in ("pnl", "value", "entry", "max_loss", "theta_day", "position_vega"):
             return f"{'−' if f < 0 else '+' if name in ('pnl', 'theta_day') and f > 0 else ''}${abs(f):,.2f}"
         return f"{f:,.4g}"
     return str(v)

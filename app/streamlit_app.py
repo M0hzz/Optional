@@ -1159,7 +1159,7 @@ def monitor_panel():
         st.caption("No positions in scans.yaml. Add them under `positions:` to get Hold / Watch / Exit checks.")
     else:
         pos = pos.assign(status=pos["status"].astype(str).str.capitalize())
-        ui.show(pos, formats={"pnl": "smoney0", "pnl_pct": "spts", "value": "money0", "price": "money",
+        ui.show(pos, formats={"pnl": "signed", "pnl_pct": "spts", "value": "money", "price": "money",
                               "short_strike_otm_pct": "pts", "position_delta": "smoney0", "theta_day": "signed",
                               "dte": "int", "days_to_earnings": "int"},
                 rename={"position_delta": "Delta (shares)", "value": "Value ($)"},
@@ -1183,10 +1183,20 @@ def monitor_panel():
             ui.show(g, formats={"price": "money", "dte": "int", "strike": "money", "bid": "money", "ask": "money",
                                 "mid": "money", "iv": "pct", "delta": "num3", "open_interest": "int", "volume": "int",
                                 "spread_pct": "pts", "otm_pct": "pts", "annualized_yield": "pts", "prob_otm": "pts",
-                                "expiration": "date"},
+                                "expiration": "date", "other_strike": "money", "net": "signed", "capital": "money",
+                                "max_loss": "money", "return_on_risk": "pts", "contracts": "int"},
                     help={**CHAIN_HELP, "prob_otm": "Model chance the option expires worthless (out of the money).",
-                          "details": "Indicator values behind the hit."},
-                    rename={"quality_flags": "Quality flags", "account_fit": "Account fit"},
+                          "details": "Indicator values behind the hit.",
+                          "structure": "The trade the scan priced: one option, or a spread with a second strike.",
+                          "other_strike": "The second strike of the spread.",
+                          "net": "Price per share at natural prices: + you pay, − you receive.",
+                          "capital": "What one of these costs or ties up. Only trades within trade_size in scans.yaml are listed.",
+                          "max_loss": "The most one of these can lose.",
+                          "return_on_risk": "Credit, or a debit spread's maximum profit, as a % of the most it can lose.",
+                          "contracts": "How many fit your trade size."},
+                    rename={"quality_flags": "Quality flags", "account_fit": "Account fit", "capital": "Cost of one ($)",
+                            "max_loss": "Max loss ($)", "net": "Net per share", "other_strike": "Other strike",
+                            "return_on_risk": "Return on risk", "contracts": "Fit your size"},
                     styler=lambda s_: ov._cell_colors(s_, ["Liquidity", "Account fit"]), width="stretch")
     alerts_file = MON / "alerts.csv"
     if alerts_file.exists():

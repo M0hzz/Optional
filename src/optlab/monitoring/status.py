@@ -123,7 +123,7 @@ def metrics_for(p: Position, v: PositionValuation, earnings: date | None, today:
         "position_gamma": g.get("gamma"), "theta_day": g.get("theta"), "position_vega": g.get("vega"),
         "days_to_earnings": dte_earn, "earnings_before_expiry": bool(earnings) and 0 <= dte_earn <= dte,
         "price": price, "max_spread_pct": max_spread, "min_open_interest": min_oi, "loss_pct_of_max": loss_pct,
-        "short_itm": short_itm,
+        "max_loss": NAN if max_loss is None else float(max_loss), "short_itm": short_itm,
     }
     if names["entry"] is None:
         why["entry"] = "a leg has no fill price"

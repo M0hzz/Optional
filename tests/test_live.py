@@ -10,7 +10,8 @@ from optlab.live.expr import Evaluator, ExprError, truthy
 from optlab.live.feed import SyntheticFeed, finish_chain, standard_only
 from optlab.live.indicators import bar_functions
 from optlab.live.monitor import AlertTracker, Schedule
-from optlab.live.scanner import load_scan_config, run_pass, run_positions, validate
+from optlab.live.scanner import (filter_contracts, load_scan_config, max_loss_of, run_pass, run_positions,
+                                  size_contracts, validate)
 
 ROOT = Path(__file__).resolve().parents[1]
 END = date(2024, 12, 31)
@@ -114,6 +115,101 @@ def test_option_scan_respects_every_filter(feed):
     assert h["delta"].abs().between(0.15, 0.35).all() and (h["open_interest"] >= 50).all()
     assert (h["bid"] >= 0.5).all() and (h.groupby("symbol").size() <= 4).all()
     assert h.groupby("symbol")["annualized_yield"].apply(lambda s: s.is_monotonic_decreasing).all()
+
+
+def _sized(feed, trade_size, **opt):
+    cfg = scan_cfg(trade_size=trade_size)
+    cfg["scans"][0]["options"] = {"type": "put", "dte": [20, 60], "delta": [0.15, 0.35], "top": 50, **opt}
+    assert not validate({**cfg, "watchlists": cfg["watchlists"]})
+    res = run_pass(cfg, feed, today=END)
+    assert not res.errors
+    return res.hits
+
+
+@pytest.mark.parametrize("size", [80, 250, 1000])
+def test_trade_size_keeps_only_what_one_trade_can_afford(feed, size):
+    # far out-of-the-money puts too: at $80 nothing nearer the money is that cheap on these underlyings
+    buy = _sized(feed, size, side="buy", sort="capital asc", delta=[0.01, 0.35])
+    assert not buy.empty and (buy["capital"] <= size).all() and (buy["capital"] == buy["ask"] * 100).all()
+    assert (buy["contracts"] == (size // buy["capital"])).all() and (buy["contracts"] >= 1).all()
+    assert buy["structure"].str.startswith("Buy ").all() and (buy["net"] > 0).all()
+
+    # a cash-secured put on these underlyings ties up thousands: nothing fits a small trade
+    assert _sized(feed, size, side="sell").empty
+
+    spread = _sized(feed, size, side="sell", max_width=5)
+    assert (spread["capital"] <= size).all() and (spread["net"] < 0).all()
+    assert spread.empty == (size < 1000)        # these chains have $5 strikes: a $5 spread risks over $400
+    if not spread.empty:
+        width = spread["strike"] - spread["other_strike"]
+        assert ((width > 0) & (width <= 5)).all()                       # the long put is below the short one
+        assert np.allclose(spread["max_loss"], (width + spread["net"]) * 100)
+        assert np.allclose(spread["return_on_risk"], 100 * -spread["net"] * 100 / spread["max_loss"])
+
+    debit = _sized(feed, size, side="buy", max_width=5)
+    assert (debit["capital"] <= size).all() and (debit.empty or np.allclose(debit["capital"], debit["net"] * 100))
+
+
+def test_an_80_dollar_trade_gets_a_one_dollar_wide_spread():
+    strikes = [95.0, 96.0, 97.0, 98.0, 99.0]
+    bids = [0.20, 0.30, 0.45, 0.65, 0.90]
+    raw = pd.DataFrame({"contract": [f"X{int(k)}" for k in strikes], "expiration": "2025-01-31", "strike": strikes,
+                        "type": "put", "bid": bids, "ask": [b + 0.05 for b in bids], "last": bids, "volume": 50,
+                        "open_interest": 500, "iv": 0.3, "underlying_price": 100.0})
+    ch = finish_chain(raw, "X", today=date(2025, 1, 1))
+    opt = {"type": "put", "side": "sell", "max_width": 3, "top": 99, "sort": "strike"}
+    got = size_contracts(ch, ch, opt, 80).set_index("strike")
+    # 99 put: $1 wide risks (1 - 0.20) x 100 = 80, which fits; $2 wide would risk 160
+    assert got.loc[99.0, "other_strike"] == 98.0 and got.loc[99.0, "capital"] == pytest.approx(80)
+    assert got.loc[99.0, "structure"] == "Sell 99/98 put spread" and got.loc[99.0, "contracts"] == 1
+    assert got.loc[99.0, "return_on_risk"] == pytest.approx(25)
+    assert 98.0 not in got.index and 95.0 not in got.index       # 98/97 risks $85; 95 has nothing below it
+    wide = size_contracts(ch, ch, opt, 1000).set_index("strike")
+    assert wide.loc[99.0, "other_strike"] == 96.0 and wide.loc[99.0, "contracts"] == 4   # widest that fits: risks $245
+    longs = size_contracts(ch, ch, {"side": "buy"}, 80)
+    assert sorted(longs["strike"]) == [95.0, 96.0, 97.0, 98.0] and (longs["capital"] <= 80).all()
+
+
+def test_trade_size_is_optional_and_checked(feed):
+    plain = run_pass(scan_cfg(), feed, today=END).hits               # no trade_size, no side: as before
+    assert not plain.empty and plain["capital"].isna().all() and plain["structure"].isna().all()
+    big = _sized(feed, 10_000_000, side="sell")
+    assert not big.empty and np.allclose(big["capital"], (big["strike"] - big["bid"]) * 100)
+    ch = feed.chain("SPY")
+    opt = {"type": "put", "dte": [20, 60], "side": "sell", "max_width": 5, "conditions": ["capital <= 120"], "top": 99}
+    names, funcs = bar_functions(feed.bars(["SPY"], "1d")["SPY"], "1d")
+    picked = filter_contracts(ch, opt, Evaluator(names, funcs), {})
+    assert (picked["capital"] <= 120).all()                              # usable in conditions without trade_size
+    msgs = " | ".join(validate({**scan_cfg(trade_size=-5)}))
+    assert "trade_size" in msgs and "options.side is needed" in msgs
+    msgs = " | ".join(validate(scan_cfg(scans=[{"name": "s", "symbols": ["SPY"], "options": {"side": "hold", "max_width": 0}}])))
+    assert "must be buy or sell" in msgs and "max_width" in msgs
+
+
+def test_default_rules_fit_small_bought_trades_and_sold_premium(feed):
+    ch = feed.chain("SPY")
+    row = ch[(ch["type"] == "call") & ch["dte"].between(25, 60) & (ch["mid"] > 0.5)].iloc[0]
+    leg = {"type": "call", "strike": float(row["strike"]), "expiration": str(row["expiration"])}
+
+    def status(qty, mult, legs=None):
+        pos = {"name": "p", "symbol": "SPY", "legs": legs or [{**leg, "qty": qty, "price": float(row["mid"]) * mult}]}
+        return run_positions({"positions": [pos]}, feed, today=END)[0].iloc[0]
+
+    lost_half = status(1, 2.2)                         # bought at 2.2x today's price: down ~55% of the cost
+    assert lost_half["status"] == "EXIT" and "loss_pct_of_max >= 50" in lost_half["reasons"]
+    assert lost_half["pnl_pct"] == pytest.approx(-54.5, abs=0.5)
+    held = status(1, 1.1)                              # a small loss on a bought option with weeks left: no exit
+    assert held["status"] != "EXIT" and "dte" not in held["reasons"]
+    naked = status(-1, 0.3)                            # sold for 0.3x today's price: loss is over 2x the credit
+    assert naked["status"] == "EXIT" and "pnl_pct <= -200" in naked["reasons"]
+    assert "loss_pct_of_max" not in naked["reasons"]   # a naked call has no maximum loss
+
+    assert max_loss_of([{**leg, "qty": 1, "price": 0.8}]) == pytest.approx(80)          # an $80 option
+    spread = [{"type": "put", "strike": 100, "expiration": "2026-01-16", "qty": -1, "price": 0.45},
+              {"type": "put", "strike": 99, "expiration": "2026-01-16", "qty": 1, "price": 0.25}]
+    assert max_loss_of(spread) == pytest.approx(80)                                      # $1 wide, 0.20 credit
+    assert np.isnan(max_loss_of([{**leg, "qty": -1, "price": 3}]))
+    assert np.isnan(max_loss_of(spread[:1] + [{**spread[1], "expiration": "2026-02-20"}]))
 
 
 def test_stock_only_scan_reports_study_values(feed):

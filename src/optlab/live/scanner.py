@@ -30,12 +30,16 @@ from .indicators import bar_functions
 CHAIN_NAMES = {"atm_iv", "put_call_volume", "put_call_oi", "skew", "option_volume"}
 HIT_COLUMNS = ["scan", "symbol", "price", "contract", "expiration", "dte", "strike", "type", "bid", "ask", "mid",
                "iv", "delta", "open_interest", "volume", "spread_pct", "otm_pct", "annualized_yield", "prob_otm",
-               "details"]
+               "structure", "other_strike", "net", "capital", "max_loss", "return_on_risk", "contracts", "details"]
+# Added to each contract by size_contracts when a scan says which side it trades (options.side).
+SIZE_COLUMNS = ["structure", "other_strike", "net", "capital", "max_loss", "return_on_risk", "contracts"]
 POSITION_COLUMNS = ["position", "symbol", "status", "reasons", "price", "pnl", "pnl_pct", "value", "dte",
                     "short_strike_otm_pct", "position_delta", "theta_day", "days_to_earnings", "details"]
 NO_EARNINGS = 9999  # days_to_earnings for ETFs/indices and unknown dates, so "> 45"-style filters pass
-DEFAULT_EXIT = ["pnl_pct >= 50", "pnl_pct <= -200", "dte <= 21"]
-DEFAULT_WATCH = ["short_strike_otm_pct < 3", "earnings_before_expiry"]
+# Defaults that fit a bought option or narrow spread of under $100 as well as sold premium:
+# `entry` is + for a debit paid and - for a credit received, so each rule applies to the right kind of trade.
+DEFAULT_EXIT = ["pnl_pct >= 50", "loss_pct_of_max >= 50", "entry < 0 and pnl_pct <= -200", "entry < 0 and dte <= 21"]
+DEFAULT_WATCH = ["short_strike_otm_pct < 3", "earnings_before_expiry", "entry > 0 and dte <= 7"]
 
 
 # ------------------------------------------------------------------ config
@@ -58,9 +62,18 @@ def load_scan_config(path: str | Path) -> dict:
     return cfg
 
 
+def trade_size(cfg: dict) -> float | None:
+    """The most one trade may cost or risk, in dollars (`trade_size:` in scans.yaml); None = no limit."""
+    v = cfg.get("trade_size")
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0 else None
+
+
 def validate(cfg: dict) -> list[str]:
     """Catch typos at startup instead of at 9:30."""
     out = []
+    ts = cfg.get("trade_size")
+    if ts is not None and trade_size(cfg) is None:
+        out.append("trade_size: must be a dollar amount above 0, e.g. 250 (leave it out for no limit)")
     for i, scan in enumerate(cfg["scans"]):
         label = scan.get("name") or f"scan #{i + 1}"
         try:
@@ -76,6 +89,14 @@ def validate(cfg: dict) -> list[str]:
         opt = scan.get("options")
         if opt and str(opt.get("type", "both")) not in ("put", "call", "both"):
             out.append(f"{label}: options.type must be put, call or both")
+        if opt:
+            side, width = opt.get("side"), opt.get("max_width")
+            if side is not None and side not in ("buy", "sell"):
+                out.append(f"{label}: options.side must be buy or sell")
+            elif side is None and (ts is not None or width is not None):
+                out.append(f"{label}: options.side is needed (buy or sell) so the scan knows what one trade costs")
+            if width is not None and not (isinstance(width, (int, float)) and not isinstance(width, bool) and width > 0):
+                out.append(f"{label}: options.max_width must be a number of dollars above 0, e.g. 5")
     defaults = cfg.get("position_defaults") or {}
     for p in cfg["positions"]:
         label = p.get("name") or p.get("symbol", "?")
@@ -163,7 +184,75 @@ def _stock_eval(bars: pd.DataFrame, timeframe: str, extras: dict) -> Evaluator:
     return Evaluator({**names, **extras}, funcs)
 
 
-def filter_contracts(chain: pd.DataFrame, opt: dict, stock_ev: Evaluator, scalars: dict) -> pd.DataFrame:
+def _spread_partner(row, legs: pd.DataFrame, side: str, max_width: float, limit: float | None):
+    """The other leg of a vertical spread on `row`: same expiration and type, further out of the money, at most
+    `max_width` dollars away. The widest one whose cost fits `limit` wins. Natural prices: buy at the ask, sell
+    at the bid. Returns (other strike, net per share, capital for one spread) or None."""
+    k = float(row["strike"])
+    d = (legs["strike"] - k) if row["type"] == "call" else (k - legs["strike"])
+    for _, o in legs[(d > 0) & (d <= max_width + 1e-9)].assign(width=d).sort_values("width", ascending=False).iterrows():
+        if side == "sell":
+            net = float(o["ask"]) - float(row["bid"])            # negative: a credit
+            ok = row["bid"] > 0 and o["ask"] > 0 and net < 0
+            capital = (o["width"] + net) * 100                   # the most it can lose
+        else:
+            net = float(row["ask"]) - float(o["bid"])            # positive: a debit
+            ok = row["ask"] > 0 and o["bid"] > 0 and 0 < net < o["width"]
+            capital = net * 100
+        if ok and capital > 0 and (limit is None or capital <= limit + 1e-9):
+            return float(o["strike"]), net, float(capital), float(o["width"])
+    return None
+
+
+def size_contracts(df: pd.DataFrame, chain: pd.DataFrame, opt: dict, limit: float | None) -> pd.DataFrame:
+    """What one trade of each contract costs, for the scan's `side`, and whether it fits the trade size.
+
+        buy                 long option            capital = ask x 100 (also the most it can lose)
+        buy  + max_width    debit spread           capital = net debit x 100
+        sell                cash-secured put       capital = (strike - bid) x 100
+                            covered call           capital = (share price - bid) x 100
+        sell + max_width    credit spread          capital = (width - net credit) x 100, the most it can lose
+
+    Adds SIZE_COLUMNS (`net` is per share: + paid, - received; `contracts` is how many fit the trade size) and,
+    when `limit` is set, drops every row whose capital is above it or can't be priced."""
+    side, width = opt.get("side"), opt.get("max_width")
+    df = df.copy()
+    for c in SIZE_COLUMNS:
+        df[c] = None if c == "structure" else np.nan
+    if side is None or df.empty:
+        return df
+    legs = {k: g for k, g in chain.groupby(["expiration", "type"])} if width else {}
+    rows = []
+    for r in df.to_dict("records"):
+        k, typ, name = float(r["strike"]), r["type"], None
+        net = capital = other = ror = np.nan
+        if width:
+            hit = _spread_partner(r, legs[(r["expiration"], typ)], side, float(width), limit)
+            if not hit:
+                continue                                         # no partner leg with a usable quote
+            if hit:
+                other, net, capital, w = hit
+                name = f"{side.capitalize()} {k:g}/{other:g} {typ} spread"
+                ror = 100 * (-net * 100 / capital if side == "sell" else (w - net) / net)
+        elif side == "buy":
+            if r["ask"] > 0:
+                net, capital, name = float(r["ask"]), float(r["ask"]) * 100, f"Buy {k:g} {typ}"
+        elif r["bid"] > 0:
+            base = k if typ == "put" else float(r["underlying_price"])
+            net, capital = -float(r["bid"]), (base - float(r["bid"])) * 100
+            name = f"Sell {k:g} {typ} ({'cash-secured' if typ == 'put' else 'covered, buying 100 shares'})"
+            ror = 100 * float(r["bid"]) * 100 / capital if capital > 0 else np.nan
+        fits = capital == capital and capital > 0 and (limit is None or capital <= limit + 1e-9)
+        if limit is not None and not fits:
+            continue
+        rows.append({**r, "structure": name, "other_strike": other, "net": net, "capital": capital,
+                     "max_loss": capital, "return_on_risk": ror,
+                     "contracts": float(int(limit // capital)) if limit is not None and fits else np.nan})
+    return pd.DataFrame(rows, columns=df.columns) if rows else df.iloc[:0]
+
+
+def filter_contracts(chain: pd.DataFrame, opt: dict, stock_ev: Evaluator, scalars: dict,
+                     limit: float | None = None) -> pd.DataFrame:
     df = chain
     typ = str(opt.get("type", "both"))
     if typ != "both":
@@ -182,9 +271,10 @@ def filter_contracts(chain: pd.DataFrame, opt: dict, stock_ev: Evaluator, scalar
         df = df[df["spread_pct"] <= opt["max_spread_pct"]]
     if "min_bid" in opt:
         df = df[df["bid"] >= opt["min_bid"]]
+    df = size_contracts(df, chain, opt, limit)
     if df.empty:
         return df
-    names = {c: df[c].to_numpy() for c in df.columns}
+    names = {c: df[c].to_numpy() for c in df.columns if c != "structure"}
     names["oi"] = names["open_interest"]
     ev = Evaluator({**names, **scalars}, {}, series_eval=stock_ev)
     mask = np.ones(len(df), dtype=bool)
@@ -192,7 +282,7 @@ def filter_contracts(chain: pd.DataFrame, opt: dict, stock_ev: Evaluator, scalar
         r = ev(str(cond))
         mask &= np.broadcast_to(np.nan_to_num(np.asarray(r, dtype=float), nan=0.0).astype(bool), mask.shape)
     df = df[mask]
-    sort = str(opt.get("sort", "annualized_yield"))
+    sort = str(opt.get("sort", "return_on_risk" if opt.get("max_width") else "annualized_yield"))
     desc = not sort.endswith(" asc")
     sort = sort.replace(" asc", "").replace(" desc", "").strip()
     if sort in df.columns:
@@ -213,6 +303,7 @@ class PassResult:
 def run_scans(cfg: dict, feed, today: date | None = None) -> tuple[pd.DataFrame, list[str], int]:
     today = today or date.today()
     rows, errors, all_syms = [], [], set()
+    limit = trade_size(cfg)
     for scan in cfg["scans"]:
         name = scan.get("name", "scan")
         tf = str(scan.get("timeframe", "1d"))
@@ -258,7 +349,7 @@ def run_scans(cfg: dict, feed, today: date | None = None) -> tuple[pd.DataFrame,
                 continue
             scalars = chain_stats(ch)
             try:
-                picks = filter_contracts(ch, opt, ev, scalars)
+                picks = filter_contracts(ch, opt, ev, scalars, limit)
             except ExprError as exc:
                 errors.append(f"{name}: {exc}")
                 break
@@ -271,6 +362,31 @@ def run_scans(cfg: dict, feed, today: date | None = None) -> tuple[pd.DataFrame,
 
 
 # --------------------------------------------------------------- positions
+def max_loss_of(legs: list[dict]) -> float:
+    """The most a position can lose at expiration, in dollars, from its entry prices; NaN when the loss isn't
+    bounded (a naked short call, short stock) or the option legs expire on different dates."""
+    opts = [lg for lg in legs if lg["type"] != "stock"]
+    if len({str(lg["expiration"]) for lg in opts}) > 1:
+        return np.nan
+    shares = sum(float(lg["qty"]) for lg in legs if lg["type"] == "stock")
+    if shares + 100 * sum(float(lg["qty"]) for lg in opts if lg["type"] == "call") < 0:
+        return np.nan                                            # loses without limit as the price rises
+
+    def payoff(s: float) -> float:
+        total = 0.0
+        for lg in legs:
+            qty, paid = float(lg["qty"]), float(lg["price"])
+            if lg["type"] == "stock":
+                total += qty * (s - paid)
+            else:
+                k = float(lg["strike"])
+                total += qty * 100 * ((max(s - k, 0) if lg["type"] == "call" else max(k - s, 0)) - paid)
+        return total
+
+    worst = min(payoff(s) for s in [0.0] + [float(lg["strike"]) for lg in opts])
+    return -worst if worst < 0 else np.nan
+
+
 def check_position(pos: dict, chain: pd.DataFrame | None, bars: pd.DataFrame, timeframe: str,
                    defaults: dict, earnings_date: date | None, today: date) -> dict:
     name = pos.get("name") or pos["symbol"]
@@ -317,8 +433,10 @@ def check_position(pos: dict, chain: pd.DataFrame | None, bars: pd.DataFrame, ti
     pnl = value - entry
     dte = min(dtes) if dtes else NO_EARNINGS
     dte_earn = (earnings_date - today).days if earnings_date else NO_EARNINGS
+    worst = max_loss_of(pos["legs"])
     vals = {
         "pnl": pnl, "pnl_pct": 100 * pnl / abs(entry) if entry else 0.0, "value": value, "entry": entry,
+        "max_loss": worst, "loss_pct_of_max": 100 * max(0.0, -pnl) / worst if worst == worst else np.nan,
         "dte": dte, "short_strike_otm_pct": min(short_otm) if short_otm else np.nan,
         "position_delta": delta, "theta_day": theta, "days_to_earnings": dte_earn,
         "earnings_before_expiry": bool(earnings_date) and 0 <= dte_earn <= dte,

@@ -18,8 +18,10 @@ from ..portfolio.models import UserPreference
 KEY = "monitor_settings"
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 HHMM = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
-DEFAULT_EXIT = ["pnl_pct >= 50", "pnl_pct <= -200", "dte <= 21"]
-DEFAULT_WATCH = ["short_strike_otm_pct < 3", "earnings_before_expiry"]
+# `entry` is + for a debit paid and - for a credit received, so each rule applies to the right kind of trade
+# whatever its size: a bought option can't lose more than 100% of its cost, so a -200% stop never fires on one.
+DEFAULT_EXIT = ["pnl_pct >= 50", "loss_pct_of_max >= 50", "entry < 0 and pnl_pct <= -200", "entry < 0 and dte <= 21"]
+DEFAULT_WATCH = ["short_strike_otm_pct < 3", "earnings_before_expiry", "entry > 0 and dte <= 7"]
 Severity = Literal["info", "warning", "critical"]
 Timeframe = Literal["1m", "5m", "15m", "30m", "1h", "1d", "1wk"]
 

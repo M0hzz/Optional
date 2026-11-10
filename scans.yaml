@@ -5,6 +5,11 @@
 # A desktop notification fires when a symbol newly passes a scan or a position's
 # status changes (HOLD -> WATCH -> EXIT). Nothing is ever traded.
 
+# The most one trade may cost or risk, in dollars. Option scans then list only what fits:
+# one contract (or one spread) costing this much or less, and how many fit. Anything from
+# about 80 up works. Delete the line for no limit.
+trade_size: 250
+
 schedule:
   start: "09:30"             # when checks begin (quote the times)
   end: "16:00"               # when they stop for the day
@@ -51,8 +56,18 @@ watchlists:
 #   strike dte type bid ask mid last volume open_interest (oi) iv delta abs_delta gamma
 #   theta vega spread_pct otm_pct moneyness intrinsic extrinsic breakeven
 #   yield_pct annualized_yield prob_otm   (+ every study/name above, at its latest value)
+#
+# What one trade costs (options.side says what the scan does with the contract):
+#   side: buy                 buy the option                capital = ask x 100
+#   side: buy  + max_width    debit spread: also sell one further out of the money
+#   side: sell                cash-secured put / covered call: capital = the shares, 100 x the price
+#   side: sell + max_width    credit spread: also buy one further out of the money;
+#                             capital = the most it can lose = (width - credit) x 100
+#   max_width is in dollars between the two strikes. The widest spread that fits trade_size is used.
+# This adds the fields: capital max_loss net (per share: + paid, - received) return_on_risk
+#   contracts (how many fit trade_size) other_strike. Prices are natural: buy at ask, sell at bid.
 scans:
-  - name: Put-selling candidates
+  - name: Put credit spreads
     watchlist: core
     timeframe: 1d
     stock:
@@ -61,15 +76,34 @@ scans:
       - days_to_earnings > 45         # no earnings before a ~35-45 day expiry
     options:
       type: put                       # put | call | both
+      side: sell                      # buy | sell
+      max_width: 5                    # spread: buy a put up to $5 below the one sold
       dte: [25, 50]                   # days to expiration, min-max
-      delta: [0.15, 0.30]             # absolute delta, min-max
+      delta: [0.15, 0.30]             # absolute delta of the put sold, min-max
       min_open_interest: 100
       max_spread_pct: 15              # (ask - bid) / mid, %
       conditions:
-        - bid >= 0.50
         - iv > hv(20)                 # implied vol above realized
-      sort: annualized_yield          # best first; add " asc" for smallest first
+        - return_on_risk >= 15        # credit is at least 15% of the most it can lose
+      sort: return_on_risk            # best first; add " asc" for smallest first
       top: 3                          # contracts listed per symbol
+
+  - name: Calls to buy on a pullback
+    watchlist: core
+    timeframe: 1d
+    stock:
+      - close > sma(50)               # uptrend
+      - rsi(14) < 45                  # pulled back
+      - days_to_earnings > 30
+    options:
+      type: call
+      side: buy
+      dte: [30, 60]
+      delta: [0.30, 0.50]
+      min_open_interest: 100
+      max_spread_pct: 15
+      sort: capital asc               # cheapest first
+      top: 3
 
   - name: Implied vol rich vs realized
     watchlist: [core, megacaps]
@@ -97,16 +131,21 @@ scans:
 # Open trades to check every pass. Status: EXIT if any exit_when is true, else
 # WATCH if any watch_when is true, else HOLD. Leave exit_when / watch_when out
 # to use position_defaults.
-# Position fields: pnl pnl_pct value entry dte short_strike_otm_pct position_delta
-#   theta_day days_to_earnings earnings_before_expiry  (+ every study/chain name above)
+# Position fields: pnl pnl_pct value entry (+ debit paid, - credit received) max_loss
+#   loss_pct_of_max dte short_strike_otm_pct position_delta theta_day days_to_earnings
+#   earnings_before_expiry  (+ every study/chain name above)
+# The defaults work at any size, from a single $80 option up: percentages, not dollar
+# amounts, and `entry` tells bought trades (entry > 0) from sold ones (entry < 0).
 position_defaults:
   exit_when:
-    - pnl_pct >= 50                   # took half the credit
-    - pnl_pct <= -200                 # loss is 2x the credit
-    - dte <= 21                       # gamma risk rises near expiry
+    - pnl_pct >= 50                   # up half of what you paid, or kept half the credit
+    - loss_pct_of_max >= 50           # lost half of the most this trade can lose
+    - entry < 0 and pnl_pct <= -200   # sold premium: loss is 2x the credit
+    - entry < 0 and dte <= 21         # sold premium: gamma risk rises near expiry
   watch_when:
     - short_strike_otm_pct < 3        # price within 3% of a short strike
     - earnings_before_expiry
+    - entry > 0 and dte <= 7          # bought options: time decay speeds up
     - rsi(14) < 30
 
 positions: []
