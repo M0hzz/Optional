@@ -128,6 +128,35 @@ def test_routes(client):
     assert client.get("/static/sim.js").status_code == 200 and client.get("/static/../market.py").status_code == 404
 
 
+def test_quotes(client):
+    class R:
+        status_code = 200
+
+        def json(self):
+            day = 86400
+            t = 1794407400                                    # 2026-11-11 14:30 UTC
+            return {"chart": {"result": [{"meta": {"regularMarketPrice": 176.94, "regularMarketTime": t + 3600,
+                                                   "regularMarketVolume": 1000, "shortName": "NVIDIA Corporation"},
+                                          "timestamp": [t - 2 * day, t - day, t],
+                                          "indicators": {"quote": [{"close": [178.67, 168.89, 176.94]}]}}]}}
+    q = market.fetch_quote("nvda", get=lambda url: R())
+    assert q["symbol"] == "NVDA" and q["price"] == 176.94 and q["prev_close"] == 168.89
+    assert q["change_pct"] == pytest.approx(4.77, abs=0.01) and q["day"] == "2026-11-11" and q["name"].startswith("NVIDIA")
+    seen = []
+    market.fetch_quote("nasdaq", get=lambda url: (seen.append(url), R())[1])
+    assert "%5EIXIC" in seen[0] or "^IXIC" in seen[0]
+
+    def fake(sym):
+        if sym == "BAD":
+            raise market.MarketError("No quote for BAD. Check the ticker.")
+        return {"symbol": sym, "price": 1.0, "change_pct": 0.5}
+    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s: bars(), fetch_quote=fake)
+    c = TestClient(app, base_url="http://127.0.0.1:8600")
+    out = c.get("/api/quotes?symbols=spy,BAD,brk-b,,").json()["quotes"]
+    assert out["SPY"]["price"] == 1.0 and out["BRK.B"]["stale"] is False and "Check the ticker" in out["BAD"]["error"]
+    assert c.get("/api/quotes").json() == {"quotes": {}}
+
+
 def test_only_known_hosts_and_no_stack_traces(client):
     assert client.get("/api/chain/IWM", headers={"Host": "evil.example"}).status_code == 400
     assert client.get("/api/chain/IWM", headers={"Host": "box.tail1234.ts.net"}).status_code == 200

@@ -2,6 +2,7 @@ import * as S from "./sim.js";
 import * as I from "./ind.js";
 import * as LV from "./levels.js";
 import { PriceChart } from "./chart.js";
+import { createHome } from "./home.js";
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15000;
@@ -16,6 +17,8 @@ let tabs = [];
 let st = null;                 // the tab on screen
 let playing = null;            // the animation frame of PLAY (one at a time)
 let pollTimer = null;
+let view = "tab";              // "home" (the overview of everything) or "tab" (one simulation)
+let home = null;
 let chart = null;              // the interactive chart (one canvas, redrawn for whichever tab is on screen)
 
 function newTab(from = {}) {
@@ -34,7 +37,7 @@ function newTab(from = {}) {
 function saveTabs() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      active: tabs.indexOf(st), tabs: tabs.map((t) => Object.fromEntries(KEEP.map((k) => [k, t[k]]))),
+      active: view === "home" ? -1 : tabs.indexOf(st), tabs: tabs.map((t) => Object.fromEntries(KEEP.map((k) => [k, t[k]]))),
     }));
   } catch { /* a private window: tabs just aren't remembered */ }
 }
@@ -62,10 +65,57 @@ function closeTab(i) {
 
 function switchTo(i) {
   stopPlay();
+  view = "tab";
   st = tabs[i];
   saveTabs();
   renderTabs();
   renderTab();
+  home?.render();
+}
+
+function showHome() {
+  stopPlay();
+  view = "home";
+  saveTabs();
+  say("");
+  renderTabs();
+  renderTab();
+  home.render();
+}
+
+// Open the tab for a symbol (the monitor and the dock call this), making one if there is none.
+function openSymbol(sym) {
+  const i = tabs.findIndex((t) => t.sym === sym);
+  if (i >= 0) return switchTo(i);
+  let j = tabs.findIndex((t) => !t.sym);
+  if (j < 0) {
+    if (tabs.length >= MAX_TABS) { say(`Up to ${MAX_TABS} tabs. Close one first.`, true); return; }
+    tabs.push(newTab());
+    j = tabs.length - 1;
+  }
+  switchTo(j);
+  loadSymbol(st, sym, false);
+}
+
+// What the home page shows for each tab that holds a contract.
+function positions() {
+  return tabs.map((t, index) => ({ t, index })).filter(({ t }) => t.pick && t.contract).map(({ t, index }) => {
+    const c = t.contract, p = t.pick, L = t.lever, row = t.row;
+    const simPrice = L.touched && L.price != null ? L.price : t.spot;
+    const mark = row ? row.mid ?? row.ask : p.entry;
+    const closes = histCloses(t);
+    const sc = S.SCENARIOS.find((x) => x.id === t.scenario);
+    const moved = L.touched && (L.day > 0 || L.iv !== 0 || Math.abs(simPrice - t.spot) > 1e-9);
+    return {
+      index, name: `${p.symbol} ${p.strike % 1 ? p.strike.toFixed(2) : p.strike} ${p.isCall ? "CALL" : "PUT"}`, isCall: p.isCall,
+      symbol: p.symbol, expires: `exp ${dateLabel(p.expiration)} (${c.dte}d)`, qty: p.qty, entry: p.entry, cost: p.entry * 100 * p.qty,
+      livePnl: t.livePnl, livePct: 100 * (mark - p.entry) / p.entry,
+      simPnl: S.pnlAt(c, simPrice, L.day, 1 + L.iv / 100),
+      simNote: !moved ? "levers at now" : `${sc ? sc.name.toLowerCase() + " · " : ""}${money(simPrice)} at +${L.day.toFixed(L.day % 1 ? 1 : 0)}d`,
+      spot: t.spot, changePct: t.summary?.change_pct ?? null, strike: c.strike, breakeven: S.breakeven(c),
+      read: closes.length >= 30 ? I.readout(closes) : null, lv: t.lv,
+    };
+  });
 }
 
 const shortName = (t) => {
@@ -77,12 +127,14 @@ const shortName = (t) => {
 
 function renderTabs() {
   const box = $("tabs");
+  $("tab-home").classList.toggle("on", view === "home");
+  $("tab-home").setAttribute("aria-selected", view === "home");
   box.replaceChildren(...tabs.map((t, i) => {
     const el = document.createElement("div");
-    el.className = `tab${t === st ? " on" : ""}${t.pick ? (t.pick.isCall ? " call" : " put") : ""}`;
+    el.className = `tab${t === st && view === "tab" ? " on" : ""}${t.pick ? (t.pick.isCall ? " call" : " put") : ""}`;
     el.innerHTML = `<button class="tab-main" role="tab"><b></b><small></small></button><button class="tab-x" aria-label="Close tab">×</button>`;
     const [main, x] = el.children;
-    main.setAttribute("aria-selected", t === st);
+    main.setAttribute("aria-selected", t === st && view === "tab");
     main.firstChild.textContent = shortName(t);
     const sub = main.lastChild;
     if (t.livePnl != null) { sub.textContent = signed(t.livePnl, 0); tone(sub, t.livePnl); }
@@ -160,6 +212,7 @@ async function loadSymbol(t, sym, keepPick = false) {
   saveTabs();
   renderTabs();
   if (t === st) renderTab();
+  home?.render();
 }
 
 async function loadExp(t, date, render = true) {
@@ -195,11 +248,12 @@ function schedulePoll() {
         } catch { if (t.summary) t.summary = { ...t.summary, stale: true }; }
       }));
       renderTabs();
-      if (st.sym) {
+      if (view === "tab" && st.sym) {
         showLive(st.summary);
         if (!$("pick").hidden) renderLadder();
         onQuote();
       }
+      await home.refresh();
     }
     schedulePoll();
   }, POLL_MS);
@@ -231,6 +285,12 @@ function clearPick(t) {
 
 // ---------------------------------------------------------------- rendering the tab on screen
 function renderTab() {
+  $("home").hidden = view !== "home";
+  if (view === "home") {
+    for (const id of ["empty", "pick", "hud", "deck", "live"]) $(id).hidden = true;
+    $("sym").value = "";
+    return;
+  }
   $("sym").value = st.sym || "";
   if (st.summary) showLive(st.summary); else $("live").hidden = true;
   $("empty").hidden = !!st.sym || st.loading;
@@ -697,9 +757,18 @@ function wire() {
   $("load").addEventListener("submit", (e) => {
     e.preventDefault();
     const v = $("sym").value.trim();
-    if (v) { stopPlay(); loadSymbol(st, v, false); }
+    if (!v) return;
+    stopPlay();
+    if (view === "home") {                       // from the home page a ticker opens in its own tab
+      let j = tabs.findIndex((t) => !t.sym);
+      if (j < 0 && tabs.length < MAX_TABS) { tabs.push(newTab()); j = tabs.length - 1; }
+      if (j < 0) return say(`Up to ${MAX_TABS} tabs. Close one first.`, true);
+      switchTo(j);
+    }
+    loadSymbol(st, v, false);
   });
   $("tab-add").addEventListener("click", () => addTab());
+  $("tab-home").addEventListener("click", showHome);
   $("copy").addEventListener("click", () => addTab(st));
   for (const [id, side] of [["side-call", "calls"], ["side-put", "puts"]]) {
     $(id).addEventListener("click", () => {
@@ -831,13 +900,21 @@ function restore() {
   });
   if (!tabs.length) tabs.push(newTab());
   st = tabs[Math.min(Math.max(saved?.active ?? 0, 0), tabs.length - 1)];
+  view = saved ? (saved.active === -1 ? "home" : "tab") : "home";      // a first visit starts on the home page
   for (const t of tabs) if (t.sym) t.loading = true;
   renderTabs();
   renderTab();
   for (const t of tabs) if (t.sym) loadSymbol(t, t.sym, true);
-  if (!st.sym) $("sym").focus();
+  if (view === "tab" && !st.sym) $("sym").focus();
 }
 
 wire();
+home = createHome({
+  $, api, money, signed, pct, tone, positions, openTab: switchTo, openSymbol,
+  currentSymbol: () => (view === "tab" ? st.sym : null),
+  currentSide: () => ({ bars: st.bars, changePct: st.summary?.change_pct ?? null,
+                        verdict: st.bars.length >= 30 ? I.readout(histCloses(st)).verdict.value : undefined }),
+});
 restore();
+home.refresh();
 schedulePoll();

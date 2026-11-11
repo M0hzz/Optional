@@ -1,8 +1,9 @@
-"""The whole server: three read-only data routes and the page. No database, no accounts, no orders.
+"""The whole server: four read-only data routes and the page. No database, no accounts, no orders.
 
     GET /api/chain/{symbol}          price, expirations (date, days left, how many contracts)
     GET /api/chain/{symbol}/{date}   the calls and puts of one expiration
     GET /api/bars/{symbol}           daily bars and the levels the simulator uses
+    GET /api/quotes?symbols=A,B      light quotes for the home page monitor (no option chain needed)
 
 It answers only to localhost and your Tailscale name (OPTLAB_ALLOWED_HOSTS to change), so a web page you
 happen to visit can't reach it through your browser.
@@ -29,12 +30,13 @@ def host_ok(host: str, allowed: list[str]) -> bool:
     return any(h == a or (a.startswith("*.") and h.endswith(a[1:]) and len(h) > len(a) - 1) for a in allowed)
 
 
-def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, chain_ttl: float = 15,
-               bars_ttl: float = 600, allowed_hosts: list[str] | None = None) -> FastAPI:
+def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetch_quote=market.fetch_quote,
+               chain_ttl: float = 15, bars_ttl: float = 600, quote_ttl: float = 15,
+               allowed_hosts: list[str] | None = None) -> FastAPI:
     allowed = allowed_hosts or [h.strip().lower() for h in os.environ.get(
         "OPTLAB_ALLOWED_HOSTS", "localhost,127.0.0.1,::1,*.ts.net").split(",") if h.strip()]
     app = FastAPI(title="optlab sim", docs_url=None, redoc_url=None, openapi_url=None)
-    chains, bars = market.Cache(chain_ttl), market.Cache(bars_ttl)
+    chains, bars, quotes = market.Cache(chain_ttl), market.Cache(bars_ttl), market.Cache(quote_ttl)
 
     @app.middleware("http")
     async def guard(request, call_next):
@@ -78,6 +80,19 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, chai
         sym = market.clean_symbol(symbol)
         b, _ = bars.get(sym, lambda: fetch_bars(sym))
         return {"symbol": sym, "bars": b, "levels": market.levels(b)}
+
+    @app.get("/api/quotes")
+    def quotes_route(symbols: str = ""):
+        """Light quotes for the monitor: ?symbols=SPY,QQQ,NVDA (up to 30). One bad ticker doesn't fail the rest."""
+        out = {}
+        for raw in [x for x in symbols.split(",") if x.strip()][:30]:
+            try:
+                sym = market.clean_symbol(raw)
+                q, stale = quotes.get(sym, lambda sym=sym: fetch_quote(sym))
+                out[sym] = {**q, "stale": stale}
+            except market.MarketError as exc:
+                out[raw.strip().upper()[:12]] = {"error": str(exc)}
+        return {"quotes": out}
 
     @app.get("/api/{rest:path}")
     def no_route(rest: str):

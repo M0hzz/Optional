@@ -13,7 +13,9 @@ from datetime import date, datetime, timezone
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5y&interval=1d"
 OCC_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
-YAHOO_INDEX = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT", "VIX": "^VIX", "XSP": "^XSP", "DJX": "^DJI"}
+YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5d&interval=1d"
+YAHOO_INDEX = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT", "VIX": "^VIX", "XSP": "^XSP", "DJX": "^DJI",
+               "COMP": "^IXIC", "IXIC": "^IXIC", "NASDAQ": "^IXIC", "DJI": "^DJI", "DOW": "^DJI"}
 _GATE = threading.BoundedSemaphore(4)            # CBOE answers 429 to bursts
 
 
@@ -123,6 +125,29 @@ def fetch_bars(symbol: str, get=_get) -> list[dict]:
     if len(out) < 25:
         raise MarketError(f"Not enough price history for {sym}.")
     return out
+
+
+def fetch_quote(symbol: str, get=_get) -> dict:
+    """A light quote for the monitor (no option chain): price, change from the previous close, today's
+    volume and the name. Stocks, ETFs and indexes (SPX, NDX, COMP or NASDAQ, DJI, VIX, RUT)."""
+    sym = clean_symbol(symbol)
+    r = get(YAHOO_QUOTE_URL.format(YAHOO_INDEX.get(sym, sym.replace(".", "-"))))
+    if r.status_code != 200:
+        raise MarketError(f"No quote for {sym}. Check the ticker.")
+    try:
+        res = r.json()["chart"]["result"][0]
+        meta, closes = res["meta"], res["indicators"]["quote"][0]["close"]
+        days = [datetime.fromtimestamp(ts, timezone.utc).date() for ts in res["timestamp"]]
+        price = float(meta["regularMarketPrice"])
+        today = datetime.fromtimestamp(meta["regularMarketTime"], timezone.utc).date()
+        done = [c for d, c in zip(days, closes) if c is not None and d < today]   # closes of completed days
+        prev = float(done[-1]) if done else None
+    except (KeyError, IndexError, TypeError, ValueError):
+        raise MarketError(f"No quote for {sym} right now.") from None
+    return {"symbol": sym, "name": meta.get("shortName") or meta.get("longName") or sym, "price": round(price, 4),
+            "prev_close": round(prev, 4) if prev else None,
+            "change_pct": round(100 * (price / prev - 1), 2) if prev else None,
+            "volume": int(meta.get("regularMarketVolume") or 0), "day": today.isoformat()}
 
 
 def levels(bars: list[dict], price: float | None = None) -> dict:

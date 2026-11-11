@@ -8,6 +8,8 @@ Pick a call or put straight from the live option chain, then pull levers and pla
 4. **Read the chart:** candles with volume and RSI or MACD underneath. Scroll or pinch to zoom, drag to pan, hover for a day's values. Pick a RANGE (1M to 5Y): it sets how far back the chart shows and how far back support and resistance are found. Toggle EMA 9/21, SMA 50/200 and Bollinger lines.
 5. **Hit a what-if:** resistance breaks, rejected at resistance, support breaks, bounce off support, volume spike up or down, chop, IV crush. Press PLAY to watch one roll of it, or REROLL for another. The band shows where 8 of 10 rolls land, and the odds show how 300 rolls of that scenario end.
 
+**Home page:** the HOME tab shows every position at once (live P&L, and the simulated P&L from whatever you set on its tab), a market monitor for symbols you watch whether or not you hold them (trend health, RSI, nearest support and resistance), and chains: an anchor symbol with the symbols you link to it, compared by how tightly they move together, who is leading, and where they diverge. On every tab, a dock pinned to the bottom shows the watched symbols; ones linked to the tab's ticker come first.
+
 Your pick is remembered in the browser, and its live P&L refreshes every 15 seconds. Nothing places a trade.
 
 ## Run it
