@@ -86,5 +86,9 @@ test("intraday: steps per day follow the chart's bars, and a short horizon moves
   const call = S.makeContract({ occ: "C", strike: 101, bid: 0.9, ask: 1.0, mid: 0.95, iv: 0.2 }, true, 5, 100);
   const mc = S.monteCarlo("surge_up", { ...ctx, days: 24 / 78, spd: 78 }, call, 200, 3);
   assert.equal(mc.lo.length, 25);
+  // two hours of a volume spike moves well under a third of what a full day does
+  assert.ok((twoHours.price.at(-1) - 100) / (p.price.at(-1) - 100) < 0.6);
+  const brk = (days) => S.simulatePath("breakout", { ...ctx, days, spd: 78 }).price.at(-1) - 104;
+  assert.ok(brk(24 / 78) > 0 && brk(24 / 78) < 0.6 * brk(1));
   assert.ok(mc.lo.at(-1) < twoHours.price.at(-1) && twoHours.price.at(-1) < mc.hi.at(-1));
 });

@@ -94,13 +94,15 @@ export function waypoints(id, ctx) {
   const R = ctx.resistance && ctx.resistance > S ? ctx.resistance : S + a;
   const F = ctx.support && ctx.support < S ? ctx.support : S - a;
   const run = (frac) => 0.5 * a * m * Math.sqrt(frac * H);          // follow-through grows with the square root of time
+  const k = Math.min(1, Math.sqrt(H));                              // under a day, the first jump shrinks the same way
+  const pop = 0.4 * a * m * k, burst = a * m * k;
   switch (id) {
-    case "breakout": return [[0, S], [0.25 * H, R], [0.4 * H, R + 0.4 * a * m], [H, R + 0.4 * a * m + run(0.6)]];
+    case "breakout": return [[0, S], [0.25 * H, R], [0.4 * H, R + pop], [H, R + pop + run(0.6)]];
     case "reject": return [[0, S], [0.3 * H, R - 0.05 * a], [H, R - 0.05 * a - run(0.7)]];
-    case "breakdown": return [[0, S], [0.25 * H, F], [0.4 * H, F - 0.4 * a * m], [H, F - 0.4 * a * m - run(0.6)]];
+    case "breakdown": return [[0, S], [0.25 * H, F], [0.4 * H, F - pop], [H, F - pop - run(0.6)]];
     case "bounce": return [[0, S], [0.3 * H, F + 0.05 * a], [H, F + 0.05 * a + run(0.7)]];
-    case "surge_up": return [[0, S], [0.15 * H, S + a * m], [H, S + a * m + run(0.85)]];
-    case "surge_down": return [[0, S], [0.15 * H, S - a * m], [H, S - a * m - run(0.85)]];
+    case "surge_up": return [[0, S], [0.15 * H, S + burst], [H, S + burst + run(0.85)]];
+    case "surge_down": return [[0, S], [0.15 * H, S - burst], [H, S - burst - run(0.85)]];
     default: return [[0, S], [H, S]];
   }
 }
