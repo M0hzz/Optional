@@ -11,7 +11,7 @@ import time
 from datetime import date, datetime, timezone
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
-YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=1y&interval=1d"
+YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5y&interval=1d"
 OCC_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 YAHOO_INDEX = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT", "VIX": "^VIX", "XSP": "^XSP", "DJX": "^DJI"}
 _GATE = threading.BoundedSemaphore(4)            # CBOE answers 429 to bursts
@@ -103,7 +103,7 @@ def parse_chain(payload: dict, today: date | None = None) -> dict:
 
 
 def fetch_bars(symbol: str, get=_get) -> list[dict]:
-    """About a year of daily bars from Yahoo: [{'d', 'o', 'h', 'l', 'c', 'v'}], oldest first."""
+    """About five years of daily bars from Yahoo: [{'d', 'o', 'h', 'l', 'c', 'v'}], oldest first."""
     sym = clean_symbol(symbol)
     r = get(YAHOO_URL.format(YAHOO_INDEX.get(sym, sym.replace(".", "-"))))
     if r.status_code != 200:

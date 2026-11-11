@@ -97,8 +97,18 @@
             <input type="range" id="l-vol" min="0.5" max="6" step="0.1" value="1">
           </label>
           <div class="levels">
-            <label>RESISTANCE <input type="number" id="lv-r" step="0.01" inputmode="decimal"></label>
-            <label>SUPPORT <input type="number" id="lv-s" step="0.01" inputmode="decimal"></label>
+            <div class="lv-col">
+              <span class="k res">RESISTANCE <small>the scenarios aim at the lit one</small></span>
+              <div class="lv-list" id="lv-r-list"></div>
+              <label class="lv-own">OR TYPE ONE <input type="number" id="lv-r" step="0.01" inputmode="decimal">
+                <button class="tg" id="lv-r-auto" hidden>AUTO</button></label>
+            </div>
+            <div class="lv-col">
+              <span class="k sup">SUPPORT</span>
+              <div class="lv-list" id="lv-s-list"></div>
+              <label class="lv-own">OR TYPE ONE <input type="number" id="lv-s" step="0.01" inputmode="decimal">
+                <button class="tg" id="lv-s-auto" hidden>AUTO</button></label>
+            </div>
           </div>
           <p class="hint" id="lever-hint"></p>
         </div>
@@ -118,18 +128,34 @@
           </div>
           <div class="sig-head"><span class="k" id="sig-sim-when">SIGNALS · NOW</span><span class="k">move a lever or play a scenario: they update</span></div>
           <div class="signals compact" id="sig-sim"></div>
-          <div class="toggles" id="overlays" role="group" aria-label="Chart lines">
-            <button class="tg" data-o="ema" aria-pressed="true">EMA 9/21</button>
-            <button class="tg" data-o="sma50" aria-pressed="true">SMA 50</button>
-            <button class="tg" data-o="sma200" aria-pressed="false">SMA 200</button>
-            <button class="tg" data-o="bb" aria-pressed="false">BOLLINGER</button>
+          <div class="chart-bar">
+            <div class="toggles" id="ranges" role="group" aria-label="Range: how far back the chart shows and the levels are found">
+              <span class="k">RANGE</span>
+              <button class="tg" data-r="1M">1M</button><button class="tg" data-r="3M">3M</button>
+              <button class="tg" data-r="6M">6M</button><button class="tg" data-r="1Y">1Y</button>
+              <button class="tg" data-r="2Y">2Y</button><button class="tg" data-r="5Y">5Y</button>
+            </div>
+            <div class="toggles" role="group" aria-label="Zoom">
+              <button class="tg" id="zoom-out" aria-label="Zoom out">−</button>
+              <button class="tg" id="zoom-in" aria-label="Zoom in">+</button>
+              <button class="tg" id="zoom-reset">RESET VIEW</button>
+            </div>
           </div>
-          <canvas id="future" class="chart" aria-label="Price path: history, the scenario, its range and the chosen indicator lines"></canvas>
-          <div class="toggles" id="osc-pick" role="group" aria-label="Lower chart">
-            <button class="tg" data-o="rsi" aria-pressed="true">RSI</button>
-            <button class="tg" data-o="macd" aria-pressed="false">MACD</button>
+          <div class="chart-bar">
+            <div class="toggles" id="overlays" role="group" aria-label="Chart lines">
+              <button class="tg ema" data-o="ema" aria-pressed="true">EMA 9/21</button>
+              <button class="tg sma50" data-o="sma50" aria-pressed="true">SMA 50</button>
+              <button class="tg sma200" data-o="sma200" aria-pressed="false">SMA 200</button>
+              <button class="tg bb" data-o="bb" aria-pressed="false">BOLLINGER</button>
+              <button class="tg" data-o="vol" aria-pressed="true">VOLUME</button>
+            </div>
+            <div class="toggles" id="osc-pick" role="group" aria-label="Lower pane">
+              <button class="tg" data-o="rsi" aria-pressed="true">RSI</button>
+              <button class="tg" data-o="macd" aria-pressed="false">MACD</button>
+            </div>
           </div>
-          <canvas id="osc" class="chart osc" aria-label="RSI or MACD over history and the simulation"></canvas>
+          <canvas id="future" class="chart big" aria-label="Interactive chart: candles, volume and RSI or MACD. Scroll or pinch to zoom, drag to pan, hover for values."></canvas>
+          <p class="hint chart-hint">Scroll or pinch to zoom · drag to pan · hover for a bar's values · double-click to reset. Hollow candles are simulated.</p>
           <canvas id="payoff" class="chart short" aria-label="Profit or loss at each stock price"></canvas>
         </div>
       </div>
@@ -164,7 +190,7 @@
         <li><b>Volatility</b> rises 3% for each 1% the price falls, eases 1.5% for each 1% it rises, and gets a small lift from a volume surge.</li>
         <li><b>Indicators</b> use the stock's last year of daily closes, then the simulated days, so they change as a scenario plays: EMA 9/21 (short trend), SMA 50 and 200 (medium and long trend), MACD 12/26/9 (momentum), RSI 14 (overbought above 70, oversold below 30), Bollinger 20/2 (range and squeezes). TREND counts the four trend signals: 3 or more pointing the same way is an uptrend or downtrend, otherwise mixed.</li>
         <li><b>Tabs</b> are separate simulations, saved in this browser. COPY TAB starts a new one from the current contract.</li>
-        <li><b>Resistance and support</b> start as the nearest 20-day or 60-day high and low. Type your own levels to change them.</li>
+        <li><b>Resistance and support</b> come from swing highs and lows over the RANGE you pick (1M to 5Y): swing points within half a day's average range of each other count as one level, and each is a touch. The nearest above and below drive the scenarios; tap another, or type your own.</li>
         <li>Prices are CBOE delayed quotes. You pay the ask; "worth" is the midpoint, so a new pick starts slightly negative.</li>
       </ul>
     </details>

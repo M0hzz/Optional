@@ -79,7 +79,14 @@ body {
 .toggles { display: flex; flex-wrap: wrap; gap: 6px; }
 .tg { font: 700 11px var(--mono); letter-spacing: 0.1em; color: var(--dim); background: #0a1030; border: 1px solid #2c3a7a; border-radius: 3px; padding: 4px 9px; cursor: pointer; }
 .tg[aria-pressed="true"] { color: var(--ink); border-color: var(--cyan); background: rgba(34, 230, 255, 0.12); }
-.chart.osc { height: 110px; }
+.chart.big { height: 560px; touch-action: pan-y; cursor: crosshair; }
+.chart-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.chart-bar .k { align-self: center; margin-right: 4px; }
+.chart-hint { margin: 0; font-size: 11px; }
+.tg.ema[aria-pressed="true"] { border-color: #ffe066; color: #ffe066; background: rgba(255, 224, 102, 0.1); }
+.tg.sma50[aria-pressed="true"] { border-color: #9db4ff; color: #9db4ff; background: rgba(157, 180, 255, 0.1); }
+.tg.sma200[aria-pressed="true"] { border-color: #c9cfdf; color: #c9cfdf; background: rgba(201, 207, 223, 0.1); }
+.tg.bb[aria-pressed="true"] { border-color: #7f8fb8; color: #b6c1e0; background: rgba(127, 143, 184, 0.12); }
 .events { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; font-size: 11px; color: var(--dim); }
 .ev { padding: 4px 8px; border: 1px solid; border-radius: 3px; letter-spacing: 0.06em; font-weight: 700; }
 .ev.up { color: var(--lime); border-color: rgba(125, 255, 90, 0.5); background: rgba(125, 255, 90, 0.06); }
@@ -169,10 +176,19 @@ input[type="range"]::-webkit-slider-runnable-track { height: 12px; background: #
 input[type="range"]::-moz-range-track { height: 8px; background: #050816; border: 2px solid var(--c); border-radius: 2px; }
 input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 34px; margin-top: -13px; background: var(--c); border: 2px solid #fff; border-radius: 3px; box-shadow: 0 0 16px var(--c), 0 4px 0 rgba(0, 0, 0, 0.6); }
 input[type="range"]::-moz-range-thumb { width: 18px; height: 30px; background: var(--c); border: 2px solid #fff; border-radius: 3px; box-shadow: 0 0 16px var(--c); }
-.levels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.levels label { font-size: 10px; letter-spacing: 0.16em; color: var(--dim); }
-.levels input { display: block; width: 100%; margin-top: 4px; padding: 8px; font: 800 15px var(--mono); color: var(--ink); background: #050816; border: 2px solid #2c3a7a; border-radius: 3px; }
-#lv-r { border-color: var(--mag); } #lv-s { border-color: var(--cyan); }
+.levels { display: grid; gap: 14px; }
+.lv-col { display: grid; gap: 6px; }
+.lv-col .k small { letter-spacing: 0.04em; text-transform: none; color: var(--dim); margin-left: 6px; }
+.k.res { color: #ff8a3d; } .k.sup { color: #3db8ff; }
+.lv-list { display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; color: var(--dim); }
+.lvl { font: inherit; text-align: left; color: var(--ink); background: #0a1030; border: 1px solid #2c3a7a; border-left: 3px solid; border-radius: 3px; padding: 4px 8px; cursor: pointer; }
+.lvl b { display: block; font-size: 12px; } .lvl small { color: var(--dim); font-size: 10px; }
+.lvl.res { border-left-color: #ff8a3d; } .lvl.sup { border-left-color: #3db8ff; }
+.lvl.res[aria-pressed="true"] { border-color: #ff8a3d; background: rgba(255, 138, 61, 0.16); box-shadow: 0 0 12px rgba(255, 138, 61, 0.35); }
+.lvl.sup[aria-pressed="true"] { border-color: #3db8ff; background: rgba(61, 184, 255, 0.16); box-shadow: 0 0 12px rgba(61, 184, 255, 0.35); }
+.lv-own { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: 0.14em; color: var(--dim); }
+.lv-own input { width: 110px; padding: 5px 8px; font: 800 13px var(--mono); color: var(--ink); background: #050816; border: 1px solid #2c3a7a; border-radius: 3px; }
+#lv-r { border-color: #ff8a3d; } #lv-s { border-color: #3db8ff; }
 
 /* ------------------------------------------------------------ screen */
 .screen { min-width: 0; display: grid; gap: 10px; align-content: start; }
@@ -209,7 +225,7 @@ footer b { color: var(--ink); }
   .live { margin-left: 0; }
   .top { position: static; }
   .sig.verdict { grid-column: span 2; }
-  .chart.osc { height: 90px; }
+  .chart.big { height: 460px; }
   .ladder-head, .cells { grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 0.9fr); }
   .ladder-head span:last-child, .row .bar { display: none; }
   .chart { height: 220px; }

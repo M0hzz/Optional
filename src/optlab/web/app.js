@@ -1,28 +1,33 @@
 import * as S from "./sim.js";
 import * as I from "./ind.js";
+import * as LV from "./levels.js";
+import { PriceChart } from "./chart.js";
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15000;
 const SAVE_KEY = "optlab-sim-tabs-v1";
 const OLD_KEY = "optlab-sim-pick";
 const MAX_TABS = 8;
-const KEEP = ["id", "sym", "side", "budget", "pick", "exp", "horizon", "seed", "scenario", "lever", "levelR", "levelS", "overlays", "osc"];
+const KEEP = ["id", "sym", "side", "budget", "pick", "exp", "horizon", "seed", "scenario", "lever", "levelR", "levelS", "overlays", "osc",
+              "range", "autoR", "autoS"];
 
 // ---------------------------------------------------------------- tabs: each one is a whole simulation
 let tabs = [];
 let st = null;                 // the tab on screen
 let playing = null;            // the animation frame of PLAY (one at a time)
 let pollTimer = null;
+let chart = null;              // the interactive chart (one canvas, redrawn for whichever tab is on screen)
 
 function newTab(from = {}) {
   return {
     id: Math.random().toString(36).slice(2, 9), sym: null, side: "calls", budget: 500, pick: null, exp: null,
     horizon: 5, seed: 1, scenario: null, lever: { price: null, day: 0, iv: 0, volume: 1, touched: false },
-    levelR: "", levelS: "", overlays: { ema: true, sma50: true, sma200: false, bb: false }, osc: "rsi",
+    levelR: "", levelS: "", autoR: true, autoS: true, range: "6M",
+    overlays: { ema: true, sma50: true, sma200: false, bb: false, vol: true }, osc: "rsi",
     ...structuredClone(Object.fromEntries(KEEP.filter((k) => k in from).map((k) => [k, from[k]]))),
     // live data, never saved
     summary: null, expData: null, pickData: null, contract: null, row: null, spot: null, levels: {}, bars: [],
-    story: null, mc: null, roll: null, livePnl: null, loading: false,
+    story: null, mc: null, roll: null, livePnl: null, loading: false, lv: null, view: null,
   };
 }
 
@@ -137,12 +142,11 @@ async function loadSymbol(t, sym, keepPick = false) {
     t.summary = summary;
     t.spot = summary.price;
     if (!keepPick || changed && t.pick && t.pick.symbol !== t.sym) clearPick(t);
-    if (changed) { t.levelR = ""; t.levelS = ""; t.bars = []; t.levels = {}; }
+    if (changed) { t.levelR = ""; t.levelS = ""; t.autoR = t.autoS = true; t.bars = []; t.levels = {}; t.view = null; }
     const bars = api(`/api/bars/${encodeURIComponent(t.sym)}`).then((b) => {
       t.bars = b.bars;
       t.levels = b.levels;
-      if (t.levelR === "" && b.levels.resistance != null) t.levelR = String(b.levels.resistance);
-      if (t.levelS === "" && b.levels.support != null) t.levelS = String(b.levels.support);
+      computeLevels(t);
     }).catch(() => {});
     const want = t.pick ? t.pick.expiration : t.exp;
     const first = summary.expirations.find((e) => e.date === want) || summary.expirations.find((e) => e.dte >= 7) || summary.expirations[0];
@@ -187,6 +191,7 @@ function schedulePoll() {
           if (date === t.exp) t.expData = d;
           if (t.pick) t.pickData = d;
           buildContract(t);
+          computeLevels(t);
         } catch { if (t.summary) t.summary = { ...t.summary, stale: true }; }
       }));
       renderTabs();
@@ -212,6 +217,14 @@ function buildContract(t) {
   t.livePnl = ((row.mid ?? row.ask) - p.entry) * 100 * p.qty;
 }
 
+// Support and resistance over the tab's RANGE; the nearest of each drives the scenarios unless you picked another.
+function computeLevels(t) {
+  if (!t.bars.length || !t.spot) return;
+  t.lv = LV.findLevels(t.bars, LV.RANGES[t.range] || 126, t.spot);
+  if (t.autoR) t.levelR = t.lv.resistance[0] ? String(t.lv.resistance[0].price) : "";
+  if (t.autoS) t.levelS = t.lv.support[0] ? String(t.lv.support[0].price) : "";
+}
+
 function clearPick(t) {
   Object.assign(t, { pick: null, contract: null, row: null, pickData: null, scenario: null, mc: null, story: null, roll: null, livePnl: null });
 }
@@ -230,6 +243,8 @@ function renderTab() {
   $("lv-s").value = st.levelS;
   $("l-vol").value = st.lever.volume;
   for (const b of $("overlays").children) b.setAttribute("aria-pressed", !!st.overlays[b.dataset.o]);
+  for (const b of $("ranges").children) b.setAttribute("aria-pressed", b.dataset.r === st.range);
+  if (chart) chart.view = st.view ? { ...st.view } : null;
   for (const b of $("osc-pick").children) b.setAttribute("aria-pressed", b.dataset.o === st.osc);
   if (st.summary) renderExps();
   renderLadder();
@@ -467,8 +482,8 @@ function paint() {
                 simVol ?? st.levels.rel_volume);
   const view = chartSeries();
   renderEvents(view);
-  drawFuture(view);
-  drawOsc(view);
+  renderLevelChips();
+  drawChart(view);
   drawPayoff();
 }
 
@@ -505,12 +520,13 @@ function play() {
   const t = st;
   const rng = S.mulberry32((t.seed * 7919 + Date.now()) >>> 0);
   const roll = S.simulatePath(t.scenario, ctx(), rng);
-  t.roll = { ...roll, upto: 0 };
+  const mine = { ...roll, upto: 0 };
+  t.roll = mine;
   const n = roll.price.length - 1, dur = Math.min(4000 + t.horizon * 900, 14000), t0 = performance.now();
   $("play").textContent = "■ STOP";
   $("deck").classList.add("playing");
   const frame = (now) => {
-    if (st !== t) return;
+    if (st !== t || t.roll !== mine) return;      // the tab changed or the roll was replaced: this play is over
     const k = Math.min((now - t0) / dur, 1), i = Math.round(k * n);
     t.roll.upto = i;
     t.lever.touched = true;
@@ -563,164 +579,79 @@ function hline(g, y, x0, x1, color, label, dash = [], at = 0) {
   g.restore();
 }
 
-// x positions shared by the price chart and the oscillator: 30 real days on the left, the simulation on the right.
-function layout(view, w, pad) {
-  const story = st.story, fut = story ? story.price.length : 0;
-  const split = story ? pad.l + (w - pad.l - pad.r) * 0.36 : w - pad.r;
-  const nh = view.hist.length - view.from;
-  const XH = (i) => pad.l + (split - pad.l) * (nh > 1 ? (i - view.from) / (nh - 1) : 1);
-  const XF = (step) => split + (w - pad.r - split) * (fut > 1 ? step / (fut - 1) : 0);
-  const X = (i) => (i < view.hist.length ? XH(i) : XF((i - (view.hist.length - 1)) * S.STEPS_PER_DAY));
-  return { split, XH, XF, X, fut };
+// The interactive chart's model: real candles, the simulated days as hollow candles, indicators over both.
+function simCandles(path, upto) {
+  const out = [], per = S.STEPS_PER_DAY;
+  for (let d = 1; (d - 1) * per < upto; d++) {
+    const a = (d - 1) * per, b = Math.min(d * per, upto);
+    let h = -Infinity, l = Infinity;
+    for (let i = a; i <= b; i++) { h = Math.max(h, path.price[i]); l = Math.min(l, path.price[i]); }
+    out.push({ d, o: path.price[a], h, l, c: path.price[b] });
+  }
+  return out;
 }
 
-function polyline(g, X, Y, series, from, to, color, width = 1.2, dash = []) {
-  g.save();
-  g.strokeStyle = color; g.lineWidth = width; g.setLineDash(dash);
-  g.beginPath();
-  let started = false;
-  for (let i = from; i <= to; i++) {
-    const v = series[i];
-    if (v == null) { started = false; continue; }
-    if (!started) { g.moveTo(X(i), Y(v)); started = true; } else g.lineTo(X(i), Y(v));
-  }
-  g.stroke();
-  g.restore();
-}
-
-function drawFuture(view) {
-  const c = st.contract;
-  if (!c) return;
-  const { g, w, h } = canvas("future");
-  const story = st.story, mc = st.mc, roll = st.roll, x = ctx(), ind = view.ind, O = st.overlays;
-  const pad = { l: 8, r: 58, t: 14, b: 18 };
-  const { split, XF, X, fut } = layout(view, w, pad);
-  const last = view.all.length - 1, hi0 = view.hist.length - 1;
-  const vals = [...view.hist.slice(view.from), st.spot, st.lever.price];
-  if (story) vals.push(...story.price, ...mc.lo, ...mc.hi);
-  if (roll) vals.push(...roll.price.slice(0, roll.upto + 1));
-  const near = (v) => v != null && Math.abs(v / st.spot - 1) < 0.15;
-  const ovl = [];
-  if (ind) {
-    if (O.ema) ovl.push([ind.ema9, css("--cyan"), "EMA 9"], [ind.ema21, css("--mag"), "EMA 21"]);
-    if (O.sma50) ovl.push([ind.sma50, css("--amber"), "SMA 50"]);
-    if (O.sma200) ovl.push([ind.sma200, "#b9c6ff", "SMA 200"]);
-    if (O.bb) ovl.push([ind.bb.up, css("--dim"), "BB"], [ind.bb.lo, css("--dim"), ""]);
-    for (const [s] of ovl) for (let i = view.from; i <= last; i++) if (near(s[i])) vals.push(s[i]);
-  }
-  let lo = Math.min(...vals), hi = Math.max(...vals);
-  const lines = [[x.resistance, css("--mag"), "RESISTANCE"], [x.support, css("--cyan"), "SUPPORT"],
-                 [c.strike, css("--amber"), "STRIKE"], [S.breakeven(c), css("--ink"), "BREAKEVEN"]];
-  for (const [v] of lines) if (near(v)) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
-  const m = (hi - lo) * 0.08 || 1;
-  lo -= m; hi += m;
-  const Y = (v) => pad.t + (h - pad.t - pad.b) * (1 - (v - lo) / (hi - lo));
-
-  g.strokeStyle = css("--grid"); g.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const v = lo + (hi - lo) * i / 4, y = Y(v);
-    g.beginPath(); g.moveTo(pad.l, y); g.lineTo(w - pad.r, y); g.stroke();
-    g.fillStyle = css("--dim"); g.fillText(v.toFixed(v > 100 ? 0 : 2), w - pad.r + 6, y + 4);
-  }
-  lines.forEach(([v, color, label], i) => {        // labels step sideways so close levels stay readable
-    if (v && v > lo && v < hi) hline(g, Y(v), pad.l, w - pad.r, color, label, label === "BREAKEVEN" ? [4, 4] : [], i * 84);
-  });
-
-  if (story) {                                       // the band of 8 in 10 rolls, behind everything
-    g.fillStyle = css("--band");
-    g.beginPath();
-    mc.hi.forEach((v, i) => (i ? g.lineTo(XF(i), Y(v)) : g.moveTo(XF(i), Y(v))));
-    for (let i = mc.lo.length - 1; i >= 0; i--) g.lineTo(XF(i), Y(mc.lo[i]));
-    g.closePath(); g.fill();
-  }
-  if (ind && O.bb) {                                 // Bollinger band fill
-    g.fillStyle = "rgba(127, 143, 184, 0.08)";
-    g.beginPath();
-    let first = true;
-    for (let i = view.from; i <= last; i++) if (ind.bb.up[i] != null) { first ? g.moveTo(X(i), Y(ind.bb.up[i])) : g.lineTo(X(i), Y(ind.bb.up[i])); first = false; }
-    for (let i = last; i >= view.from; i--) if (ind.bb.lo[i] != null) g.lineTo(X(i), Y(ind.bb.lo[i]));
-    g.closePath(); g.fill();
-  }
-  for (const [s, color] of ovl) polyline(g, X, Y, s, view.from, last, color, 1.2);
-
-  polyline(g, X, Y, view.hist, view.from, hi0, css("--dim"), 1.5);
-  if (story) {
-    g.strokeStyle = css("--lime"); g.lineWidth = 2; g.shadowColor = css("--lime"); g.shadowBlur = 8;
-    g.beginPath();
-    story.price.forEach((v, i) => (i ? g.lineTo(XF(i), Y(v)) : g.moveTo(XF(i), Y(v))));
-    g.stroke();
-    g.shadowBlur = 0;
-    g.fillStyle = css("--dim");
-    g.fillText("NOW", split - 12, h - 4);
-    g.fillText(`+${st.horizon}d`, w - pad.r - 24, h - 4);
-    g.strokeStyle = css("--grid"); g.setLineDash([2, 4]);
-    g.beginPath(); g.moveTo(split, pad.t); g.lineTo(split, h - pad.b); g.stroke(); g.setLineDash([]);
-  }
-  if (roll && story) {
-    g.strokeStyle = css("--ink"); g.lineWidth = 2; g.shadowColor = css("--ink"); g.shadowBlur = 10;
-    g.beginPath();
-    for (let i = 0; i <= roll.upto; i++) (i ? g.lineTo(XF(i), Y(roll.price[i])) : g.moveTo(XF(i), Y(roll.price[i])));
-    g.stroke();
-    g.shadowBlur = 0;
-  }
-  for (const e of view.ev) {                         // where each signal fires on the simulated path
-    const px = X(e.i), py = Y(view.all[e.i]);
-    g.fillStyle = e.dir > 0 ? css("--lime") : e.dir < 0 ? css("--red") : css("--amber");
-    g.beginPath();
-    if (e.dir >= 0) { g.moveTo(px, py - 14); g.lineTo(px - 5, py - 6); g.lineTo(px + 5, py - 6); }
-    if (e.dir < 0) { g.moveTo(px, py + 14); g.lineTo(px - 5, py + 6); g.lineTo(px + 5, py + 6); }
-    g.closePath(); g.fill();
-  }
-  let lx = pad.l + 4;                                 // a small key for the overlays
-  for (const [, color, label] of ovl) {
-    if (!label) continue;
-    g.fillStyle = color; g.fillText(label, lx, pad.t + 2);
-    lx += g.measureText(label).width + 12;
-  }
-  const mx = story ? XF(Math.min(Math.round(st.lever.day * S.STEPS_PER_DAY), fut - 1)) : w - pad.r;
-  const my = Y(Math.min(Math.max(st.lever.price, lo), hi));
-  g.fillStyle = css("--ink"); g.shadowColor = css("--ink"); g.shadowBlur = 12;
-  g.beginPath(); g.arc(mx, my, 5, 0, Math.PI * 2); g.fill();
-  g.shadowBlur = 0;
-}
-
-function drawOsc(view) {
-  const { g, w, h } = canvas("osc");
-  const ind = view.ind;
-  if (!ind) return;
-  const pad = { l: 8, r: 58, t: 10, b: 14 };
-  const { X } = layout(view, w, pad), last = view.all.length - 1;
-  if (st.osc === "rsi") {
-    const Y = (v) => pad.t + (h - pad.t - pad.b) * (1 - v / 100);
-    g.fillStyle = "rgba(255, 77, 109, 0.08)"; g.fillRect(pad.l, Y(100), w - pad.l - pad.r, Y(70) - Y(100));
-    g.fillStyle = "rgba(125, 255, 90, 0.08)"; g.fillRect(pad.l, Y(30), w - pad.l - pad.r, Y(0) - Y(30));
-    for (const [v, label] of [[70, "70 OVERBOUGHT"], [50, ""], [30, "30 OVERSOLD"]]) hline(g, Y(v), pad.l, w - pad.r, css("--grid"), "", [3, 4]);
-    g.fillStyle = css("--dim");
-    g.fillText("70", w - pad.r + 6, Y(70) + 4); g.fillText("30", w - pad.r + 6, Y(30) + 4);
-    g.fillText("RSI 14", pad.l + 4, pad.t + 2);
-    polyline(g, X, Y, ind.rsi, view.from, view.hist.length - 1, css("--ink"), 1.5);
-    if (last >= view.hist.length) polyline(g, X, Y, ind.rsi, view.hist.length - 1, last, css("--lime"), 2);
-    const r = ind.rsi[last];
-    if (r != null) { g.fillStyle = r >= 70 ? css("--red") : r <= 30 ? css("--lime") : css("--ink"); g.fillText(r.toFixed(0), w - pad.r + 30, Y(r) + 4); }
-  } else {
-    const { line, signal, hist } = ind.macd;
-    const vals = [];
-    for (let i = view.from; i <= last; i++) for (const s of [line, signal, hist]) if (s[i] != null) vals.push(s[i]);
-    if (!vals.length) return;
-    const a = Math.max(...vals.map(Math.abs)) * 1.15 || 1;
-    const Y = (v) => pad.t + (h - pad.t - pad.b) * (1 - (v + a) / (2 * a));
-    hline(g, Y(0), pad.l, w - pad.r, css("--grid"), "");
-    const bw = Math.max(2, (X(view.from + 1) - X(view.from)) * 0.6);
-    for (let i = view.from; i <= last; i++) {
-      if (hist[i] == null) continue;
-      g.fillStyle = hist[i] >= 0 ? (i >= view.hist.length ? css("--lime") : "rgba(125, 255, 90, 0.5)") : (i >= view.hist.length ? css("--red") : "rgba(255, 77, 109, 0.5)");
-      g.fillRect(X(i) - bw / 2, Math.min(Y(0), Y(hist[i])), bw, Math.abs(Y(hist[i]) - Y(0)));
+function drawChart(view) {
+  if (!chart) chart = new PriceChart($("future"), { onViewChange: (v) => { st.view = { ...v }; } });
+  const bars = st.bars.map((b) => ({ ...b }));
+  if (!bars.length) return;
+  const hiIdx = bars.length - 1, last = bars[hiIdx];
+  last.c = st.spot; last.h = Math.max(last.h, st.spot); last.l = Math.min(last.l, st.spot);
+  const story = st.story, roll = st.roll, L = st.lever;
+  const toPts = (p, upto) => p.price.slice(0, upto + 1).map((v, i) => ({ s: hiIdx + p.day[i], p: v }));
+  const futureDays = st.scenario ? st.horizon : Math.ceil(L.day);
+  const avg = st.levels.avg_volume;
+  const simVol = [];
+  if (st.scenario && avg) for (let d = 1; d <= st.horizon; d++) simVol.push({ s: hiIdx + d, v: avg * S.volumeAt(L.volume, d - 1) });
+  const r = parseFloat(st.levelR), sp = parseFloat(st.levelS);
+  const levels = [];
+  for (const [list, kind, active] of [[st.lv?.resistance || [], "R", r], [st.lv?.support || [], "S", sp]]) {
+    let found = false;
+    for (const x of list) {
+      const on = Math.abs(x.price - active) < 1e-6;
+      found ||= on;
+      levels.push({ price: x.price, kind, active: on, touches: x.touches });
     }
-    polyline(g, X, Y, line, view.from, last, css("--cyan"), 1.4);
-    polyline(g, X, Y, signal, view.from, last, css("--mag"), 1.2);
-    g.fillStyle = css("--dim");
-    g.fillText("MACD 12/26/9 · bars: histogram", pad.l + 4, pad.t + 2);
+    if (!found && isFinite(active)) levels.push({ price: active, kind, active: true, touches: 0 });
   }
+  chart.setModel({
+    bars, histLen: bars.length, futureDays, closes: view.all, ind: view.ind, overlays: st.overlays, osc: st.osc,
+    showVolume: st.overlays.vol !== false, avgVolume: avg, levels,
+    strike: st.contract?.strike ?? null, breakeven: st.contract ? S.breakeven(st.contract) : null,
+    band: story && st.mc ? st.mc.lo.map((lo, i) => ({ s: hiIdx + i / S.STEPS_PER_DAY, lo, hi: st.mc.hi[i] })) : null,
+    story: story ? toPts(story, story.price.length - 1) : null,
+    roll: roll ? toPts(roll, roll.upto) : null,
+    simBars: roll ? simCandles(roll, roll.upto).map((c) => ({ ...c, s: hiIdx + c.d })) : [],
+    simVol, lever: { s: hiIdx + L.day, p: L.price }, markers: view.ev,
+    defaultBars: LV.RANGES[st.range] || 126,
+  }, st.view);
+  if (!st.view) st.view = { ...chart.view };
+}
+
+function renderLevelChips() {
+  const box = (id, list, kind) => {
+    const active = parseFloat(kind === "R" ? st.levelR : st.levelS), auto = kind === "R" ? st.autoR : st.autoS;
+    const el = $(id);
+    el.replaceChildren(...list.map((x, i) => {
+      const b = document.createElement("button");
+      b.className = `lvl ${kind === "R" ? "res" : "sup"}`;
+      b.setAttribute("aria-pressed", Math.abs(x.price - active) < 1e-6);
+      b.innerHTML = `<b></b><small></small>`;
+      b.firstChild.textContent = `${kind}${i + 1} ${x.price.toFixed(2)}`;
+      b.lastChild.textContent = `${x.touches} touch${x.touches === 1 ? "" : "es"} · ${pct(100 * (x.price / st.spot - 1), 1)}`;
+      b.title = `Use ${x.price.toFixed(2)} as the ${kind === "R" ? "resistance" : "support"} the scenarios aim at`;
+      b.addEventListener("click", () => {
+        if (kind === "R") { st.levelR = String(x.price); st.autoR = i === 0; } else { st.levelS = String(x.price); st.autoS = i === 0; }
+        stopPlay(); st.roll = null; rebuildScenario(); saveTabs(); renderTab();
+      });
+      return b;
+    }));
+    if (!list.length) el.textContent = kind === "R" ? "None above: at a new high for this range." : "None below: at a new low for this range.";
+    $(kind === "R" ? "lv-r" : "lv-s").value = kind === "R" ? st.levelR : st.levelS;
+    $(kind === "R" ? "lv-r-auto" : "lv-s-auto").hidden = auto;
+  };
+  box("lv-r-list", st.lv?.resistance || [], "R");
+  box("lv-s-list", st.lv?.support || [], "S");
 }
 
 function drawPayoff() {
@@ -815,7 +746,11 @@ function wire() {
   lever("l-iv", "iv");
   lever("l-vol", "volume", rebuildScenario);
   for (const [id, key] of [["lv-r", "levelR"], ["lv-s", "levelS"]]) {
-    $(id).addEventListener("change", (e) => { st[key] = e.target.value; st.roll = null; rebuildScenario(); saveTabs(); paint(); });
+    $(id).addEventListener("change", (e) => {
+      st[key] = e.target.value;
+      st[key === "levelR" ? "autoR" : "autoS"] = false;
+      stopPlay(); st.roll = null; rebuildScenario(); saveTabs(); paint();
+    });
   }
 
   $("scenarios").replaceChildren(...S.SCENARIOS.map((s) => {
@@ -849,6 +784,23 @@ function wire() {
       paint();
     });
   }
+  for (const [id, key, flag] of [["lv-r-auto", "levelR", "autoR"], ["lv-s-auto", "levelS", "autoS"]]) {
+    $(id).addEventListener("click", () => { stopPlay(); st[flag] = true; computeLevels(st); st.roll = null; rebuildScenario(); saveTabs(); paint(); });
+  }
+  for (const b of $("ranges").children) {
+    b.addEventListener("click", () => {
+      stopPlay();
+      st.range = b.dataset.r;
+      for (const x of $("ranges").children) x.setAttribute("aria-pressed", x === b);
+      computeLevels(st);
+      st.view = null;
+      if (chart) chart.view = null;
+      st.roll = null; rebuildScenario(); saveTabs(); paint();
+    });
+  }
+  $("zoom-in").addEventListener("click", () => chart?.zoom(1 / 1.4));
+  $("zoom-out").addEventListener("click", () => chart?.zoom(1.4));
+  $("zoom-reset").addEventListener("click", () => { if (chart) { chart.resetView(); chart.draw(); } });
   for (const b of $("osc-pick").children) {
     b.addEventListener("click", () => {
       st.osc = b.dataset.o;
