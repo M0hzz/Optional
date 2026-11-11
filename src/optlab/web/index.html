@@ -25,10 +25,23 @@
     </div>
   </header>
 
+  <nav class="tabbar" aria-label="Simulations">
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <button class="btn tab-add" id="tab-add">+ NEW TAB</button>
+  </nav>
+
   <p class="msg" id="msg" role="status" hidden></p>
 
   <main>
+    <section class="panel empty" id="empty">
+      <h2><span class="step">&#9654;</span> NEW SIMULATION</h2>
+      <p>Type a ticker above and press LOAD. Each tab is its own simulation: open more tabs to run the same stock
+        through different scenarios, or different stocks side by side.</p>
+    </section>
+
     <section class="panel" id="pick" hidden>
+      <div class="sig-head"><span class="k" id="sig-pick-when">NOW</span><span class="k">TREND READ FROM THE LAST YEAR OF DAILY CLOSES</span></div>
+      <div class="signals" id="sig-pick"></div>
       <h2><span class="step">1</span> PICK YOUR CONTRACT</h2>
       <div class="chips" id="exps" role="tablist" aria-label="Expiration"></div>
       <div class="pick-bar">
@@ -57,7 +70,10 @@
       <div class="stat"><span class="k">BREAKEVEN</span><span class="v" id="hud-be"></span><span class="k2">at expiration</span></div>
       <div class="stat"><span class="k">WORTH NOW</span><span class="v" id="hud-val"></span><span class="k2">live</span></div>
       <div class="stat big"><span class="k">LIVE P&amp;L</span><span class="v" id="hud-pnl"></span><span class="k2" id="hud-pnl-pct"></span></div>
-      <button class="btn ghost" id="change">CHANGE</button>
+      <div class="hud-btns">
+        <button class="btn" id="copy" title="Open a copy of this simulation in a new tab">&#10697; COPY TAB</button>
+        <button class="btn ghost" id="change">CHANGE</button>
+      </div>
     </section>
 
     <section class="panel deck" id="deck" hidden>
@@ -100,7 +116,20 @@
               <div><span class="k">DAYS LEFT</span><span class="v" id="sim-left"></span></div>
             </div>
           </div>
-          <canvas id="future" class="chart" aria-label="Price path: history, the scenario and its range"></canvas>
+          <div class="sig-head"><span class="k" id="sig-sim-when">SIGNALS · NOW</span><span class="k">move a lever or play a scenario: they update</span></div>
+          <div class="signals compact" id="sig-sim"></div>
+          <div class="toggles" id="overlays" role="group" aria-label="Chart lines">
+            <button class="tg" data-o="ema" aria-pressed="true">EMA 9/21</button>
+            <button class="tg" data-o="sma50" aria-pressed="true">SMA 50</button>
+            <button class="tg" data-o="sma200" aria-pressed="false">SMA 200</button>
+            <button class="tg" data-o="bb" aria-pressed="false">BOLLINGER</button>
+          </div>
+          <canvas id="future" class="chart" aria-label="Price path: history, the scenario, its range and the chosen indicator lines"></canvas>
+          <div class="toggles" id="osc-pick" role="group" aria-label="Lower chart">
+            <button class="tg" data-o="rsi" aria-pressed="true">RSI</button>
+            <button class="tg" data-o="macd" aria-pressed="false">MACD</button>
+          </div>
+          <canvas id="osc" class="chart osc" aria-label="RSI or MACD over history and the simulation"></canvas>
           <canvas id="payoff" class="chart short" aria-label="Profit or loss at each stock price"></canvas>
         </div>
       </div>
@@ -114,6 +143,7 @@
         <button class="btn ghost" id="reset">RESET</button>
       </div>
       <p class="hint" id="story"></p>
+      <div class="events" id="events" hidden aria-label="Signals that fire on the simulated path"></div>
       <p class="odds-title" id="odds-title" hidden>IF IT PLAYS OUT THIS WAY &middot; 300 ROLLS OF THIS SCENARIO, NOT THE ODDS THAT IT HAPPENS</p>
       <div class="odds" id="odds" hidden>
         <div class="odd"><span class="k">ROLLS THAT PROFIT</span><span class="v" id="o-chance"></span><span class="meter"><i id="o-meter"></i></span></div>
@@ -132,6 +162,8 @@
         <li><b>Each scenario</b> is a scripted price story (for example: reach resistance, break it, follow through) with random noise around it. PLAY shows one roll; the shaded band holds 8 of 10 rolls.</li>
         <li><b>Volume</b> doesn't choose a direction. It scales how far the move goes (by the square root of volume), and the surge fades by half every 2 days.</li>
         <li><b>Volatility</b> rises 3% for each 1% the price falls, eases 1.5% for each 1% it rises, and gets a small lift from a volume surge.</li>
+        <li><b>Indicators</b> use the stock's last year of daily closes, then the simulated days, so they change as a scenario plays: EMA 9/21 (short trend), SMA 50 and 200 (medium and long trend), MACD 12/26/9 (momentum), RSI 14 (overbought above 70, oversold below 30), Bollinger 20/2 (range and squeezes). TREND counts the four trend signals: 3 or more pointing the same way is an uptrend or downtrend, otherwise mixed.</li>
+        <li><b>Tabs</b> are separate simulations, saved in this browser. COPY TAB starts a new one from the current contract.</li>
         <li><b>Resistance and support</b> start as the nearest 20-day or 60-day high and low. Type your own levels to change them.</li>
         <li>Prices are CBOE delayed quotes. You pay the ask; "worth" is the midpoint, so a new pick starts slightly negative.</li>
       </ul>

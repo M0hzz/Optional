@@ -77,7 +77,7 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, chai
     def bars_route(symbol: str):
         sym = market.clean_symbol(symbol)
         b, _ = bars.get(sym, lambda: fetch_bars(sym))
-        return {"symbol": sym, "bars": b[-90:], "levels": market.levels(b)}
+        return {"symbol": sym, "bars": b[-260:], "levels": market.levels(b)}
 
     @app.get("/api/{rest:path}")
     def no_route(rest: str):

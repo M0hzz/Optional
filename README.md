@@ -33,5 +33,5 @@ A simulation shows what follows from these assumptions. It is not a forecast.
 
 ```bash
 .venv/bin/python -m pytest tests     # data and server
-node --test tests/sim.test.mjs       # the simulation maths
+node --test tests/*.mjs              # the simulation and indicator maths
 ```
