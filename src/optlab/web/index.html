@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070b1a">
+  <title>optlab sim</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="scanlines" aria-hidden="true"></div>
+  <header class="top">
+    <div class="brand"><span class="brand-a">OPTLAB</span><span class="brand-b">//SIM</span></div>
+    <form id="load" class="ticker" autocomplete="off">
+      <label class="sr" for="sym">Ticker</label>
+      <input id="sym" name="sym" maxlength="8" placeholder="TICKER" spellcheck="false" autocapitalize="characters">
+      <button class="btn go" type="submit">LOAD</button>
+    </form>
+    <div class="live" id="live" hidden>
+      <span class="dot" id="dot"></span>
+      <span class="live-sym" id="live-sym"></span>
+      <span class="live-px" id="live-px"></span>
+      <span class="live-chg" id="live-chg"></span>
+      <span class="live-note">15 MIN DELAYED</span>
+    </div>
+  </header>
+
+  <p class="msg" id="msg" role="status" hidden></p>
+
+  <main>
+    <section class="panel" id="pick" hidden>
+      <h2><span class="step">1</span> PICK YOUR CONTRACT</h2>
+      <div class="chips" id="exps" role="tablist" aria-label="Expiration"></div>
+      <div class="pick-bar">
+        <div class="toggle" role="group" aria-label="Call or put">
+          <button class="btn side call" id="side-call" aria-pressed="true">CALLS <small>price goes up</small></button>
+          <button class="btn side put" id="side-put" aria-pressed="false">PUTS <small>price goes down</small></button>
+        </div>
+        <label class="lever small">
+          <span class="lever-top"><span>BUDGET</span><output id="budget-out"></output></span>
+          <input type="range" id="budget" min="20" max="2000" step="10" value="500">
+        </label>
+      </div>
+      <div class="ladder-head"><span>STRIKE</span><span>COST OF ONE</span><span>MOVES PER $1</span><span>TRADED TODAY</span></div>
+      <div class="ladder" id="ladder"></div>
+      <p class="hint" id="ladder-hint"></p>
+    </section>
+
+    <section class="panel hud" id="hud" hidden>
+      <div class="hud-main">
+        <div class="hud-name" id="hud-name"></div>
+        <div class="hud-sub" id="hud-sub"></div>
+      </div>
+      <div class="stat"><span class="k">CONTRACTS</span>
+        <span class="stepper"><button class="btn tiny" id="qty-dn" aria-label="Fewer">−</button><output id="qty"></output><button class="btn tiny" id="qty-up" aria-label="More">+</button></span></div>
+      <div class="stat"><span class="k">YOU PAY</span><span class="v" id="hud-cost"></span><span class="k2">most you can lose</span></div>
+      <div class="stat"><span class="k">BREAKEVEN</span><span class="v" id="hud-be"></span><span class="k2">at expiration</span></div>
+      <div class="stat"><span class="k">WORTH NOW</span><span class="v" id="hud-val"></span><span class="k2">live</span></div>
+      <div class="stat big"><span class="k">LIVE P&amp;L</span><span class="v" id="hud-pnl"></span><span class="k2" id="hud-pnl-pct"></span></div>
+      <button class="btn ghost" id="change">CHANGE</button>
+    </section>
+
+    <section class="panel deck" id="deck" hidden>
+      <h2><span class="step">2</span> PULL THE LEVERS <span class="tag">SIMULATION</span></h2>
+      <div class="deck-grid">
+        <div class="levers">
+          <label class="lever price">
+            <span class="lever-top"><span>STOCK PRICE</span><output id="l-price-out"></output></span>
+            <input type="range" id="l-price" step="0.01">
+          </label>
+          <label class="lever time">
+            <span class="lever-top"><span>DAYS FROM NOW</span><output id="l-day-out"></output></span>
+            <input type="range" id="l-day" min="0" step="0.125" value="0">
+          </label>
+          <label class="lever iv">
+            <span class="lever-top"><span>VOLATILITY (IV)</span><output id="l-iv-out"></output></span>
+            <input type="range" id="l-iv" min="-60" max="150" step="1" value="0">
+          </label>
+          <label class="lever vol">
+            <span class="lever-top"><span>VOLUME</span><output id="l-vol-out"></output></span>
+            <input type="range" id="l-vol" min="0.5" max="6" step="0.1" value="1">
+          </label>
+          <div class="levels">
+            <label>RESISTANCE <input type="number" id="lv-r" step="0.01" inputmode="decimal"></label>
+            <label>SUPPORT <input type="number" id="lv-s" step="0.01" inputmode="decimal"></label>
+          </div>
+          <p class="hint" id="lever-hint"></p>
+        </div>
+
+        <div class="screen">
+          <div class="score">
+            <div class="score-main">
+              <span class="k">SIMULATED P&amp;L</span>
+              <span class="pnl" id="sim-pnl">$0</span>
+              <span class="k2" id="sim-pct"></span>
+            </div>
+            <div class="score-side">
+              <div><span class="k">OPTION WORTH</span><span class="v" id="sim-val"></span></div>
+              <div><span class="k">STOCK AT</span><span class="v" id="sim-px"></span></div>
+              <div><span class="k">DAYS LEFT</span><span class="v" id="sim-left"></span></div>
+            </div>
+          </div>
+          <canvas id="future" class="chart" aria-label="Price path: history, the scenario and its range"></canvas>
+          <canvas id="payoff" class="chart short" aria-label="Profit or loss at each stock price"></canvas>
+        </div>
+      </div>
+
+      <h2 class="sub"><span class="step">3</span> WHAT IF&hellip;</h2>
+      <div class="scenarios" id="scenarios"></div>
+      <div class="run-bar">
+        <label class="over">PLAYS OUT OVER <span class="stepper"><button class="btn tiny" id="h-dn" aria-label="Fewer days">−</button><output id="horizon"></output><button class="btn tiny" id="h-up" aria-label="More days">+</button></span> DAYS</label>
+        <button class="btn go play" id="play" disabled>&#9654; PLAY</button>
+        <button class="btn" id="reroll" disabled>REROLL</button>
+        <button class="btn ghost" id="reset">RESET</button>
+      </div>
+      <p class="hint" id="story"></p>
+      <p class="odds-title" id="odds-title" hidden>IF IT PLAYS OUT THIS WAY &middot; 300 ROLLS OF THIS SCENARIO, NOT THE ODDS THAT IT HAPPENS</p>
+      <div class="odds" id="odds" hidden>
+        <div class="odd"><span class="k">ROLLS THAT PROFIT</span><span class="v" id="o-chance"></span><span class="meter"><i id="o-meter"></i></span></div>
+        <div class="odd"><span class="k">BAD RUN</span><span class="v" id="o-p10"></span><span class="k2">1 in 10 is worse</span></div>
+        <div class="odd"><span class="k">TYPICAL</span><span class="v" id="o-p50"></span><span class="k2">the middle result</span></div>
+        <div class="odd"><span class="k">GOOD RUN</span><span class="v" id="o-p90"></span><span class="k2">1 in 10 is better</span></div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    A simulation shows what follows from its assumptions. It is not a forecast, and nothing here places a trade.
+    <details><summary>How the simulation works</summary>
+      <ul>
+        <li><b>Option value:</b> the Black-Scholes model, with the contract's implied volatility taken from its market price, so it starts at the market.</li>
+        <li><b>Each scenario</b> is a scripted price story (for example: reach resistance, break it, follow through) with random noise around it. PLAY shows one roll; the shaded band holds 8 of 10 rolls.</li>
+        <li><b>Volume</b> doesn't choose a direction. It scales how far the move goes (by the square root of volume), and the surge fades by half every 2 days.</li>
+        <li><b>Volatility</b> rises 3% for each 1% the price falls, eases 1.5% for each 1% it rises, and gets a small lift from a volume surge.</li>
+        <li><b>Resistance and support</b> start as the nearest 20-day or 60-day high and low. Type your own levels to change them.</li>
+        <li>Prices are CBOE delayed quotes. You pay the ask; "worth" is the midpoint, so a new pick starts slightly negative.</li>
+      </ul>
+    </details>
+  </footer>
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>

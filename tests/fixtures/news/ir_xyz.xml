@@ -1,7 +1,0 @@
-<?xml version="1.0"?><rss version="2.0"><channel><title>Example Widgets news</title>
-<item><title>Example Widgets prices public offering of common stock</title><link>https://ir.example.com/news/offering?utm_source=rss</link>
-<guid>ir-1</guid><description>Example Widgets Inc. (NASDAQ: XYZ) announced the pricing of an underwritten public offering. The offering may cause dilution.</description>
-<pubDate>Fri, 30 Oct 2026 21:00:00 GMT</pubDate></item>
-<item><title>Example Widgets reports record third-quarter results</title><link>https://ir.example.com/news/q3</link><guid>ir-2</guid>
-<description>&lt;p&gt;Strong gains in revenue.&lt;/p&gt;&lt;script&gt;alert(1)&lt;/script&gt;</description></item>
-</channel></rss>
