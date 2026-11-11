@@ -36,7 +36,8 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
     allowed = allowed_hosts or [h.strip().lower() for h in os.environ.get(
         "OPTLAB_ALLOWED_HOSTS", "localhost,127.0.0.1,::1,*.ts.net").split(",") if h.strip()]
     app = FastAPI(title="optlab sim", docs_url=None, redoc_url=None, openapi_url=None)
-    chains, bars, quotes = market.Cache(chain_ttl), market.Cache(bars_ttl), market.Cache(quote_ttl)
+    chains, quotes = market.Cache(chain_ttl), market.Cache(quote_ttl)
+    bars = {tf: market.Cache(min(ttl, bars_ttl)) for tf, (_, _, ttl) in market.TIMEFRAMES.items()}
 
     @app.middleware("http")
     async def guard(request, call_next):
@@ -76,10 +77,15 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
         raise market.MarketError(f"{c['symbol']} has no options expiring on {expiration}.")
 
     @app.get("/api/bars/{symbol}")
-    def bars_route(symbol: str):
+    def bars_route(symbol: str, tf: str = "1d"):
+        """Bars on a timeframe (5m, 15m, 1h, 1d, 1w). `levels` always comes from the daily bars: the simulator's
+        volatility and average volume are daily figures whatever the chart shows."""
         sym = market.clean_symbol(symbol)
-        b, _ = bars.get(sym, lambda: fetch_bars(sym))
-        return {"symbol": sym, "bars": b, "levels": market.levels(b)}
+        if tf not in market.TIMEFRAMES:
+            raise market.MarketError("Timeframe must be 5m, 15m, 1h, 1d or 1w.")
+        daily, _ = bars["1d"].get(sym, lambda: fetch_bars(sym, "1d"))
+        b = daily if tf == "1d" else bars[tf].get(sym, lambda: market.weekly(daily) if tf == "1w" else fetch_bars(sym, tf))[0]
+        return {"symbol": sym, "tf": tf, "bars": b, "levels": market.levels(daily)}
 
     @app.get("/api/quotes")
     def quotes_route(symbols: str = ""):

@@ -109,7 +109,7 @@ def test_cache_serves_the_last_good_answer_when_a_refresh_fails():
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(market, "date", type("D", (date,), {"today": classmethod(lambda cls: TODAY)}))
-    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s: bars())
+    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s, tf="1d": bars())
     return TestClient(app, base_url="http://127.0.0.1:8600", raise_server_exceptions=False)
 
 
@@ -126,6 +126,49 @@ def test_routes(client):
     page = client.get("/")
     assert page.status_code == 200 and "script-src 'self'" in page.headers["content-security-policy"]
     assert client.get("/static/sim.js").status_code == 200 and client.get("/static/../market.py").status_code == 404
+
+
+def test_timeframes(client):
+    b = bars(70)
+    for i, x in enumerate(b):                                  # real dates: 14 weeks of weekdays from Mon 2026-08-03
+        x["d"] = (date(2026, 8, 3) + __import__("datetime").timedelta(days=i + 2 * (i // 5))).isoformat()
+    w = market.weekly(b)
+    assert len(w) == 14 and w[0]["d"] == "2026-08-03" and w[1]["d"] == "2026-08-10"
+    assert w[0]["o"] == b[0]["o"] and w[0]["c"] == b[4]["c"] and w[0]["h"] == max(x["h"] for x in b[:5])
+    assert w[0]["l"] == min(x["l"] for x in b[:5]) and w[0]["v"] == sum(x["v"] for x in b[:5])
+
+    class R:
+        status_code = 200
+
+        def __init__(self, n):
+            self.n = n
+
+        def json(self):
+            t0 = 1794407400                                    # 2026-11-11 14:30 UTC = 09:30 New York
+            ts = [t0 + 300 * i for i in range(self.n)]
+            q = {k: [100.0 + i for i in range(self.n)] for k in ("open", "high", "low", "close")}
+            q["volume"] = [10] * self.n
+            q["close"][3] = None                               # a hole in the data is skipped
+            ts.append(ts[-1] + 60)                             # Yahoo's off-grid "price right now" row
+            for k in q:
+                q[k].append(q[k][-1])
+            return {"chart": {"result": [{"meta": {"exchangeTimezoneName": "America/New_York"}, "timestamp": ts,
+                                          "indicators": {"quote": [q]}}]}}
+    seen = []
+    got = market.fetch_bars("iwm", "5m", get=lambda url: (seen.append(url), R(40))[1])
+    assert "interval=5m" in seen[0] and "range=10d" in seen[0]
+    assert got[0]["d"] == "2026-11-11T09:30" and got[1]["d"] == "2026-11-11T09:35" and len(got) == 39
+    with pytest.raises(market.MarketError, match="Timeframe"):
+        market.fetch_bars("iwm", "3m")
+
+    calls = []
+    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s, tf="1d": (calls.append(tf), b)[1])
+    c = TestClient(app, base_url="http://127.0.0.1:8600")
+    wk = c.get("/api/bars/IWM?tf=1w").json()
+    assert wk["tf"] == "1w" and len(wk["bars"]) == 14 and wk["levels"]["atr"] > 0 and calls == ["1d"]   # built from daily
+    assert c.get("/api/bars/IWM?tf=5m").json()["tf"] == "5m" and calls == ["1d", "5m"]
+    assert c.get("/api/bars/IWM").json()["tf"] == "1d" and calls == ["1d", "5m"]                         # cached
+    assert c.get("/api/bars/IWM?tf=2h").status_code == 502
 
 
 def test_quotes(client):
@@ -150,7 +193,7 @@ def test_quotes(client):
         if sym == "BAD":
             raise market.MarketError("No quote for BAD. Check the ticker.")
         return {"symbol": sym, "price": 1.0, "change_pct": 0.5}
-    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s: bars(), fetch_quote=fake)
+    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s, tf="1d": bars(), fetch_quote=fake)
     c = TestClient(app, base_url="http://127.0.0.1:8600")
     out = c.get("/api/quotes?symbols=spy,BAD,brk-b,,").json()["quotes"]
     assert out["SPY"]["price"] == 1.0 and out["BRK.B"]["stale"] is False and "Check the ticker" in out["BAD"]["error"]
@@ -161,7 +204,7 @@ def test_only_known_hosts_and_no_stack_traces(client):
     assert client.get("/api/chain/IWM", headers={"Host": "evil.example"}).status_code == 400
     assert client.get("/api/chain/IWM", headers={"Host": "box.tail1234.ts.net"}).status_code == 200
     assert host_ok("[::1]:8600", ["::1"]) and not host_ok("ts.net", ["*.ts.net"]) and not host_ok("evilts.net", ["*.ts.net"])
-    boom = TestClient(create_app(fetch_chain=lambda s: 1 / 0, fetch_bars=lambda s: bars()),
+    boom = TestClient(create_app(fetch_chain=lambda s: 1 / 0, fetch_bars=lambda s, tf="1d": bars()),
                       base_url="http://127.0.0.1:8600", raise_server_exceptions=False)
     r = boom.get("/api/chain/IWM")
     assert r.status_code == 500 and "division" not in r.text and "Traceback" not in r.text

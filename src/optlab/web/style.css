@@ -318,3 +318,6 @@ footer b { color: var(--ink); }
   .score-side { grid-template-columns: repeat(3, 1fr); width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.tf-row { margin-bottom: 12px; }
+#tfs .tg[aria-pressed="true"], #home-tfs .tg[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); background: rgba(255, 197, 49, 0.12); }

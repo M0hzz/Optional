@@ -10,7 +10,27 @@ const SAVE_KEY = "optlab-sim-tabs-v1";
 const OLD_KEY = "optlab-sim-pick";
 const MAX_TABS = 8;
 const KEEP = ["id", "sym", "side", "budget", "pick", "exp", "horizon", "seed", "scenario", "lever", "levelR", "levelS", "overlays", "osc",
-              "range", "autoR", "autoS"];
+              "range", "autoR", "autoS", "tf", "hbars"];
+
+// How a tab's timeframe maps onto the simulation: steps per day (spd) and per chart bar (spb). Intraday
+// timeframes run one step per bar and measure a scenario's length in bars (hbars), not days.
+const TF_UNIT = {
+  "5m": { spd: 78, spb: 1, intraday: true, min: 5, hStep: 6, hDef: 24, hMax: 156, word: "BAR" },
+  "15m": { spd: 26, spb: 1, intraday: true, min: 15, hStep: 2, hDef: 8, hMax: 52, word: "BAR" },
+  "1h": { spd: 6.5, spb: 1, intraday: true, min: 60, hStep: 1, hDef: 7, hMax: 33, word: "BAR" },
+  "1d": { spd: 8, spb: 8, word: "DAY" },
+  "1w": { spd: 8, spb: 56, word: "WEEK" },
+};
+const unit = (t = st) => TF_UNIT[t.tf] || TF_UNIT["1d"];
+const horizonDays = (t = st) => (unit(t).intraday ? t.hbars * unit(t).min / 390 : t.horizon);
+const hours = (bars, u) => { const m = bars * u.min; return m % 60 ? `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}` : `${m / 60}h`; };
+// "+2d", or on an intraday chart "+1h30" of trading time
+const ahead = (day, t = st) => {
+  const u = unit(t);
+  if (!u.intraday) return `+${day.toFixed(day % 1 ? 1 : 0)}d`;
+  const m = Math.round(day * 390);
+  return m >= 390 * 2 ? `+${(day).toFixed(1)}d` : `+${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`;
+};
 
 // ---------------------------------------------------------------- tabs: each one is a whole simulation
 let tabs = [];
@@ -25,7 +45,7 @@ function newTab(from = {}) {
   return {
     id: Math.random().toString(36).slice(2, 9), sym: null, side: "calls", budget: 500, pick: null, exp: null,
     horizon: 5, seed: 1, scenario: null, lever: { price: null, day: 0, iv: 0, volume: 1, touched: false },
-    levelR: "", levelS: "", autoR: true, autoS: true, range: "6M",
+    levelR: "", levelS: "", autoR: true, autoS: true, range: "6M", tf: "1d", hbars: 24,
     overlays: { ema: true, sma50: true, sma200: false, bb: false, vol: true }, osc: "rsi",
     ...structuredClone(Object.fromEntries(KEEP.filter((k) => k in from).map((k) => [k, from[k]]))),
     // live data, never saved
@@ -111,7 +131,7 @@ function positions() {
       symbol: p.symbol, expires: `exp ${dateLabel(p.expiration)} (${c.dte}d)`, qty: p.qty, entry: p.entry, cost: p.entry * 100 * p.qty,
       livePnl: t.livePnl, livePct: 100 * (mark - p.entry) / p.entry,
       simPnl: S.pnlAt(c, simPrice, L.day, 1 + L.iv / 100),
-      simNote: !moved ? "levers at now" : `${sc ? sc.name.toLowerCase() + " · " : ""}${money(simPrice)} at +${L.day.toFixed(L.day % 1 ? 1 : 0)}d`,
+      simNote: !moved ? "levers at now" : `${sc ? sc.name.toLowerCase() + " · " : ""}${money(simPrice)} at ${ahead(L.day, t)}`,
       spot: t.spot, changePct: t.summary?.change_pct ?? null, strike: c.strike, breakeven: S.breakeven(c),
       read: closes.length >= 30 ? I.readout(closes) : null, lv: t.lv,
     };
@@ -195,11 +215,7 @@ async function loadSymbol(t, sym, keepPick = false) {
     t.spot = summary.price;
     if (!keepPick || changed && t.pick && t.pick.symbol !== t.sym) clearPick(t);
     if (changed) { t.levelR = ""; t.levelS = ""; t.autoR = t.autoS = true; t.bars = []; t.levels = {}; t.view = null; }
-    const bars = api(`/api/bars/${encodeURIComponent(t.sym)}`).then((b) => {
-      t.bars = b.bars;
-      t.levels = b.levels;
-      computeLevels(t);
-    }).catch(() => {});
+    const bars = loadBars(t);
     const want = t.pick ? t.pick.expiration : t.exp;
     const first = summary.expirations.find((e) => e.date === want) || summary.expirations.find((e) => e.dte >= 7) || summary.expirations[0];
     await loadExp(t, first.date, false);
@@ -213,6 +229,21 @@ async function loadSymbol(t, sym, keepPick = false) {
   renderTabs();
   if (t === st) renderTab();
   home?.render();
+}
+
+// The tab's bars on its timeframe. `levels` (volatility, average volume) always describes the daily bars.
+async function loadBars(t) {
+  const sym = t.sym, tf = t.tf;
+  try {
+    const b = await api(`/api/bars/${encodeURIComponent(sym)}?tf=${tf}`);
+    if (t.sym !== sym || t.tf !== tf) return;                // the tab moved on while this was loading
+    t.bars = b.bars;
+    t.levels = b.levels;
+    t.barsAt = Date.now();
+    computeLevels(t);
+  } catch (e) {
+    if (t === st && view === "tab") say(e.message, true);
+  }
 }
 
 async function loadExp(t, date, render = true) {
@@ -244,6 +275,8 @@ function schedulePoll() {
           if (date === t.exp) t.expData = d;
           if (t.pick) t.pickData = d;
           buildContract(t);
+          // intraday bars move all day: refresh them with every poll; daily and weekly every 10 minutes
+          if (Date.now() - (t.barsAt || 0) > (unit(t).intraday ? 10000 : 600000)) await loadBars(t);
           computeLevels(t);
         } catch { if (t.summary) t.summary = { ...t.summary, stale: true }; }
       }));
@@ -274,7 +307,7 @@ function buildContract(t) {
 // Support and resistance over the tab's RANGE; the nearest of each drives the scenarios unless you picked another.
 function computeLevels(t) {
   if (!t.bars.length || !t.spot) return;
-  t.lv = LV.findLevels(t.bars, LV.RANGES[t.range] || 126, t.spot);
+  t.lv = LV.findLevels(t.bars, LV.rangeBars(t.tf, t.range), t.spot, 4, LV.TF_TOL[t.tf]);
   if (t.autoR) t.levelR = t.lv.resistance[0] ? String(t.lv.resistance[0].price) : "";
   if (t.autoS) t.levelS = t.lv.support[0] ? String(t.lv.support[0].price) : "";
 }
@@ -303,7 +336,8 @@ function renderTab() {
   $("lv-s").value = st.levelS;
   $("l-vol").value = st.lever.volume;
   for (const b of $("overlays").children) b.setAttribute("aria-pressed", !!st.overlays[b.dataset.o]);
-  for (const b of $("ranges").children) b.setAttribute("aria-pressed", b.dataset.r === st.range);
+  renderRanges();
+  $("sig-pick-src").textContent = `TREND ON ${LV.TF_LABEL[st.tf] || "DAILY"} BARS`;
   if (chart) chart.view = st.view ? { ...st.view } : null;
   for (const b of $("osc-pick").children) b.setAttribute("aria-pressed", b.dataset.o === st.osc);
   if (st.summary) renderExps();
@@ -416,7 +450,7 @@ function sigmaDay() {
 function ctx() {
   const r = parseFloat(st.levelR), s = parseFloat(st.levelS);
   return { price: st.spot, resistance: isFinite(r) ? r : null, support: isFinite(s) ? s : null,
-           sigmaDay: sigmaDay(), volume: st.lever.volume, days: st.horizon };
+           sigmaDay: sigmaDay(), volume: st.lever.volume, days: horizonDays(), spd: unit().spd };
 }
 
 function resetLevers(paintNow = true) {
@@ -434,16 +468,21 @@ function refreshSim(rebuild) {
   if (!c || $("deck").hidden) return;
   const L = st.lever;
   if (!L.touched || L.price == null) L.price = st.spot;
-  const span = Math.max(0.12, 5 * sigmaDay() * Math.sqrt(Math.max(st.horizon, 5)));
+  const u = unit();
+  const span = u.intraday ? Math.max(0.04, 6 * sigmaDay() * Math.sqrt(Math.max(horizonDays(), 1)))
+    : Math.max(0.12, 5 * sigmaDay() * Math.sqrt(Math.max(st.horizon, 5)));
   const lp = $("l-price");
   lp.min = (st.spot * (1 - span)).toFixed(2);
   lp.max = (st.spot * (1 + span)).toFixed(2);
   lp.value = L.price;
-  $("l-day").max = Math.max(c.dte, 1);
+  $("l-day").max = u.intraday ? Math.min(Math.max(c.dte, 1), 3) : Math.max(c.dte, 1);
+  $("l-day").step = u.intraday ? String(Math.round(1e5 / u.spd) / 1e5) : "0.125";
   $("l-day").value = L.day;
   $("l-iv").value = L.iv;
   st.horizon = Math.max(1, Math.min(st.horizon, Math.max(c.dte, 1), 45));
-  $("horizon").textContent = st.horizon;
+  if (u.intraday) st.hbars = Math.max(u.hStep, Math.min(st.hbars || u.hDef, u.hMax));
+  $("horizon").textContent = u.intraday ? hours(st.hbars, u) : st.horizon;
+  $("horizon-unit").textContent = u.intraday ? `(${st.hbars} BARS)` : "DAYS";
   if (rebuild || (st.scenario && !st.story)) rebuildScenario();
   paint();
 }
@@ -462,20 +501,20 @@ function histCloses(t) {
   return c;
 }
 
-// The simulated closes, one per day, up to `step` (STEPS_PER_DAY steps a day).
-function dailyCloses(path, step) {
-  const out = [];
-  for (let s = S.STEPS_PER_DAY; s <= step && s < path.price.length; s += S.STEPS_PER_DAY) out.push(path.price[s]);
+// The simulated closes, one per chart bar, up to `step`.
+function barCloses(path, step) {
+  const out = [], spb = unit().spb;
+  for (let k = spb; k <= step && k < path.price.length; k += spb) out.push(path.price[k]);
   return out;
 }
 
-// History plus the simulated days up to where the levers are: what the indicators would read then.
+// History plus the simulated bars up to where the levers are: what the indicators would read then.
 function closesAtLever() {
-  const hist = histCloses(st), path = st.roll || st.story, L = st.lever;
-  const step = st.roll ? st.roll.upto : Math.round(L.day * S.STEPS_PER_DAY);
-  const fut = path ? dailyCloses(path, step) : [];
+  const hist = histCloses(st), path = st.roll || st.story, L = st.lever, u = unit();
+  const step = st.roll ? st.roll.upto : Math.round(L.day * u.spd);
+  const fut = path ? barCloses(path, step) : [];
   const moved = L.touched && (Math.abs(L.price - st.spot) > 1e-9 || L.day > 0);
-  if (moved && !(path && step % S.STEPS_PER_DAY === 0 && fut.length && fut.at(-1) === L.price)) fut.push(L.price);
+  if (moved && !(path && step % u.spb === 0 && fut.length && fut.at(-1) === L.price)) fut.push(L.price);
   return { closes: hist.concat(fut), histLen: hist.length, simulated: fut.length > 0 };
 }
 
@@ -513,7 +552,7 @@ function paint() {
   const ivMult = 1 + L.iv / 100;
   const val = S.valueAt(c, L.price, L.day, ivMult), pnl = S.pnlAt(c, L.price, L.day, ivMult);
   $("l-price-out").textContent = `${money(L.price)} (${pct(100 * (L.price / st.spot - 1), 1)})`;
-  $("l-day-out").textContent = L.day === 0 ? "now" : `+${L.day.toFixed(L.day % 1 ? 1 : 0)}d`;
+  $("l-day-out").textContent = L.day === 0 ? "now" : ahead(L.day);
   $("l-iv-out").textContent = `${(c.iv * ivMult * 100).toFixed(0)}% (${pct(L.iv)})`;
   $("l-vol-out").textContent = `${L.volume.toFixed(1)}× normal`;
   const el = $("sim-pnl");
@@ -538,7 +577,7 @@ function paint() {
   }
   const at = closesAtLever();
   const simVol = st.scenario ? S.volumeAt(L.volume, L.day) : null;
-  renderSignals("sig-sim", at.closes, at.simulated ? `SIGNALS · SIMULATED +${L.day.toFixed(L.day % 1 ? 1 : 0)}d` : "SIGNALS · NOW",
+  renderSignals("sig-sim", at.closes, `SIGNALS · ${LV.TF_LABEL[st.tf] || "DAILY"} · ${at.simulated ? "SIMULATED " + ahead(L.day) : "NOW"}`,
                 simVol ?? st.levels.rel_volume);
   const view = chartSeries();
   renderEvents(view);
@@ -550,7 +589,7 @@ function paint() {
 // What the charts show: the last 30 real days and the simulated days, with indicators over all of it.
 function chartSeries() {
   const hist = histCloses(st), path = st.roll || st.story;
-  const fut = path ? dailyCloses(path, st.roll ? st.roll.upto : path.price.length - 1) : [];
+  const fut = path ? barCloses(path, st.roll ? st.roll.upto : path.price.length - 1) : [];
   const all = hist.concat(fut);
   const ev = path && hist.length > 30 ? I.events(all, hist.length, ctx()) : [];
   return { hist, fut, all, ind: all.length >= 30 ? I.compute(all) : null, ev, from: Math.max(0, hist.length - 30) };
@@ -565,12 +604,18 @@ function renderEvents(view) {
     return;
   }
   box.hidden = false;
-  box.replaceChildren(...view.ev.map((e) => {
+  const MAX_SHOWN = 8, more = view.ev.length - MAX_SHOWN;
+  box.replaceChildren(...view.ev.slice(0, MAX_SHOWN).map((e) => {
     const el = document.createElement("span");
     el.className = `ev ${e.dir > 0 ? "up" : e.dir < 0 ? "down" : "flat"}`;
-    el.textContent = `DAY ${e.i - (view.hist.length - 1)} ${e.dir > 0 ? "▲" : e.dir < 0 ? "▼" : "●"} ${e.label}`;
+    el.textContent = `${unit().word} ${e.i - (view.hist.length - 1)} ${e.dir > 0 ? "▲" : e.dir < 0 ? "▼" : "●"} ${e.label}`;
     return el;
   }));
+  if (more > 0) {
+    const el = document.createElement("span");
+    el.textContent = `+${more} more: hover the chart markers`;
+    box.append(el);
+  }
 }
 
 // ---------------------------------------------------------------- play
@@ -582,7 +627,7 @@ function play() {
   const roll = S.simulatePath(t.scenario, ctx(), rng);
   const mine = { ...roll, upto: 0 };
   t.roll = mine;
-  const n = roll.price.length - 1, dur = Math.min(4000 + t.horizon * 900, 14000), t0 = performance.now();
+  const n = roll.price.length - 1, dur = Math.min(4000 + (unit(t).intraday ? Math.min(t.hbars, 80) * 90 : t.horizon * 900), 14000), t0 = performance.now();
   $("play").textContent = "■ STOP";
   $("deck").classList.add("playing");
   const frame = (now) => {
@@ -641,7 +686,7 @@ function hline(g, y, x0, x1, color, label, dash = [], at = 0) {
 
 // The interactive chart's model: real candles, the simulated days as hollow candles, indicators over both.
 function simCandles(path, upto) {
-  const out = [], per = S.STEPS_PER_DAY;
+  const out = [], per = unit().spb;
   for (let d = 1; (d - 1) * per < upto; d++) {
     const a = (d - 1) * per, b = Math.min(d * per, upto);
     let h = -Infinity, l = Infinity;
@@ -655,14 +700,15 @@ function drawChart(view) {
   if (!chart) chart = new PriceChart($("future"), { onViewChange: (v) => { st.view = { ...v }; } });
   const bars = st.bars.map((b) => ({ ...b }));
   if (!bars.length) return;
-  const hiIdx = bars.length - 1, last = bars[hiIdx];
+  const u = unit(), hiIdx = bars.length - 1, last = bars[hiIdx];
   last.c = st.spot; last.h = Math.max(last.h, st.spot); last.l = Math.min(last.l, st.spot);
   const story = st.story, roll = st.roll, L = st.lever;
-  const toPts = (p, upto) => p.price.slice(0, upto + 1).map((v, i) => ({ s: hiIdx + p.day[i], p: v }));
-  const futureDays = st.scenario ? st.horizon : Math.ceil(L.day);
-  const avg = st.levels.avg_volume;
+  const toPts = (p, upto) => p.price.slice(0, upto + 1).map((v, i) => ({ s: hiIdx + i / u.spb, p: v }));
+  const futureBars = st.scenario && story ? Math.ceil((story.price.length - 1) / u.spb) : Math.ceil(L.day * u.spd / u.spb);
+  const done = bars.slice(-21, -1).map((b) => b.v).filter((v) => v > 0);
+  const avg = done.length ? done.reduce((a, b) => a + b, 0) / done.length : null;      // 20-bar average volume
   const simVol = [];
-  if (st.scenario && avg) for (let d = 1; d <= st.horizon; d++) simVol.push({ s: hiIdx + d, v: avg * S.volumeAt(L.volume, d - 1) });
+  if (st.scenario && avg) for (let k = 1; k <= futureBars; k++) simVol.push({ s: hiIdx + k, v: avg * S.volumeAt(L.volume, (k - 1) * u.spb / u.spd) });
   const r = parseFloat(st.levelR), sp = parseFloat(st.levelS);
   const levels = [];
   for (const [list, kind, active] of [[st.lv?.resistance || [], "R", r], [st.lv?.support || [], "S", sp]]) {
@@ -675,17 +721,61 @@ function drawChart(view) {
     if (!found && isFinite(active)) levels.push({ price: active, kind, active: true, touches: 0 });
   }
   chart.setModel({
-    bars, histLen: bars.length, futureDays, closes: view.all, ind: view.ind, overlays: st.overlays, osc: st.osc,
-    showVolume: st.overlays.vol !== false, avgVolume: avg, levels,
+    bars, histLen: bars.length, futureBars, closes: view.all, ind: view.ind, overlays: st.overlays, osc: st.osc,
+    showVolume: st.overlays.vol !== false, avgVolume: avg, levels, intraday: !!u.intraday, barWord: u.word,
+    futureLabel: (k) => (u.intraday ? `+${hours(k, u)}` : u.word === "WEEK" ? `W+${k}` : `D+${k}`),
     strike: st.contract?.strike ?? null, breakeven: st.contract ? S.breakeven(st.contract) : null,
-    band: story && st.mc ? st.mc.lo.map((lo, i) => ({ s: hiIdx + i / S.STEPS_PER_DAY, lo, hi: st.mc.hi[i] })) : null,
+    band: story && st.mc ? st.mc.lo.map((lo, i) => ({ s: hiIdx + i / u.spb, lo, hi: st.mc.hi[i] })) : null,
     story: story ? toPts(story, story.price.length - 1) : null,
     roll: roll ? toPts(roll, roll.upto) : null,
     simBars: roll ? simCandles(roll, roll.upto).map((c) => ({ ...c, s: hiIdx + c.d })) : [],
-    simVol, lever: { s: hiIdx + L.day, p: L.price }, markers: view.ev,
-    defaultBars: LV.RANGES[st.range] || 126,
+    simVol, lever: { s: hiIdx + L.day * u.spd / u.spb, p: L.price }, markers: view.ev,
+    defaultBars: LV.rangeBars(st.tf, st.range),
   }, st.view);
   if (!st.view) st.view = { ...chart.view };
+}
+
+// The RANGE buttons belong to the timeframe: a 5-minute chart offers days, a weekly one offers years.
+function renderRanges() {
+  const box = $("ranges"), set = (LV.TF_RANGES[st.tf] || LV.TF_RANGES["1d"]).set;
+  if (!(st.range in set)) st.range = (LV.TF_RANGES[st.tf] || LV.TF_RANGES["1d"]).start;
+  const label = document.createElement("span");
+  label.className = "k";
+  label.textContent = "RANGE";
+  box.replaceChildren(label, ...Object.keys(set).map((r) => {
+    const b = document.createElement("button");
+    b.className = "tg";
+    b.textContent = r;
+    b.setAttribute("aria-pressed", r === st.range);
+    b.addEventListener("click", () => {
+      stopPlay();
+      st.range = r;
+      computeLevels(st);
+      st.view = null;
+      if (chart) chart.view = null;
+      st.roll = null; rebuildScenario(); saveTabs(); renderRanges(); paint();
+    });
+    return b;
+  }));
+  for (const b of $("tfs").children) if (b.dataset.tf) b.setAttribute("aria-pressed", b.dataset.tf === st.tf);
+}
+
+async function setTimeframe(tf) {
+  if (tf === st.tf) return;
+  stopPlay();
+  const t = st;
+  t.tf = tf;
+  t.range = LV.TF_RANGES[tf].start;
+  t.hbars = TF_UNIT[tf].hDef || t.hbars;
+  t.view = null; t.roll = null; t.story = null; t.mc = null;
+  t.lever = { price: t.spot, day: 0, iv: 0, volume: t.lever.volume, touched: false };
+  if (chart) chart.view = null;
+  saveTabs();
+  renderRanges();
+  await loadBars(t);
+  if (t !== st) return;
+  rebuildScenario();
+  renderTab();
 }
 
 function renderLevelChips() {
@@ -839,7 +929,12 @@ function wire() {
     });
     return b;
   }));
-  const horizon = (d) => { st.horizon += d; st.roll = null; refreshSim(true); saveTabs(); };
+  const horizon = (d) => {
+    stopPlay();
+    const u = unit();
+    if (u.intraday) st.hbars = Math.max(u.hStep, Math.min(st.hbars + d * u.hStep, u.hMax)); else st.horizon += d;
+    st.roll = null; refreshSim(true); saveTabs();
+  };
   $("h-up").addEventListener("click", () => horizon(1));
   $("h-dn").addEventListener("click", () => horizon(-1));
   $("play").addEventListener("click", () => (playing ? stopPlay() : play()));
@@ -856,17 +951,7 @@ function wire() {
   for (const [id, key, flag] of [["lv-r-auto", "levelR", "autoR"], ["lv-s-auto", "levelS", "autoS"]]) {
     $(id).addEventListener("click", () => { stopPlay(); st[flag] = true; computeLevels(st); st.roll = null; rebuildScenario(); saveTabs(); paint(); });
   }
-  for (const b of $("ranges").children) {
-    b.addEventListener("click", () => {
-      stopPlay();
-      st.range = b.dataset.r;
-      for (const x of $("ranges").children) x.setAttribute("aria-pressed", x === b);
-      computeLevels(st);
-      st.view = null;
-      if (chart) chart.view = null;
-      st.roll = null; rebuildScenario(); saveTabs(); paint();
-    });
-  }
+  for (const b of $("tfs").children) if (b.dataset.tf) b.addEventListener("click", () => setTimeframe(b.dataset.tf));
   $("zoom-in").addEventListener("click", () => chart?.zoom(1 / 1.4));
   $("zoom-out").addEventListener("click", () => chart?.zoom(1.4));
   $("zoom-reset").addEventListener("click", () => { if (chart) { chart.resetView(); chart.draw(); } });
@@ -896,6 +981,7 @@ function restore() {
   tabs = (saved?.tabs || []).slice(0, MAX_TABS).map((t) => {
     const n = newTab(t);
     if (n.pick && n.pick.expiration < today) { n.pick = null; n.scenario = null; }
+    if (!TF_UNIT[n.tf]) n.tf = "1d";
     return n;
   });
   if (!tabs.length) tabs.push(newTab());

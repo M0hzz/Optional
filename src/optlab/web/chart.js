@@ -32,7 +32,7 @@ export class PriceChart {
     this._wire();
   }
 
-  // m: {bars, histLen, futureDays, closes, ind, overlays, osc, levels, strike, breakeven, band, story, roll,
+  // m: {bars, histLen, futureBars, closes, ind, overlays, osc, levels, strike, breakeven, band, story, roll,
   //     simBars, simVol, lever, markers, defaultBars}
   setModel(m, view) {
     const prevLast = this.m ? this.lastSlot() : null;
@@ -47,10 +47,10 @@ export class PriceChart {
     this.draw();
   }
 
-  lastSlot() { return this.m.histLen - 1 + Math.max(this.m.futureDays, 0); }
+  lastSlot() { return this.m.histLen - 1 + Math.max(this.m.futureBars, 0); }
 
   defaultView() {
-    const end = this.lastSlot() + 0.8, show = Math.min(this.m.defaultBars, this.m.histLen) + Math.max(this.m.futureDays, 0) + 1;
+    const end = this.lastSlot() + 0.8, show = Math.min(this.m.defaultBars, this.m.histLen) + Math.max(this.m.futureBars, 0) + 1;
     return { a: end - show, b: end };
   }
 
@@ -62,7 +62,7 @@ export class PriceChart {
   zoom(f, atX = null) {
     const { a, b } = this.view, w = b - a;
     const anchor = atX == null ? (a + b) / 2 : this.invX(atX);
-    const nw = Math.min(Math.max(w * f, 8), this.m.histLen + this.m.futureDays + 20);
+    const nw = Math.min(Math.max(w * f, 8), this.m.histLen + this.m.futureBars + 20);
     const k = (anchor - a) / w;
     this.view = { a: anchor - k * nw, b: anchor - k * nw + nw };
     this._clamp();
@@ -146,7 +146,7 @@ export class PriceChart {
     const hiIdx = m.histLen - 1;
     // piecewise x: real days on the left of `split`, simulated days on the right
     let split = x0 + (hiIdx - a) / (b - a) * (x1 - x0);
-    const both = m.futureDays > 0 && a < hiIdx && b > hiIdx;
+    const both = m.futureBars > 0 && a < hiIdx && b > hiIdx;
     if (both) split = Math.min(split, x1 - SIM_SHARE * (x1 - x0));
     const X = both
       ? (s) => (s <= hiIdx ? x0 + (s - a) / (hiIdx - a) * (split - x0) : split + (s - hiIdx) / (b - hiIdx) * (x1 - split))
@@ -183,7 +183,7 @@ export class PriceChart {
     g.strokeStyle = C.grid; g.lineWidth = 1;
     const ticks = niceTicks(lo, hi, 5);
     for (const t of ticks) { g.beginPath(); g.moveTo(x0, Y(t)); g.lineTo(x1, Y(t)); g.stroke(); }
-    if (m.futureDays > 0 && visible(hiIdx)) {
+    if (m.futureBars > 0 && visible(hiIdx)) {
       g.fillStyle = "rgba(125, 255, 90, 0.035)";
       g.fillRect(X(hiIdx), P.top, x1 - X(hiIdx), O.bot - P.top);
       g.strokeStyle = "rgba(125, 255, 90, 0.35)"; g.setLineDash([3, 4]);
@@ -331,7 +331,7 @@ export class PriceChart {
     for (const t of ticks) g.fillText(fmt(t), x1 + 6, Y(t) + 4);
     g.fillText(m.osc === "rsi" ? "RSI 14" : "MACD 12/26/9", x0 + 4, O.top + 12);
     if (m.osc === "rsi" && this.OY) { g.fillText("70", x1 + 6, this.OY(70) + 4); g.fillText("30", x1 + 6, this.OY(30) + 4); }
-    if (m.showVolume) g.fillText("VOLUME" + (m.avgVolume ? " · dashed: 20-day average" : ""), x0 + 4, V.top + 12);
+    if (m.showVolume) g.fillText("VOLUME" + (m.avgVolume ? " · dashed: 20-bar average" : ""), x0 + 4, V.top + 12);
     // level tags on the axis
     for (const lv of m.levels) {
       if (lv.price < lo || lv.price > hi) continue;
@@ -342,7 +342,7 @@ export class PriceChart {
     let lx = x0 + 6;
     const legend = [...overlays.filter((o) => o[3]).map((o) => [o[3], o[1]])];
     if (m.levels.length) legend.push(["RES", C.res], ["SUP", C.sup]);
-    for (const [label, color] of legend) { g.fillStyle = color; g.fillText(label, lx, P.top + 12 + (m.futureDays > 0 ? 14 : 0)); lx += g.measureText(label).width + 10; }
+    for (const [label, color] of legend) { g.fillStyle = color; g.fillText(label, lx, P.top + 12 + (m.futureBars > 0 ? 14 : 0)); lx += g.measureText(label).width + 10; }
     // x axis: dates for real days, D+n for simulated ones
     g.fillStyle = C.axis;
     const step = Math.max(1, Math.ceil(70 / slotW));
@@ -352,8 +352,11 @@ export class PriceChart {
       if (s >= 0 && s <= hiIdx) {
         const d = m.bars[s].d, prev = s > 0 ? m.bars[s - 1].d : null;
         const monthStart = prev && d.slice(0, 7) !== prev.slice(0, 7);
-        if (step <= 25 ? (s % step === 0) : monthStart) label = step > 25 && d.slice(5, 7) === "01" ? d.slice(0, 4) : shortDate(d);
-      } else if (s > hiIdx && s <= this.lastSlot()) label = `D+${s - hiIdx}`;
+        if (m.intraday) {                                  // times within a day, the date where a new day starts
+          const dayStart = !prev || d.slice(0, 10) !== prev.slice(0, 10);
+          if (dayStart) label = shortDate(d); else if (s % step === 0) label = d.slice(11, 16);
+        } else if (step <= 25 ? (s % step === 0) : monthStart) label = step > 25 && d.slice(5, 7) === "01" ? d.slice(0, 4) : shortDate(d);
+      } else if (s > hiIdx && s <= this.lastSlot()) label = m.futureLabel ? m.futureLabel(s - hiIdx) : `D+${s - hiIdx}`;
       if (!label) continue;
       const px = X(s);
       if (px - lastLabelX < 60) continue;
@@ -414,8 +417,8 @@ export class PriceChart {
     g.setLineDash([]);
     const rows = [];
     let bar = null, title;
-    if (s <= hiIdx) { bar = m.bars[s]; title = longDate(bar.d); }
-    else { bar = m.simBars.find((q) => q.s === s); title = `SIMULATED DAY +${s - hiIdx}`; }
+    if (s <= hiIdx) { bar = m.bars[s]; title = (m.barWord === "WEEK" ? "Week of " : "") + longDate(bar.d) + (m.intraday ? ` ${bar.d.slice(11, 16)}` : ""); }
+    else { bar = m.simBars.find((q) => q.s === s); title = `SIMULATED ${m.futureLabel ? m.futureLabel(s - hiIdx) : "D+" + (s - hiIdx)}`; }
     if (bar) rows.push(["O", fmt(bar.o)], ["H", fmt(bar.h)], ["L", fmt(bar.l)], ["C", fmt(bar.c)]);
     else if (s > hiIdx && m.closes[s] != null) rows.push(["C (story)", fmt(m.closes[s])]);
     if (bar && s > 0) {

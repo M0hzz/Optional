@@ -136,15 +136,18 @@ export function gaussian(rng) {
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * rng());
 }
 
-// One possible future: arrays over time steps (STEPS_PER_DAY per day). rng = null gives the story with no noise.
+// One possible future: arrays over time steps. rng = null gives the story with no noise.
+// ctx.spd = steps per day: 8 by default; an intraday chart passes its bars per session (78 for 5-minute bars),
+// with ctx.days a fraction of a day, so each step is one bar.
 export function simulatePath(id, ctx, rng = null) {
-  const n = Math.round(ctx.days * STEPS_PER_DAY), wp = waypoints(id, ctx);
+  const spd = ctx.spd || STEPS_PER_DAY;
+  const n = Math.max(1, Math.round(ctx.days * spd)), wp = waypoints(id, ctx);
   const noiseScale = id === "chop" ? 0.6 : 0.8;                   // the story leads; the noise is most of a normal day
   const price = new Array(n + 1), ivMult = new Array(n + 1), day = new Array(n + 1);
   let drift = 0;
   for (let i = 0; i <= n; i++) {
-    const d = i / STEPS_PER_DAY, v = volumeAt(ctx.volume, d);
-    if (rng && i > 0) drift += ctx.sigmaDay * Math.sqrt(v / STEPS_PER_DAY) * noiseScale * gaussian(rng);
+    const d = i / spd, v = volumeAt(ctx.volume, d);
+    if (rng && i > 0) drift += ctx.sigmaDay * Math.sqrt(v / spd) * noiseScale * gaussian(rng);
     day[i] = d;
     price[i] = Math.max(through(wp, d) * Math.exp(drift), 0.01);
     ivMult[i] = ivRule(price[i] / ctx.price - 1, v, scenarioIv(id, d));
@@ -156,7 +159,7 @@ const pct = (sorted, q) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.r
 
 // Many futures under one scenario: the price band at each step and the spread of results at the end.
 export function monteCarlo(id, ctx, contract, runs = 300, seed = 1) {
-  const rng = mulberry32(seed), n = Math.round(ctx.days * STEPS_PER_DAY);
+  const rng = mulberry32(seed), n = Math.max(1, Math.round(ctx.days * (ctx.spd || STEPS_PER_DAY)));
   const cols = Array.from({ length: n + 1 }, () => new Float64Array(runs));
   const ends = new Float64Array(runs);
   for (let r = 0; r < runs; r++) {

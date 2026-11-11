@@ -33,7 +33,7 @@ export function corrBeta(A, B, n = 60) {
 const retPct = (x, n) => (x.length > n ? 100 * (x[x.length - 1] / x[x.length - 1 - n] - 1) : null);
 
 // a, b: {bars, changePct (today, %), verdict ("UPTREND" | "DOWNTREND" | "MIXED" | undefined)}
-export function relation(a, b) {
+export function relation(a, b, unit = "days") {
   const { A, B } = align(a.bars, b.bars);
   if (A.length < 25) return null;
   const { corr, beta } = corrBeta(A, B);
@@ -44,7 +44,7 @@ export function relation(a, b) {
   if (a.verdict && b.verdict && a.verdict !== "MIXED" && b.verdict !== "MIXED" && a.verdict !== b.verdict) flags.push("TRENDS DISAGREE");
   if (gap != null && Math.abs(gap) >= 1.5) flags.push(gap > 0 ? "STRONGER THAN ITS LINK TODAY" : "WEAKER THAN ITS LINK TODAY");
   if (corr != null && corr < 0.3) flags.push("LINK IS WEAK LATELY");
-  const lead = s20 == null ? "" : Math.abs(s20) < 1 ? "moving in step over 20 days" : s20 > 0 ? `leading by ${s20.toFixed(1)} pts over 20 days` : `lagging by ${Math.abs(s20).toFixed(1)} pts over 20 days`;
+  const lead = s20 == null ? "" : Math.abs(s20) < 1 ? `moving in step over 20 ${unit}` : s20 > 0 ? `leading by ${s20.toFixed(1)} pts over 20 ${unit}` : `lagging by ${Math.abs(s20).toFixed(1)} pts over 20 ${unit}`;
   return { corr, beta, s5, s20, gap, flags, lead, days: A.length };
 }
 

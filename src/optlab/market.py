@@ -11,7 +11,10 @@ import time
 from datetime import date, datetime, timezone
 
 CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
-YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5y&interval=1d"
+YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range={}&interval={}"
+# timeframe -> (Yahoo interval, how far back to ask, seconds a fetched copy is reused). Weekly is built from daily.
+TIMEFRAMES = {"5m": ("5m", "10d", 20), "15m": ("15m", "1mo", 30), "1h": ("60m", "6mo", 60), "1d": ("1d", "5y", 600),
+              "1w": ("1d", "5y", 600)}
 OCC_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5d&interval=1d"
 YAHOO_INDEX = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT", "VIX": "^VIX", "XSP": "^XSP", "DJX": "^DJI",
@@ -104,26 +107,67 @@ def parse_chain(payload: dict, today: date | None = None) -> dict:
             "as_of": payload.get("timestamp"), "expirations": exps}
 
 
-def fetch_bars(symbol: str, get=_get) -> list[dict]:
-    """About five years of daily bars from Yahoo: [{'d', 'o', 'h', 'l', 'c', 'v'}], oldest first."""
+def fetch_bars(symbol: str, tf: str = "1d", get=_get) -> list[dict]:
+    """Price bars from Yahoo, oldest first: [{'d', 'o', 'h', 'l', 'c', 'v'}].
+    tf: 5m (10 days back), 15m (a month), 1h (6 months), 1d (5 years) or 1w (5 years, built from the daily bars).
+    'd' is the date for daily and weekly bars, and the exchange's local date and time ("2026-11-11T09:35") for
+    intraday ones. Regular trading hours only."""
     sym = clean_symbol(symbol)
-    r = get(YAHOO_URL.format(YAHOO_INDEX.get(sym, sym.replace(".", "-"))))
+    if tf not in TIMEFRAMES:
+        raise MarketError("Timeframe must be 5m, 15m, 1h, 1d or 1w.")
+    interval, back, _ = TIMEFRAMES[tf]
+    r = get(YAHOO_URL.format(YAHOO_INDEX.get(sym, sym.replace(".", "-")), back, interval))
     if r.status_code != 200:
         raise MarketError(f"No price history for {sym} right now (HTTP {r.status_code}).")
+    intraday = tf in ("5m", "15m", "1h")
     try:
         res = r.json()["chart"]["result"][0]
         q = res["indicators"]["quote"][0]
+        zone = _zone(res["meta"].get("exchangeTimezoneName")) if intraday else timezone.utc
+        stamps = list(res["timestamp"])
+        step = {"5m": 300, "15m": 900, "1h": 3600}.get(tf)
+        if step and len(stamps) >= 2 and stamps[-1] - stamps[-2] < step:
+            stamps = stamps[:-1]            # Yahoo adds a "price right now" row off the bar grid: not a bar
         out = []
-        for i, ts in enumerate(res["timestamp"]):
+        for i, ts in enumerate(stamps):
             o, h, lo, c, v = (q[k][i] for k in ("open", "high", "low", "close", "volume"))
             if None in (o, h, lo, c):
                 continue
-            out.append({"d": datetime.fromtimestamp(ts, timezone.utc).date().isoformat(), "o": round(o, 4),
+            when = datetime.fromtimestamp(ts, zone)
+            out.append({"d": when.strftime("%Y-%m-%dT%H:%M") if intraday else when.date().isoformat(), "o": round(o, 4),
                         "h": round(h, 4), "l": round(lo, 4), "c": round(c, 4), "v": int(v or 0)})
     except (KeyError, IndexError, TypeError, ValueError):
         raise MarketError(f"No price history for {sym} right now.") from None
+    if tf == "1w":
+        out = weekly(out)
     if len(out) < 25:
         raise MarketError(f"Not enough price history for {sym}.")
+    return out
+
+
+def _zone(name):
+    """The exchange's time zone (it knows about daylight saving); New York if Yahoo doesn't say."""
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        return ZoneInfo(name or "America/New_York")
+    except (ZoneInfoNotFoundError, ValueError):
+        return ZoneInfo("America/New_York")
+
+
+def weekly(daily: list[dict]) -> list[dict]:
+    """Daily bars grouped into calendar weeks: first open, highest high, lowest low, last close, summed volume.
+    'd' is the week's first trading day. The current week is included, still forming."""
+    out: list[dict] = []
+    key = None
+    for b in daily:
+        k = date.fromisoformat(b["d"]).isocalendar()[:2]
+        if k != key:
+            out.append(dict(b))
+            key = k
+        else:
+            w = out[-1]
+            w["h"], w["l"], w["c"], w["v"] = max(w["h"], b["h"]), min(w["l"], b["l"]), b["c"], w["v"] + b["v"]
     return out
 
 

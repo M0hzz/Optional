@@ -73,3 +73,18 @@ test("Monte Carlo is repeatable, brackets the story, and agrees with the directi
   const wide = S.monteCarlo("breakout", { ...ctx, volume: 4 }, call, 300, 7);
   assert.ok(wide.hi.at(-1) - wide.lo.at(-1) > a.hi.at(-1) - a.lo.at(-1));
 });
+
+test("intraday: steps per day follow the chart's bars, and a short horizon moves less", () => {
+  const day = { ...ctx, days: 1, spd: 78 };                        // one session of 5-minute bars
+  const p = S.simulatePath("surge_up", day);
+  assert.equal(p.price.length, 79);
+  near(p.day.at(-1), 1, 1e-12);
+  near(p.price.at(-1), S.simulatePath("surge_up", { ...ctx, days: 1 }).price.at(-1), 1e-9);   // same story, finer steps
+  const twoHours = S.simulatePath("surge_up", { ...ctx, days: 24 / 78, spd: 78 });
+  assert.equal(twoHours.price.length, 25);
+  assert.ok(twoHours.price.at(-1) > 100 && twoHours.price.at(-1) < p.price.at(-1));
+  const call = S.makeContract({ occ: "C", strike: 101, bid: 0.9, ask: 1.0, mid: 0.95, iv: 0.2 }, true, 5, 100);
+  const mc = S.monteCarlo("surge_up", { ...ctx, days: 24 / 78, spd: 78 }, call, 200, 3);
+  assert.equal(mc.lo.length, 25);
+  assert.ok(mc.lo.at(-1) < twoHours.price.at(-1) && twoHours.price.at(-1) < mc.hi.at(-1));
+});

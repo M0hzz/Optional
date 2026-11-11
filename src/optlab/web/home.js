@@ -14,22 +14,26 @@ import * as R from "./rel.js";
 
 const KEY = "optlab-sim-watch-v1";
 const MAX_SYMBOLS = 24;
-const BARS_EVERY_MS = 10 * 60 * 1000;
+const INTRADAY = new Set(["5m", "15m", "1h"]);
 const clean = (s) => String(s || "").trim().toUpperCase().replace(/[-/ ]/g, ".").replace(/[^A-Z0-9.]/g, "").slice(0, 8);
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 
 export function createHome(app) {
   const { $, api, money, signed, pct, tone } = app;
-  let cfg = { watch: ["SPY", "QQQ", "NVDA"], chains: [{ anchor: "NVDA", links: ["QQQ", "SPY"] }], range: "6M", dock: true };
+  let cfg = { watch: ["SPY", "QQQ", "NVDA"], chains: [{ anchor: "NVDA", links: ["QQQ", "SPY"] }], range: "6M", tf: "1d", dock: true };
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) || "null");
     if (saved && Array.isArray(saved.watch)) cfg = { ...cfg, ...saved };
+    if (!LV.TF_RANGES[cfg.tf]) cfg.tf = "1d";
   } catch { /* defaults */ }
   const data = new Map();          // sym -> {quote, bars, barsAt, read, lv, err}
   let openCard = null;             // the dock symbol whose detail card is open
 
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch { /* private window */ } };
-  const symbols = () => [...new Set([...cfg.watch, ...cfg.chains.flatMap((c) => [c.anchor, ...c.links])])].slice(0, MAX_SYMBOLS);
+  // everything whose trend the home page shows: watched symbols, chain members and the positions' underlyings
+  const symbols = () => [...new Set([...cfg.watch, ...cfg.chains.flatMap((c) => [c.anchor, ...c.links]),
+                                     ...app.positions().map((p) => p.symbol)])].slice(0, MAX_SYMBOLS);
+  const unitWord = () => (cfg.tf === "1d" ? "days" : cfg.tf === "1w" ? "weeks" : "bars");
   const get = (sym) => { if (!data.has(sym)) data.set(sym, {}); return data.get(sym); };
 
   function compute(sym) {
@@ -40,16 +44,18 @@ export function createHome(app) {
     closes[closes.length - 1] = price;
     d.price = price;
     d.read = closes.length >= 30 ? I.readout(closes) : null;
-    d.lv = LV.findLevels(d.bars, LV.RANGES[cfg.range] || 126, price);
+    d.lv = LV.findLevels(d.bars, LV.rangeBars(cfg.tf, cfg.range), price, 4, LV.TF_TOL[cfg.tf]);
   }
 
   async function refresh() {
     const syms = symbols();
     if (!syms.length) return render();
     const now = Date.now();
-    const needBars = syms.filter((s) => !get(s).bars || now - (get(s).barsAt || 0) > BARS_EVERY_MS);
-    const jobs = needBars.map((s) => api(`/api/bars/${encodeURIComponent(s)}`).then((b) => {
-      Object.assign(get(s), { bars: b.bars, avgVolume: b.levels.avg_volume, barsAt: Date.now(), err: null });
+    const tf = cfg.tf, every = INTRADAY.has(tf) ? 25000 : 600000;
+    const needBars = syms.filter((s) => !get(s).bars || get(s).tf !== tf || now - (get(s).barsAt || 0) > every);
+    const jobs = needBars.map((s) => api(`/api/bars/${encodeURIComponent(s)}?tf=${tf}`).then((b) => {
+      if (cfg.tf !== tf) return;
+      Object.assign(get(s), { bars: b.bars, tf, avgVolume: b.levels.avg_volume, barsAt: Date.now(), err: null });
     }).catch((e) => { get(s).err = e.message; }));
     jobs.push(api(`/api/quotes?symbols=${encodeURIComponent(syms.join(","))}`).then((r) => {
       for (const [s, q] of Object.entries(r.quotes)) {
@@ -121,9 +127,11 @@ export function createHome(app) {
       const bv = el("span", "v", signed(p.simPnl, 0)); tone(bv, p.simPnl || 0); b.append(bv, el("span", "k2", p.simNote));
       const c = el("div"); c.append(el("span", "k", p.symbol), el("span", "v", money(p.spot)), chg(p.changePct));
       nums.append(a, b, c);
+      const h = get(p.symbol);                      // the home page's timeframe, once its bars are in
+      const read = h.read ?? p.read, lv = h.lv ?? p.lv;
       const tr = el("div", "pos-trend");
-      tr.append(trendChip(p.read), lights(p.read));
-      card.append(head, nums, tr, rangeBar(p.spot, p.lv, [{ v: p.strike, cls: "strike", title: `strike ${p.strike}` }, { v: p.breakeven, cls: "be", title: `breakeven ${p.breakeven.toFixed(2)}` }]));
+      tr.append(trendChip(read), lights(read));
+      card.append(head, nums, tr, rangeBar(p.spot, lv, [{ v: p.strike, cls: "strike", title: `strike ${p.strike}` }, { v: p.breakeven, cls: "be", title: `breakeven ${p.breakeven.toFixed(2)}` }]));
       card.addEventListener("click", () => app.openTab(p.index));
       return card;
     }));
@@ -172,7 +180,16 @@ export function createHome(app) {
 
   function renderMonitor() {
     $("home-monitor").replaceChildren(...cfg.watch.map(monitorCard));
-    for (const b of $("home-ranges").children) b.setAttribute("aria-pressed", b.dataset.r === cfg.range);
+    const set = LV.TF_RANGES[cfg.tf].set;
+    if (!(cfg.range in set)) cfg.range = LV.TF_RANGES[cfg.tf].start;
+    const lab = el("span", "k", "LEVELS FROM");
+    $("home-ranges").replaceChildren(lab, ...Object.keys(set).map((r) => {
+      const b = el("button", "tg", r);
+      b.setAttribute("aria-pressed", r === cfg.range);
+      b.addEventListener("click", () => { cfg.range = r; save(); symbols().forEach(compute); render(); });
+      return b;
+    }));
+    for (const b of $("home-tfs").children) if (b.dataset.tf) b.setAttribute("aria-pressed", b.dataset.tf === cfg.tf);
   }
 
   // ------------------------------------------------------------ home: chains
@@ -183,14 +200,15 @@ export function createHome(app) {
     const name = el("button", "mon-sym", link);
     name.addEventListener("click", () => app.openSymbol(link));
     row.append(name, el("span", "rel-px", d.price != null ? money(d.price) : "…"), chg(d.quote?.change_pct), trendChip(d.read));
-    const r = d.bars && get(anchor).bars ? R.relation(side(anchor), side(link)) : null;
+    const r = d.bars && get(anchor).bars ? R.relation(side(anchor), side(link), unitWord()) : null;
+    const U = unitWord().toUpperCase();
     const cells = el("div", "rel-cells");
     const cell = (k, v, title, cls = "") => { const c = el("div", `rel-cell ${cls}`); c.title = title; c.append(el("span", "k", k), el("span", "v", v)); cells.append(c); };
     if (r) {
-      cell("MOVE TOGETHER", `${r.corr == null ? "—" : r.corr.toFixed(2)} ${R.corrWord(r.corr)}`, "Correlation of daily returns, last 60 days: 1 = together, 0 = unrelated, −1 = opposite");
+      cell("MOVE TOGETHER", `${r.corr == null ? "—" : r.corr.toFixed(2)} ${R.corrWord(r.corr)}`, `Correlation of returns over the last 60 ${unitWord()}: 1 = together, 0 = unrelated, −1 = opposite`);
       cell(`${anchor} PER 1%`, r.beta == null ? "—" : `${r.beta.toFixed(2)}%`, `How much ${anchor} moves when ${link} moves 1% (beta, 60 days)`);
-      cell("5 DAYS", r.s5 == null ? "—" : `${r.s5 >= 0 ? "+" : "−"}${Math.abs(r.s5).toFixed(1)} pts`, `${anchor}'s 5-day return minus ${link}'s`, r.s5 > 0 ? "up" : r.s5 < 0 ? "down" : "");
-      cell("20 DAYS", r.s20 == null ? "—" : `${r.s20 >= 0 ? "+" : "−"}${Math.abs(r.s20).toFixed(1)} pts`, `${anchor}'s 20-day return minus ${link}'s`, r.s20 > 0 ? "up" : r.s20 < 0 ? "down" : "");
+      cell(`5 ${U}`, r.s5 == null ? "—" : `${r.s5 >= 0 ? "+" : "−"}${Math.abs(r.s5).toFixed(1)} pts`, `${anchor}'s return over 5 ${unitWord()} minus ${link}'s`, r.s5 > 0 ? "up" : r.s5 < 0 ? "down" : "");
+      cell(`20 ${U}`, r.s20 == null ? "—" : `${r.s20 >= 0 ? "+" : "−"}${Math.abs(r.s20).toFixed(1)} pts`, `${anchor}'s return over 20 ${unitWord()} minus ${link}'s`, r.s20 > 0 ? "up" : r.s20 < 0 ? "down" : "");
       cell("GAP TODAY", r.gap == null ? "—" : `${r.gap >= 0 ? "+" : "−"}${Math.abs(r.gap).toFixed(2)}%`, `${anchor}'s change today minus what ${link}'s move implies (beta × its change)`, Math.abs(r.gap ?? 0) >= 1.5 ? "hot" : "");
     }
     row.append(cells);
@@ -252,7 +270,7 @@ export function createHome(app) {
       chip.append(top);
       let rel = null;
       if (linked.has(sym) && curSide && d.bars) rel = R.relation(curSide, side(sym));
-      const sub = el("span", "dchip-sub", rel ? `⛓ ${cur} ${rel.lead.replace(" over 20 days", "")}${rel.flags.length ? " · " + rel.flags[0] : ""}`
+      const sub = el("span", "dchip-sub", rel ? `⛓ ${cur} ${rel.lead.replace(/ over 20 \w+$/, "")}${rel.flags.length ? " · " + rel.flags[0] : ""}`
         : `${d.read?.verdict.value ?? ""}${d.read?.rsi ? " · RSI " + d.read.rsi.value : ""}`);
       if (rel?.flags.length) sub.classList.add("flagged");
       chip.append(sub);
@@ -312,8 +330,15 @@ export function createHome(app) {
     $("home-chain-anchor").value = $("home-chain-links").value = "";
     save(); refresh();
   });
-  for (const b of $("home-ranges").children) {
-    b.addEventListener("click", () => { cfg.range = b.dataset.r; save(); symbols().forEach(compute); render(); });
+  for (const b of $("home-tfs").children) {
+    if (!b.dataset.tf) continue;
+    b.addEventListener("click", () => {
+      if (cfg.tf === b.dataset.tf) return;
+      cfg.tf = b.dataset.tf;
+      cfg.range = LV.TF_RANGES[cfg.tf].start;
+      for (const d of data.values()) { d.read = null; d.lv = null; }        // stale until the new bars arrive
+      save(); render(); refresh();
+    });
   }
   $("dock-toggle").addEventListener("click", () => { cfg.dock = !cfg.dock; openCard = null; save(); renderDock(); });
 
