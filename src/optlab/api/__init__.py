@@ -4,12 +4,14 @@
     GET /api/chain/{symbol}/{date}   the calls and puts of one expiration
     GET /api/bars/{symbol}           daily bars and the levels the simulator uses
     GET /api/quotes?symbols=A,B      light quotes for the home page monitor (no option chain needed)
+    GET /api/version                 changes when a new version is installed: open pages reload themselves
 
 It answers only to localhost and your Tailscale name (OPTLAB_ALLOWED_HOSTS to change), so a web page you
 happen to visit can't reach it through your browser.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -19,7 +21,24 @@ from fastapi.staticfiles import StaticFiles
 
 from .. import market
 
-WEB = Path(__file__).resolve().parents[1] / "web"
+PKG = Path(__file__).resolve().parents[1]
+WEB = PKG / "web"
+
+
+def fingerprint(files) -> str:
+    """A short hash of the files' names, sizes and modification times: it changes when any of them does."""
+    h = hashlib.sha1()
+    for f in sorted(files):
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        h.update(f"{f.relative_to(PKG)}:{st.st_size}:{st.st_mtime_ns};".encode())
+    return h.hexdigest()[:12]
+
+
+def web_files():
+    return [f for f in WEB.rglob("*") if f.is_file() and f.suffix in (".js", ".css", ".html")]
 CSP = ("default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
 
@@ -37,6 +56,9 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
         "OPTLAB_ALLOWED_HOSTS", "localhost,127.0.0.1,::1,*.ts.net").split(",") if h.strip()]
     app = FastAPI(title="optlab sim", docs_url=None, redoc_url=None, openapi_url=None)
     chains, quotes = market.Cache(chain_ttl), market.Cache(quote_ttl)
+    # The server code is fixed for the life of the process (a new version needs a restart); the page's files are
+    # served from disk, so their part of the version is read on every request.
+    server_version = fingerprint([f for f in PKG.rglob("*.py") if "__pycache__" not in f.parts])
     bars = {tf: market.Cache(min(ttl, bars_ttl)) for tf, (_, _, ttl) in market.TIMEFRAMES.items()}
 
     @app.middleware("http")
@@ -86,6 +108,11 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
         daily, _ = bars["1d"].get(sym, lambda: fetch_bars(sym, "1d"))
         b = daily if tf == "1d" else bars[tf].get(sym, lambda: market.weekly(daily) if tf == "1w" else fetch_bars(sym, tf))[0]
         return {"symbol": sym, "tf": tf, "bars": b, "levels": market.levels(daily)}
+
+    @app.get("/api/version")
+    def version():
+        """The open page asks this every minute and reloads itself when it changes."""
+        return {"version": f"{server_version}-{fingerprint(web_files())}"}
 
     @app.get("/api/quotes")
     def quotes_route(symbols: str = ""):

@@ -321,3 +321,7 @@ footer b { color: var(--ink); }
 
 .tf-row { margin-bottom: 12px; }
 #tfs .tg[aria-pressed="true"], #home-tfs .tg[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); background: rgba(255, 197, 49, 0.12); }
+
+.fresh { order: 3; margin-left: auto; font-size: 10px; letter-spacing: 0.14em; color: var(--lime); padding: 3px 8px; border: 1px solid rgba(125, 255, 90, 0.4); border-radius: 3px; white-space: nowrap; }
+.fresh.late { color: var(--amber); border-color: rgba(255, 197, 49, 0.6); }
+.top .live { order: 4; margin-left: 0; }

@@ -24,6 +24,23 @@ bash scripts/run.sh            # http://127.0.0.1:8600
 
 Over Tailscale it's the same address as before, `https://<computer>.<tailnet>.ts.net/`, because it uses the same port (8600) as the old dashboard.
 
+## Staying up to date
+
+While the page is open, prices, P&L, charts and the home page refresh every 15 seconds, and straight away when you
+come back to the page. The header shows when the last refresh happened; it turns amber if updates stop arriving.
+
+To have new versions install themselves, run this once on the computer that runs optlab:
+
+```bash
+bash scripts/install_autoupdate.sh          # checks every 5 minutes; --off to stop
+journalctl --user -u optlab-update          # what it did
+```
+
+It pulls new commits for the branch you're on, restarts the app when its server code changed, and open pages reload
+themselves within a minute, keeping your tabs and settings. It only fast-forwards: if you've edited files that came
+from GitHub, or made your own commits, it leaves everything alone and says so in that log. To update once by hand,
+run `bash scripts/autoupdate.sh`.
+
 ## How the simulation works
 
 - **Option value:** Black-Scholes, with the contract's implied volatility solved from its market price, so it starts exactly at the market.

@@ -208,3 +208,19 @@ def test_only_known_hosts_and_no_stack_traces(client):
                       base_url="http://127.0.0.1:8600", raise_server_exceptions=False)
     r = boom.get("/api/chain/IWM")
     assert r.status_code == 500 and "division" not in r.text and "Traceback" not in r.text
+
+
+def test_version_changes_when_the_page_files_do(client, tmp_path, monkeypatch):
+    import optlab.api as api_mod
+
+    v1 = client.get("/api/version").json()["version"]
+    assert client.get("/api/version").json()["version"] == v1 and len(v1) == 25
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "app.js").write_text("one")
+    monkeypatch.setattr(api_mod, "PKG", tmp_path)
+    monkeypatch.setattr(api_mod, "WEB", web)
+    a = client.get("/api/version").json()["version"]
+    (web / "app.js").write_text("two, longer")
+    b = client.get("/api/version").json()["version"]
+    assert a != b and a.split("-")[0] == b.split("-")[0]          # only the page part moved

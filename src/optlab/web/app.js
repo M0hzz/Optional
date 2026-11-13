@@ -261,35 +261,83 @@ async function loadExp(t, date, render = true) {
 }
 
 // Every 15 s: refresh each tab's quote (the server shares one fetch per ticker), so every tab's live P&L moves.
+// Every 15 s while the page is visible: refresh each tab's quote (the server shares one fetch per ticker), so every
+// tab's live P&L moves, then the home page. Coming back to the page refreshes at once.
+let lastPoll = 0, polling = false, pollFailed = false;
+async function pollNow() {
+  if (polling) return;
+  polling = true;
+  let failed = false;
+  try {
+    await Promise.all(tabs.filter((t) => t.sym && !t.loading).map(async (t) => {
+      const date = t.pick ? t.pick.expiration : t.exp;
+      if (!date) return;
+      try {
+        const d = await api(`/api/chain/${encodeURIComponent(t.sym)}/${date}`);
+        t.spot = d.price;
+        t.summary = { ...t.summary, price: d.price, change_pct: d.change_pct, stale: d.stale };
+        if (date === t.exp) t.expData = d;
+        if (t.pick) t.pickData = d;
+        buildContract(t);
+        // intraday bars move all day: refresh them with every poll; daily and weekly every 10 minutes
+        if (Date.now() - (t.barsAt || 0) > (unit(t).intraday ? 10000 : 600000)) await loadBars(t);
+        computeLevels(t);
+      } catch { failed = true; if (t.summary) t.summary = { ...t.summary, stale: true }; }
+    }));
+    renderTabs();
+    if (view === "tab" && st.sym) {
+      showLive(st.summary);
+      if (!$("pick").hidden) renderLadder();
+      onQuote();
+    }
+    await home.refresh();
+  } catch { failed = true; }
+  polling = false;
+  pollFailed = failed;
+  lastPoll = Date.now();
+  renderFresh();
+}
+
 function schedulePoll() {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
-    if (!document.hidden) {
-      await Promise.all(tabs.filter((t) => t.sym && !t.loading).map(async (t) => {
-        const date = t.pick ? t.pick.expiration : t.exp;
-        if (!date) return;
-        try {
-          const d = await api(`/api/chain/${encodeURIComponent(t.sym)}/${date}`);
-          t.spot = d.price;
-          t.summary = { ...t.summary, price: d.price, change_pct: d.change_pct, stale: d.stale };
-          if (date === t.exp) t.expData = d;
-          if (t.pick) t.pickData = d;
-          buildContract(t);
-          // intraday bars move all day: refresh them with every poll; daily and weekly every 10 minutes
-          if (Date.now() - (t.barsAt || 0) > (unit(t).intraday ? 10000 : 600000)) await loadBars(t);
-          computeLevels(t);
-        } catch { if (t.summary) t.summary = { ...t.summary, stale: true }; }
-      }));
-      renderTabs();
-      if (view === "tab" && st.sym) {
-        showLive(st.summary);
-        if (!$("pick").hidden) renderLadder();
-        onQuote();
-      }
-      await home.refresh();
-    }
+    if (!document.hidden) await pollNow();
     schedulePoll();
   }, POLL_MS);
+}
+
+// "UPDATED 4s AGO" in the header, ticking every second; amber when updates stop arriving.
+function renderFresh() {
+  const el = $("fresh");
+  if (!lastPoll) { el.textContent = "CONNECTING…"; return; }
+  const ago = Math.round((Date.now() - lastPoll) / 1000);
+  const late = ago > 3 * POLL_MS / 1000 || !navigator.onLine;
+  el.textContent = !navigator.onLine ? "OFFLINE" : polling ? "UPDATING…" : `UPDATED ${ago < 60 ? ago + "s" : Math.floor(ago / 60) + "m"} AGO`;
+  el.classList.toggle("late", late || pollFailed);
+  el.title = `Prices, P&L and charts refresh every ${POLL_MS / 1000} s while this page is open${pollFailed ? ". The last refresh missed some data; it retries on the next one." : "."}`;
+}
+
+// A new version of the app on the server: reload into it (tabs and settings are saved in the browser), but never in
+// the middle of a PLAY.
+let version = null, reloading = false;
+async function checkVersion() {
+  if (reloading) return;
+  try {
+    const v = (await api("/api/version")).version;
+    if (version == null) { version = v; return; }
+    if (v === version) return;
+    if (playing) { setTimeout(checkVersion, 5000); return; }
+    reloading = true;
+    saveTabs();
+    say("New version installed. Reloading…");
+    setTimeout(() => location.reload(), 1200);
+  } catch { /* the server is restarting: try again next minute */ }
+}
+
+function refreshNow() {
+  if (document.hidden) return;
+  checkVersion();
+  if (Date.now() - lastPoll > 5000) { clearTimeout(pollTimer); pollNow().then(schedulePoll); }
 }
 
 function buildContract(t) {
@@ -964,7 +1012,10 @@ function wire() {
     });
   }
   addEventListener("resize", () => { if (st.contract) paint(); });
-  document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(); });
+  document.addEventListener("visibilitychange", refreshNow);
+  addEventListener("focus", refreshNow);
+  addEventListener("online", refreshNow);
+  addEventListener("offline", renderFresh);
 }
 
 // ---------------------------------------------------------------- start
@@ -1002,5 +1053,8 @@ home = createHome({
                         verdict: st.bars.length >= 30 ? I.readout(histCloses(st)).verdict.value : undefined }),
 });
 restore();
-home.refresh();
+home.refresh().then(() => { lastPoll = Date.now(); renderFresh(); });
 schedulePoll();
+checkVersion();
+setInterval(renderFresh, 1000);
+setInterval(() => { if (!document.hidden) checkVersion(); }, 60000);
