@@ -157,3 +157,56 @@ export function events(closes, from, levels = {}, ind = compute(closes)) {
   }
   return out;
 }
+
+// ------------------------------------------------------------------ the signal board's squares
+// One score per indicator, from -1 (fully bearish, solid red) through 0 (neutral, white) to +1 (fully bullish,
+// solid green). Distances are measured in the symbol's own typical move per bar (the standard deviation of its
+// last 20 returns), so a 5-minute chart and a weekly one are judged on their own scale.
+//   TREND      the average of the four trend scores below
+//   EMA 9/21   gap between the fast and slow average: 2 typical moves = full colour
+//   SMA 50     price against it: 4 typical moves = full colour
+//   SMA 200    price against it: 8 typical moves = full colour
+//   MACD       histogram: half a typical move = full colour
+//   RSI        50 is neutral; 70 or 30 is full colour (OB / OS marks the extremes)
+//   BOLLINGER  where the price sits in the band: the middle is neutral, an edge is full colour
+export const BOARD = [
+  ["trend", "TREND"], ["short", "EMA 9/21"], ["medium", "SMA 50"], ["long", "SMA 200"],
+  ["momentum", "MACD"], ["rsi", "RSI"], ["bands", "BOLL"],
+];
+
+export function scores(closes, ind = compute(closes)) {
+  const i = closes.length - 1, c = closes[i], out = {};
+  if (i < 21) return out;
+  const r = [];
+  for (let j = i - 19; j <= i; j++) r.push(Math.log(closes[j] / closes[j - 1]));
+  const m = r.reduce((a, b) => a + b, 0) / r.length;
+  const sd = Math.sqrt(r.reduce((a, b) => a + (b - m) ** 2, 0) / (r.length - 1)) || 1e-4;
+  const unit = c * sd, clamp = (x) => Math.max(-1, Math.min(1, x));
+  const fmt = (v) => (Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2));
+  const off = (a, b) => `${a >= b ? "+" : "−"}${Math.abs(100 * (a / b - 1)).toFixed(2)}%`;
+  if (ind.ema9[i] != null && ind.ema21[i] != null)
+    out.short = { s: clamp((ind.ema9[i] - ind.ema21[i]) / (2 * unit)), text: `EMA 9 ${fmt(ind.ema9[i])} vs 21 ${fmt(ind.ema21[i])}` };
+  if (ind.sma50[i] != null) out.medium = { s: clamp((c - ind.sma50[i]) / (4 * unit)), text: `price ${off(c, ind.sma50[i])} vs SMA 50 ${fmt(ind.sma50[i])}` };
+  if (ind.sma200[i] != null) out.long = { s: clamp((c - ind.sma200[i]) / (8 * unit)), text: `price ${off(c, ind.sma200[i])} vs SMA 200 ${fmt(ind.sma200[i])}` };
+  const h = ind.macd.hist[i];
+  if (h != null) out.momentum = { s: clamp(h / (0.5 * unit)), text: `MACD histogram ${h.toFixed(3)}` };
+  const rs = ind.rsi[i];
+  if (rs != null) out.rsi = { s: clamp((rs - 50) / 20), text: `RSI ${rs.toFixed(0)}${rs >= 70 ? " · overbought" : rs <= 30 ? " · oversold" : ""}`,
+                              mark: rs >= 70 ? "OB" : rs <= 30 ? "OS" : "" };
+  const up = ind.bb.up[i], lo = ind.bb.lo[i];
+  if (up != null && up > lo) {
+    const pb = (c - lo) / (up - lo);
+    out.bands = { s: clamp((pb - 0.5) * 2), text: `${Math.round(pb * 100)}% of the way up the band` };
+  }
+  const t = ["short", "medium", "long", "momentum"].filter((k) => out[k]);
+  if (t.length) out.trend = { s: t.reduce((a, k) => a + out[k].s, 0) / t.length, text: `average of ${t.length} trend signals` };
+  return out;
+}
+
+// The colour a score shows (1 green, -1 red, 0 white), with a dead band so a reading that hovers at the edge
+// doesn't flicker: it takes 0.2 to turn a colour on and dropping under 0.1 to turn it off.
+export function stateOf(s, prev = 0) {
+  if (prev === 1) return s >= 0.1 ? 1 : s <= -0.2 ? -1 : 0;
+  if (prev === -1) return s <= -0.1 ? -1 : s >= 0.2 ? 1 : 0;
+  return s >= 0.2 ? 1 : s <= -0.2 ? -1 : 0;
+}

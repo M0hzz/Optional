@@ -10,6 +10,8 @@ Pick a call or put straight from the live option chain, then pull levers and pla
 
 **Timeframes:** each tab's chart can run on 5-minute, 15-minute, 1-hour, daily or weekly candles. Indicators, the trend read and the support and resistance levels follow the timeframe, and on an intraday one a scenario plays out over hours. The home page has the same choice, so every watched symbol, chain and position can show its weekly or intraday trend.
 
+**Signals:** the SIGNALS tab is a board with one block per ticker (from your open tabs, and optionally the home page's monitor and chains), one line per timeframe (5 min to week), and one square per indicator: TREND, EMA 9/21, SMA 50, SMA 200, MACD, RSI and Bollinger. Green is bullish, red bearish, white neutral; the deeper the colour, the stronger the reading. Every time a square changes colour it goes into the alert log with that line's squares at that moment, pops up as a toast on whatever page is open, adds to the count on the tab, and can show a browser notification. Checks run every 15 seconds while the page is open; changes that happened while it was closed are logged when you come back.
+
 **Home page:** the HOME tab shows every position at once (live P&L, and the simulated P&L from whatever you set on its tab), a market monitor for symbols you watch whether or not you hold them (trend health, RSI, nearest support and resistance), and chains: an anchor symbol with the symbols you link to it, compared by how tightly they move together, who is leading, and where they diverge. On every tab, a dock pinned to the bottom shows the watched symbols; ones linked to the tab's ticker come first.
 
 Your pick is remembered in the browser, and its live P&L refreshes every 15 seconds. Nothing places a trade.

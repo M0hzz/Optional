@@ -28,6 +28,7 @@
 
   <nav class="tabbar" aria-label="Simulations">
     <button class="tab-home" id="tab-home" role="tab">&#9962; HOME</button>
+    <button class="tab-home tab-signals" id="tab-signals" role="tab">&#9873; SIGNALS <small></small></button>
     <div class="tabs" id="tabs" role="tablist"></div>
     <button class="btn tab-add" id="tab-add">+ NEW TAB</button>
   </nav>
@@ -74,6 +75,43 @@
         </form>
         <p class="hint">Each row compares the anchor with one linked symbol: how tightly they move together (60 days), how much the anchor moves per 1%
           move in the link, who has led over 5 and 20 days, and how far today's move is from what the link implies. Flags mark divergences.</p>
+      </section>
+    </div>
+
+    <div id="signals" class="home" hidden>
+      <section class="panel">
+        <h2><span class="step">&#9638;</span> SIGNAL BOARD <span class="tag">GREEN BULLISH · RED BEARISH · WHITE NEUTRAL</span></h2>
+        <div class="sb-controls">
+          <div class="toggles" id="sb-tfs" role="group" aria-label="Lines per ticker">
+            <span class="k">LINES</span>
+            <button class="tg" data-tf="5m">5 MIN</button><button class="tg" data-tf="15m">15 MIN</button><button class="tg" data-tf="1h">HOUR</button>
+            <button class="tg" data-tf="1d">DAY</button><button class="tg" data-tf="1w">WEEK</button>
+          </div>
+          <div class="toggles" role="group" aria-label="Which tickers">
+            <span class="k">TICKERS FROM</span>
+            <button class="tg" id="sb-src-tabs">OPEN TABS</button>
+            <button class="tg" id="sb-src-mon">MONITOR &amp; CHAINS</button>
+            <button class="tg" id="sb-pos-only">POSITIONS ONLY</button>
+          </div>
+        </div>
+        <div class="sb-wrap" id="sb-board"></div>
+        <p class="hint" id="sb-empty" hidden>No tickers yet. Open a tab with a ticker, or turn on MONITOR &amp; CHAINS.</p>
+        <p class="hint">Each square is one indicator on that line's candles. The deeper the colour, the stronger the reading,
+          measured against the ticker's own typical move per candle. TREND averages EMA 9/21, SMA 50, SMA 200 and MACD.
+          RSI marks OB (70+) and OS (30-). Hover a square for its numbers.</p>
+      </section>
+
+      <section class="panel">
+        <h2><span class="step">&#9776;</span> ALERT LOG
+          <span class="toggles">
+            <button class="tg" id="sb-neutral">SHOW TURNS TO NEUTRAL</button>
+            <button class="tg" id="sb-notify">BROWSER NOTIFICATIONS</button>
+            <button class="tg" id="sb-clear">CLEAR</button>
+          </span></h2>
+        <div class="sb-wrap" id="sb-log"></div>
+        <p class="hint" id="sb-log-empty">Nothing yet. A line appears here each time a square turns green or red, with the
+          whole line as it was at that moment. Changes are checked every 15 seconds while this page is open, on any tab;
+          what changed while it was closed is logged when you come back.</p>
       </section>
     </div>
 
@@ -227,6 +265,8 @@
       </div>
     </section>
   </main>
+
+  <div class="toasts" id="sb-toasts" aria-live="polite"></div>
 
   <aside class="dock" id="dock" aria-label="Market monitor">
     <div class="dock-card" id="dock-card" hidden></div>

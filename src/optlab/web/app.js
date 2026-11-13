@@ -3,6 +3,7 @@ import * as I from "./ind.js";
 import * as LV from "./levels.js";
 import { PriceChart } from "./chart.js";
 import { createHome } from "./home.js";
+import { createSignals } from "./signals.js";
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15000;
@@ -39,6 +40,7 @@ let playing = null;            // the animation frame of PLAY (one at a time)
 let pollTimer = null;
 let view = "tab";              // "home" (the overview of everything) or "tab" (one simulation)
 let home = null;
+let signals = null;
 let chart = null;              // the interactive chart (one canvas, redrawn for whichever tab is on screen)
 
 function newTab(from = {}) {
@@ -57,7 +59,7 @@ function newTab(from = {}) {
 function saveTabs() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      active: view === "home" ? -1 : tabs.indexOf(st), tabs: tabs.map((t) => Object.fromEntries(KEEP.map((k) => [k, t[k]]))),
+      active: view === "home" ? -1 : view === "signals" ? -2 : tabs.indexOf(st), tabs: tabs.map((t) => Object.fromEntries(KEEP.map((k) => [k, t[k]]))),
     }));
   } catch { /* a private window: tabs just aren't remembered */ }
 }
@@ -91,6 +93,18 @@ function switchTo(i) {
   renderTabs();
   renderTab();
   home?.render();
+}
+
+function showSignals() {
+  stopPlay();
+  view = "signals";
+  saveTabs();
+  say("");
+  renderTabs();
+  renderTab();
+  signals.seen();
+  signals.render();
+  home.render();
 }
 
 function showHome() {
@@ -149,6 +163,8 @@ function renderTabs() {
   const box = $("tabs");
   $("tab-home").classList.toggle("on", view === "home");
   $("tab-home").setAttribute("aria-selected", view === "home");
+  $("tab-signals").classList.toggle("on", view === "signals");
+  $("tab-signals").setAttribute("aria-selected", view === "signals");
   box.replaceChildren(...tabs.map((t, i) => {
     const el = document.createElement("div");
     el.className = `tab${t === st && view === "tab" ? " on" : ""}${t.pick ? (t.pick.isCall ? " call" : " put") : ""}`;
@@ -157,7 +173,8 @@ function renderTabs() {
     main.setAttribute("aria-selected", t === st && view === "tab");
     main.firstChild.textContent = shortName(t);
     const sub = main.lastChild;
-    if (t.livePnl != null) { sub.textContent = signed(t.livePnl, 0); tone(sub, t.livePnl); }
+    if (t.loading) sub.textContent = "loading…";
+    else if (t.livePnl != null) { sub.textContent = signed(t.livePnl, 0); tone(sub, t.livePnl); }
     else sub.textContent = t.scenario ? S.SCENARIOS.find((s) => s.id === t.scenario)?.name.toLowerCase() ?? "" : t.sym ? "pick a contract" : "empty";
     main.addEventListener("click", () => switchTo(i));
     x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(i); });
@@ -205,7 +222,7 @@ async function api(path) {
 
 // ---------------------------------------------------------------- data, per tab (safe to run for a tab that isn't on screen)
 async function loadSymbol(t, sym, keepPick = false) {
-  if (t === st) say(`Loading ${sym.toUpperCase()}…`);
+  if (t === st && view === "tab") say(`Loading ${sym.toUpperCase()}…`);
   t.loading = true;
   try {
     const summary = await api(`/api/chain/${encodeURIComponent(sym)}`);
@@ -220,9 +237,9 @@ async function loadSymbol(t, sym, keepPick = false) {
     const first = summary.expirations.find((e) => e.date === want) || summary.expirations.find((e) => e.dte >= 7) || summary.expirations[0];
     await loadExp(t, first.date, false);
     await bars;
-    if (t === st) say("");
+    if (t === st && view === "tab") say("");
   } catch (e) {
-    if (t === st) say(e.message, true);
+    if (t === st && view === "tab") say(e.message, true);
   }
   t.loading = false;
   saveTabs();
@@ -291,6 +308,7 @@ async function pollNow() {
       onQuote();
     }
     await home.refresh();
+    await signals.refresh();
   } catch { failed = true; }
   polling = false;
   pollFailed = failed;
@@ -367,7 +385,8 @@ function clearPick(t) {
 // ---------------------------------------------------------------- rendering the tab on screen
 function renderTab() {
   $("home").hidden = view !== "home";
-  if (view === "home") {
+  $("signals").hidden = view !== "signals";
+  if (view !== "tab") {
     for (const id of ["empty", "pick", "hud", "deck", "live"]) $(id).hidden = true;
     $("sym").value = "";
     return;
@@ -857,6 +876,8 @@ function drawPayoff() {
   if (!c) return;
   const { g, w, h } = canvas("payoff");
   const lp = $("l-price"), a = parseFloat(lp.min), b = parseFloat(lp.max), n = 80;
+  // while a tab is still loading its price the slider has no range yet: nothing to draw
+  if (!isFinite(a) || !isFinite(b) || b <= a || !isFinite(st.lever.price) || !w || !h) return;
   const ivMult = 1 + st.lever.iv / 100;
   const now = [], exp = [];
   for (let i = 0; i <= n; i++) {
@@ -907,6 +928,7 @@ function wire() {
   });
   $("tab-add").addEventListener("click", () => addTab());
   $("tab-home").addEventListener("click", showHome);
+  $("tab-signals").addEventListener("click", showSignals);
   $("copy").addEventListener("click", () => addTab(st));
   for (const [id, side] of [["side-call", "calls"], ["side-put", "puts"]]) {
     $(id).addEventListener("click", () => {
@@ -1037,7 +1059,7 @@ function restore() {
   });
   if (!tabs.length) tabs.push(newTab());
   st = tabs[Math.min(Math.max(saved?.active ?? 0, 0), tabs.length - 1)];
-  view = saved ? (saved.active === -1 ? "home" : "tab") : "home";      // a first visit starts on the home page
+  view = saved ? (saved.active === -1 ? "home" : saved.active === -2 ? "signals" : "tab") : "home";      // a first visit starts on the home page
   for (const t of tabs) if (t.sym) t.loading = true;
   renderTabs();
   renderTab();
@@ -1052,7 +1074,13 @@ home = createHome({
   currentSide: () => ({ bars: st.bars, changePct: st.summary?.change_pct ?? null,
                         verdict: st.bars.length >= 30 ? I.readout(histCloses(st)).verdict.value : undefined }),
 });
+signals = createSignals({
+  $, api, tone, openSymbol, showSignals, onSignals: () => view === "signals",
+  tabSymbols: () => tabs.filter((t) => t.sym).map((t) => ({ sym: t.sym, position: !!t.pick })),
+  monitorSymbols: () => home.symbols(),
+});
 restore();
+signals.refresh();
 home.refresh().then(() => { lastPoll = Date.now(); renderFresh(); });
 schedulePoll();
 checkVersion();

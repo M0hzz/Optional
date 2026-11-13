@@ -325,3 +325,45 @@ footer b { color: var(--ink); }
 .fresh { order: 3; margin-left: auto; font-size: 10px; letter-spacing: 0.14em; color: var(--lime); padding: 3px 8px; border: 1px solid rgba(125, 255, 90, 0.4); border-radius: 3px; white-space: nowrap; }
 .fresh.late { color: var(--amber); border-color: rgba(255, 197, 49, 0.6); }
 .top .live { order: 4; margin-left: 0; }
+
+/* ------------------------------------------------------------ signal board */
+.tab-signals { color: var(--cyan); border-top-color: var(--cyan); }
+.tab-signals.on { background: linear-gradient(180deg, #0a2a33, #0d1330); border-color: var(--cyan); box-shadow: 0 -6px 18px rgba(34, 230, 255, 0.3); }
+.tab-signals small { margin-left: 6px; font-size: 11px; color: var(--bg); background: var(--red); border-radius: 9px; padding: 0 6px; }
+.tab-signals small:empty { display: none; }
+.sb-controls { display: flex; flex-wrap: wrap; gap: 10px 24px; margin-bottom: 12px; }
+.sb-wrap { overflow-x: auto; }
+table.sb { border-collapse: separate; border-spacing: 4px 3px; font-size: 12px; }
+.sb th, .sb td { padding: 0; text-align: center; vertical-align: middle; }
+.sb-head th { font-size: 9px; letter-spacing: 0.1em; color: var(--dim); font-weight: 700; padding: 0 2px 4px; white-space: nowrap; min-width: 46px; }
+.sb-sym { text-align: left !important; padding-right: 14px !important; border-top: 1px solid var(--grid); min-width: 92px; }
+.sb-first td, .sb-first th { border-top: 1px solid var(--grid); padding-top: 6px; }
+.sb-sym .mon-sym { display: block; }
+.sb-chg { display: block; font-size: 11px; font-weight: 700; }
+.sb-pos { display: inline-block; margin-top: 3px; font-size: 8px; letter-spacing: 0.12em; padding: 1px 4px; border: 1px solid var(--amber); color: var(--amber); border-radius: 2px; }
+.sb-tf { font-size: 10px; letter-spacing: 0.1em; color: var(--dim); text-align: left !important; padding-right: 8px !important; white-space: nowrap; }
+.sq { position: relative; display: inline-grid; place-items: center; width: 40px; height: 26px; border-radius: 3px; border: 1px solid rgba(255, 255, 255, 0.08); font-size: 9px; font-weight: 800; color: #fff; }
+.sq.g { background: rgba(38, 208, 124, var(--a)); box-shadow: 0 0 calc(var(--a) * 12px) rgba(38, 208, 124, 0.5); }
+.sq.r { background: rgba(255, 77, 109, var(--a)); box-shadow: 0 0 calc(var(--a) * 12px) rgba(255, 77, 109, 0.5); }
+.sq.w { background: rgba(234, 246, 255, var(--a)); color: #0b1128; }
+.sq.na { background: transparent; border: 1px dashed #2c3a7a; color: var(--dim); }
+.sq i { font-style: normal; text-shadow: 0 0 4px #000; }
+.sq.pulse { animation: sqpulse 1.6s ease-out 2; }
+@keyframes sqpulse { 0% { transform: scale(1); } 30% { transform: scale(1.25); outline: 2px solid #fff; } 100% { transform: scale(1); } }
+.sb-log .sq { width: 26px; height: 18px; font-size: 8px; }
+.sb-log th:nth-child(-n+4) { text-align: left; }
+.sb-log td { padding: 3px 0; border-top: 1px dashed var(--grid); }
+.lg-t { font-size: 11px; color: var(--dim); white-space: nowrap; text-align: left !important; padding-right: 10px !important; font-variant-numeric: tabular-nums; }
+.lg-t small { display: block; font-size: 9px; color: var(--amber); }
+.lg-what { text-align: left !important; padding: 3px 14px 3px 6px !important; min-width: 300px; }
+.lg-what > * { vertical-align: middle; }
+.lg-what b { margin-left: 8px; font-size: 12px; } .lg-g .lg-what b { color: var(--lime); } .lg-r .lg-what b { color: var(--red); }
+.lg-what small { display: block; color: var(--dim); font-size: 10px; margin-top: 2px; }
+.lg-arrow { margin: 0 4px; color: var(--dim); }
+.lg-hit .sq { outline: 2px solid #fff; outline-offset: 1px; }
+.toasts { position: fixed; right: 12px; bottom: 96px; z-index: 60; display: grid; gap: 6px; justify-items: end; max-width: min(360px, calc(100vw - 24px)); }
+.toast { display: flex; align-items: center; gap: 10px; font: inherit; font-size: 12px; text-align: left; color: var(--ink); background: #0b1128; border: 2px solid var(--grid); border-radius: 4px; padding: 8px 12px; cursor: pointer; box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6); animation: toastin 0.25s ease-out; transition: opacity 0.5s, transform 0.5s; }
+.toast.g { border-color: var(--lime); } .toast.r { border-color: var(--red); }
+.toast.out { opacity: 0; transform: translateX(30px); }
+.toast .sq { width: 26px; height: 18px; flex: none; }
+@keyframes toastin { from { opacity: 0; transform: translateY(12px); } }

@@ -70,3 +70,35 @@ test("events fire where the cross happens, and only from `from` on", () => {
   assert.ok(ev.every((e) => e.i >= 60));
   assert.ok(I.events(x, 0, { support: 92 }).some((e) => e.label === "BREAKS SUPPORT"));
 });
+
+test("board scores: sign follows the trend, size follows how strong it is", () => {
+  const accel = Array.from({ length: 260 }, (_, i) => 50 + 0.002 * i * i + Math.sin(i) * 0.3);
+  const up = I.scores(accel);
+  for (const k of ["trend", "short", "medium", "long", "rsi"]) assert.ok(up[k].s > 0.2, `${k} ${up[k].s}`);
+  const dn = I.scores(accel.map((v) => 700 - v));
+  for (const k of ["trend", "short", "medium", "long", "rsi"]) assert.ok(dn[k].s < -0.2, `${k} ${dn[k].s}`);
+  for (const v of Object.values(up)) assert.ok(v.s >= -1 && v.s <= 1 && v.text);
+  const flat = I.scores(Array.from({ length: 260 }, (_, i) => 100 + Math.sin(i / 2)));
+  assert.ok(Math.abs(flat.long.s) < 0.3 && Math.abs(flat.short.s) < 0.2);      // going sideways: little colour
+  assert.deepEqual(Object.keys(I.scores(accel.slice(0, 15))), []);
+  assert.equal(I.scores(accel.slice(0, 60)).long, undefined);       // under 200 bars: no SMA 200 square
+  assert.ok(I.BOARD.every(([k]) => k in up));
+});
+
+test("states have a dead band so a reading at the edge doesn't flicker", () => {
+  assert.equal(I.stateOf(0.25), 1);
+  assert.equal(I.stateOf(0.15), 0);
+  assert.equal(I.stateOf(0.15, 1), 1);          // already green: stays green until under 0.1
+  assert.equal(I.stateOf(0.05, 1), 0);
+  assert.equal(I.stateOf(-0.25, 1), -1);
+  assert.equal(I.stateOf(-0.15, -1), -1);
+  assert.equal(I.stateOf(-0.15), 0);
+});
+
+test("week keys group a Monday-to-Sunday week", async () => {
+  const { weekKey } = await import("../src/optlab/web/signals.js");
+  assert.equal(weekKey("2026-11-13"), "2026-11-09");      // a Friday
+  assert.equal(weekKey("2026-11-09"), "2026-11-09");      // the Monday itself
+  assert.equal(weekKey("2026-11-15"), "2026-11-09");      // Sunday
+  assert.equal(weekKey("2026-11-16T10:30"), "2026-11-16");
+});
