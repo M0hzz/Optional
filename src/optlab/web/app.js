@@ -4,6 +4,7 @@ import * as LV from "./levels.js";
 import { PriceChart } from "./chart.js";
 import { createHome } from "./home.js";
 import { createSignals } from "./signals.js";
+import { createCycles } from "./cycles.js";
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15000;
@@ -44,6 +45,7 @@ const LIVE_MS = 3000;          // live stock quotes: every 3 s while the page is
 const live = new Map();        // SYM -> latest live quote
 let lastLive = 0, liveBusy = false, liveFailed = false;
 let signals = null;
+let cycles = null;
 let chart = null;              // the interactive chart (one canvas, redrawn for whichever tab is on screen)
 
 function newTab(from = {}) {
@@ -62,7 +64,7 @@ function newTab(from = {}) {
 function saveTabs() {
   try {
     localStorage.setItem(SAVE_KEY, JSON.stringify({
-      active: view === "home" ? -1 : view === "signals" ? -2 : tabs.indexOf(st), tabs: tabs.map((t) => Object.fromEntries(KEEP.map((k) => [k, t[k]]))),
+      active: view === "home" ? -1 : view === "signals" ? -2 : view === "cycles" ? -3 : tabs.indexOf(st), tabs: tabs.map((t) => Object.fromEntries(KEEP.map((k) => [k, t[k]]))),
     }));
   } catch { /* a private window: tabs just aren't remembered */ }
 }
@@ -96,6 +98,17 @@ function switchTo(i) {
   renderTabs();
   renderTab();
   home?.render();
+}
+
+function showCycles() {
+  stopPlay();
+  view = "cycles";
+  saveTabs();
+  say("");
+  renderTabs();
+  renderTab();
+  cycles.refresh();
+  home.render();
 }
 
 function showSignals() {
@@ -168,6 +181,8 @@ function renderTabs() {
   $("tab-home").setAttribute("aria-selected", view === "home");
   $("tab-signals").classList.toggle("on", view === "signals");
   $("tab-signals").setAttribute("aria-selected", view === "signals");
+  $("tab-cycles").classList.toggle("on", view === "cycles");
+  $("tab-cycles").setAttribute("aria-selected", view === "cycles");
   box.replaceChildren(...tabs.map((t, i) => {
     const el = document.createElement("div");
     el.className = `tab${t === st && view === "tab" ? " on" : ""}${t.pick ? (t.pick.isCall ? " call" : " put") : ""}`;
@@ -315,6 +330,7 @@ async function pollNow() {
     }
     await home.refresh();
     await signals.refresh();
+    await cycles.refresh();
   } catch { failed = true; }
   polling = false;
   pollFailed = failed;
@@ -334,7 +350,7 @@ function schedulePoll() {
 // live estimates, the home page, the dock and the signal board all move with it.
 async function livePoll() {
   if (liveBusy || document.hidden) return;
-  const syms = [...new Set([...tabs.filter((t) => t.sym).map((t) => t.sym), ...home.symbols(), ...signals.symbols()])];
+  const syms = [...new Set([...tabs.filter((t) => t.sym).map((t) => t.sym), ...home.symbols(), ...signals.symbols(), ...cycles.symbols()])];
   if (!syms.length) { lastLive = Date.now(); return renderFresh(); }
   liveBusy = true;
   try {
@@ -355,6 +371,7 @@ async function livePoll() {
     }
     home.applyQuotes(live);
     signals.applyQuotes(live);
+    cycles.applyQuotes(live);
     liveFailed = false;
     lastLive = Date.now();
   } catch { liveFailed = true; }
@@ -434,6 +451,7 @@ function clearPick(t) {
 function renderTab() {
   $("home").hidden = view !== "home";
   $("signals").hidden = view !== "signals";
+  $("cycles").hidden = view !== "cycles";
   if (view !== "tab") {
     for (const id of ["empty", "pick", "hud", "deck", "live"]) $(id).hidden = true;
     $("sym").value = "";
@@ -979,6 +997,7 @@ function wire() {
   $("tab-add").addEventListener("click", () => addTab());
   $("tab-home").addEventListener("click", showHome);
   $("tab-signals").addEventListener("click", showSignals);
+  $("tab-cycles").addEventListener("click", showCycles);
   $("copy").addEventListener("click", () => addTab(st));
   for (const [id, side] of [["side-call", "calls"], ["side-put", "puts"]]) {
     $(id).addEventListener("click", () => {
@@ -1109,7 +1128,7 @@ function restore() {
   });
   if (!tabs.length) tabs.push(newTab());
   st = tabs[Math.min(Math.max(saved?.active ?? 0, 0), tabs.length - 1)];
-  view = saved ? (saved.active === -1 ? "home" : saved.active === -2 ? "signals" : "tab") : "home";      // a first visit starts on the home page
+  view = saved ? ({ "-1": "home", "-2": "signals", "-3": "cycles" }[saved.active] || "tab") : "home";      // a first visit starts on the home page
   for (const t of tabs) if (t.sym) t.loading = true;
   renderTabs();
   renderTab();
@@ -1129,8 +1148,14 @@ signals = createSignals({
   tabSymbols: () => tabs.filter((t) => t.sym).map((t) => ({ sym: t.sym, position: !!t.pick })),
   monitorSymbols: () => home.symbols(),
 });
+cycles = createCycles({
+  $, api, money, onCycles: () => view === "cycles",
+  tabSymbols: () => [...new Set(tabs.filter((t) => t.sym).map((t) => t.sym))],
+  monitorSymbols: () => home.symbols(),
+});
 restore();
 signals.refresh();
+cycles.refresh();
 home.refresh().then(() => { lastPoll = Date.now(); renderFresh(); });
 schedulePoll();
 checkVersion();
