@@ -193,11 +193,36 @@ def test_quotes(client):
         if sym == "BAD":
             raise market.MarketError("No quote for BAD. Check the ticker.")
         return {"symbol": sym, "price": 1.0, "change_pct": 0.5}
-    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s, tf="1d": bars(), fetch_quote=fake)
+    batches = []
+
+    def batch(syms):
+        batches.append(list(syms))
+        return {s: {"symbol": s, "price": 2.0, "change_pct": 1.0} for s in syms if s in ("SPY", "QQQ")}
+    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s, tf="1d": bars(), fetch_quote=fake, fetch_quotes=batch)
     c = TestClient(app, base_url="http://127.0.0.1:8600")
-    out = c.get("/api/quotes?symbols=spy,BAD,brk-b,,").json()["quotes"]
-    assert out["SPY"]["price"] == 1.0 and out["BRK.B"]["stale"] is False and "Check the ticker" in out["BAD"]["error"]
+    out = c.get("/api/quotes?symbols=spy,BAD,brk-b,qqq,,").json()["quotes"]
+    assert out["SPY"]["price"] == 2.0 and out["QQQ"]["price"] == 2.0           # from the one batch request
+    assert out["BRK.B"]["price"] == 1.0 and out["BRK.B"]["stale"] is False      # not in the batch: fetched on its own
+    assert "Check the ticker" in out["BAD"]["error"]
+    assert batches == [["SPY", "BAD", "BRK.B", "QQQ"]]
+    c.get("/api/quotes?symbols=SPY,QQQ")
+    assert len(batches) == 1                                                     # reused within the 2 s window
     assert c.get("/api/quotes").json() == {"quotes": {}}
+
+    class Spark:
+        status_code = 200
+
+        def json(self):
+            meta = lambda p, prev: {"regularMarketPrice": p, "chartPreviousClose": prev, "regularMarketTime": 1794857357,
+                                    "exchangeTimezoneName": "America/New_York", "shortName": "x", "regularMarketVolume": 5}
+            return {"spark": {"result": [{"symbol": "SPY", "response": [{"meta": meta(740.19, 754.37)}]},
+                                         {"symbol": "^IXIC", "response": [{"meta": meta(24551.92, 25136.27)}]},
+                                         {"symbol": "BRK-B", "response": [{"meta": meta(590.63, 592.94)}]},
+                                         {"symbol": "JUNK", "response": []}]}}
+    urls = []
+    q = market.fetch_quotes(["spy", "nasdaq", "brk.b"], get=lambda url: (urls.append(url), Spark())[1])
+    assert set(q) == {"SPY", "NASDAQ", "BRK.B"} and len(urls) == 1 and "%5EIXIC" in urls[0] and "BRK-B" in urls[0]
+    assert q["SPY"]["change_pct"] == pytest.approx(-1.88, abs=0.01) and q["SPY"]["day"] == "2026-11-16" and q["SPY"]["time"] == 1794857357
 
 
 def test_only_known_hosts_and_no_stack_traces(client):

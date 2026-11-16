@@ -22,7 +22,7 @@
       <span class="live-sym" id="live-sym"></span>
       <span class="live-px" id="live-px"></span>
       <span class="live-chg" id="live-chg"></span>
-      <span class="live-note">15 MIN DELAYED</span>
+      <span class="live-note" title="The stock price is live. Option quotes come from CBOE 15 minutes late; the P&amp;L shown is a live estimate from the stock's price now.">LIVE · OPTIONS 15 MIN DELAYED</span>
     </div>
   </header>
 
@@ -150,8 +150,8 @@
         <span class="stepper"><button class="btn tiny" id="qty-dn" aria-label="Fewer">−</button><output id="qty"></output><button class="btn tiny" id="qty-up" aria-label="More">+</button></span></div>
       <div class="stat"><span class="k">YOU PAY</span><span class="v" id="hud-cost"></span><span class="k2">most you can lose</span></div>
       <div class="stat"><span class="k">BREAKEVEN</span><span class="v" id="hud-be"></span><span class="k2">at expiration</span></div>
-      <div class="stat"><span class="k">WORTH NOW</span><span class="v" id="hud-val"></span><span class="k2">live</span></div>
-      <div class="stat big"><span class="k">LIVE P&amp;L</span><span class="v" id="hud-pnl"></span><span class="k2" id="hud-pnl-pct"></span></div>
+      <div class="stat" title="The option's last quote is 15 minutes old. This moves it by what the stock's move since then is worth, at the option's own implied volatility."><span class="k">WORTH NOW</span><span class="v" id="hud-val"></span><span class="k2">live estimate</span></div>
+      <div class="stat big"><span class="k">LIVE P&amp;L</span><span class="v" id="hud-pnl"></span><span class="k2" id="hud-pnl-pct"></span><span class="k2" id="hud-quote"></span></div>
       <div class="hud-btns">
         <button class="btn" id="copy" title="Open a copy of this simulation in a new tab">&#10697; COPY TAB</button>
         <button class="btn ghost" id="change">CHANGE</button>
@@ -285,6 +285,7 @@
         <li><b>Volume</b> doesn't choose a direction. It scales how far the move goes (by the square root of volume), and the surge fades by half every 2 days.</li>
         <li><b>Volatility</b> rises 3% for each 1% the price falls, eases 1.5% for each 1% it rises, and gets a small lift from a volume surge.</li>
         <li><b>Indicators</b> use the stock's last year of daily closes, then the simulated days, so they change as a scenario plays: EMA 9/21 (short trend), SMA 50 and 200 (medium and long trend), MACD 12/26/9 (momentum), RSI 14 (overbought above 70, oversold below 30), Bollinger 20/2 (range and squeezes). TREND counts the four trend signals: 3 or more pointing the same way is an uptrend or downtrend, otherwise mixed.</li>
+        <li><b>Live and delayed:</b> stock prices everywhere (headers, home page, dock, signal board) are live quotes refreshed every 3 seconds. Option quotes come from CBOE 15 minutes late, so a position's WORTH NOW and LIVE P&amp;L are estimates: the 15-minute-old option price moved by what the stock's move since then is worth at that option's implied volatility. They're off mainly when volatility itself has jumped in those 15 minutes. The delayed quote is shown underneath.</li>
         <li><b>Home</b> shows every position's live and simulated P&amp;L together, the symbols you watch, and chains of linked symbols. The monitor uses Yahoo quotes; option prices on tabs use CBOE's 15-minute delayed feed, so a symbol's price can differ slightly between the two.</li>
         <li><b>Chains</b> compare an anchor with each linked symbol over the days both traded: correlation and beta of daily returns over 60 days, the difference in 5- and 20-day returns, and today's gap (the anchor's change minus beta × the link's change). Flags: trends disagree, a gap of 1.5% or more, or correlation under 0.3.</li>
         <li><b>Timeframes:</b> 5m, 15m and 1h bars cover the last 10 days, month and 6 months of regular trading hours; weekly bars are built from 5 years of daily ones. Indicators, the trend read and the levels use whichever you pick. On an intraday timeframe a scenario plays out over hours, one bar per step, with a trading session counted as one day of time decay.</li>

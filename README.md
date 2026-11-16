@@ -26,6 +26,14 @@ bash scripts/run.sh            # http://127.0.0.1:8600
 
 Over Tailscale it's the same address as before, `https://<computer>.<tailnet>.ts.net/`, because it uses the same port (8600) as the old dashboard.
 
+## Live and delayed
+
+Stock prices are live everywhere: tab headers, the home page, the dock, the signal board and the trend on every
+timeframe, refreshed every 3 seconds in one batch request. Option quotes come from CBOE 15 minutes late. A position's
+WORTH NOW and LIVE P&L are therefore a live estimate: the delayed option price moved by what the stock's move since
+then is worth at that option's own implied volatility. The delayed quote is shown underneath. The estimate is off
+mainly when volatility itself jumps (news, a sudden spike) inside those 15 minutes.
+
 ## Staying up to date
 
 While the page is open, prices, P&L, charts and the home page refresh every 15 seconds, and straight away when you

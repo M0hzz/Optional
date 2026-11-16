@@ -67,6 +67,19 @@ export function createHome(app) {
     render();
   }
 
+  // Live quotes from the page's fast loop (every 3 s): prices, trends and levels move with them.
+  function applyQuotes(map) {
+    for (const s of symbols()) {
+      const q = map.get(s);
+      if (!q) continue;
+      const d = get(s);
+      d.quote = q;
+      if (d.bars) d.err = null;
+      compute(s);
+    }
+    render();
+  }
+
   // ------------------------------------------------------------ small pieces
   function trendChip(read) {
     const v = read?.verdict;
@@ -225,6 +238,7 @@ export function createHome(app) {
   }
 
   function renderChains() {
+    if ($("home-chains").contains(document.activeElement)) return;     // don't wipe what's being typed in a LINK box
     $("home-chains").replaceChildren(...cfg.chains.map((c) => {
       const d = get(c.anchor), card = el("div", "chain");
       const head = el("div", "chain-head");
@@ -342,5 +356,5 @@ export function createHome(app) {
   }
   $("dock-toggle").addEventListener("click", () => { cfg.dock = !cfg.dock; openCard = null; save(); renderDock(); });
 
-  return { refresh, render, symbols };
+  return { refresh, render, symbols, applyQuotes };
 }

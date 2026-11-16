@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
+import time
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -50,7 +52,7 @@ def host_ok(host: str, allowed: list[str]) -> bool:
 
 
 def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetch_quote=market.fetch_quote,
-               chain_ttl: float = 15, bars_ttl: float = 600, quote_ttl: float = 15,
+               fetch_quotes=market.fetch_quotes, chain_ttl: float = 15, bars_ttl: float = 600, quote_ttl: float = 2,
                allowed_hosts: list[str] | None = None) -> FastAPI:
     allowed = allowed_hosts or [h.strip().lower() for h in os.environ.get(
         "OPTLAB_ALLOWED_HOSTS", "localhost,127.0.0.1,::1,*.ts.net").split(",") if h.strip()]
@@ -114,17 +116,43 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
         """The open page asks this every minute and reloads itself when it changes."""
         return {"version": f"{server_version}-{fingerprint(web_files())}"}
 
+    live: dict[str, tuple[float, dict]] = {}
+    live_lock = threading.Lock()
+
     @app.get("/api/quotes")
     def quotes_route(symbols: str = ""):
-        """Light quotes for the monitor: ?symbols=SPY,QQQ,NVDA (up to 30). One bad ticker doesn't fail the rest."""
-        out = {}
-        for raw in [x for x in symbols.split(",") if x.strip()][:30]:
+        """Live quotes: ?symbols=SPY,QQQ,NVDA (up to 40). The open page asks every few seconds, so tickers are
+        fetched together in one batch request and reused for `quote_ttl` seconds, however many pages ask. A ticker
+        the batch doesn't know is tried on its own once; one bad ticker doesn't fail the rest."""
+        want, out = [], {}
+        for raw in [x for x in symbols.split(",") if x.strip()][:40]:
             try:
-                sym = market.clean_symbol(raw)
-                q, stale = quotes.get(sym, lambda sym=sym: fetch_quote(sym))
-                out[sym] = {**q, "stale": stale}
+                want.append(market.clean_symbol(raw))
             except market.MarketError as exc:
                 out[raw.strip().upper()[:12]] = {"error": str(exc)}
+        want = list(dict.fromkeys(want))
+        now = time.monotonic()
+        with live_lock:
+            missing = [s for s in want if s not in live or now - live[s][0] >= quote_ttl]
+            if missing:
+                try:
+                    got = fetch_quotes(missing)
+                except market.MarketError:
+                    got = {}
+                for s in missing:
+                    if s in got:
+                        live[s] = (now, got[s])
+                    else:                               # not in the batch (or the batch failed): the single route
+                        try:
+                            q, _ = quotes.get(s, lambda s=s: fetch_quote(s))
+                            live[s] = (now, q)
+                        except market.MarketError as exc:
+                            if s not in live:
+                                out[s] = {"error": str(exc)}
+            for s in want:
+                if s in live and s not in out:
+                    at, q = live[s]
+                    out[s] = {**q, "stale": now - at > max(quote_ttl * 5, 30)}
         return {"quotes": out}
 
     @app.get("/api/{rest:path}")

@@ -40,6 +40,9 @@ let playing = null;            // the animation frame of PLAY (one at a time)
 let pollTimer = null;
 let view = "tab";              // "home" (the overview of everything) or "tab" (one simulation)
 let home = null;
+const LIVE_MS = 3000;          // live stock quotes: every 3 s while the page is visible
+const live = new Map();        // SYM -> latest live quote
+let lastLive = 0, liveBusy = false, liveFailed = false;
 let signals = null;
 let chart = null;              // the interactive chart (one canvas, redrawn for whichever tab is on screen)
 
@@ -136,7 +139,7 @@ function positions() {
   return tabs.map((t, index) => ({ t, index })).filter(({ t }) => t.pick && t.contract).map(({ t, index }) => {
     const c = t.contract, p = t.pick, L = t.lever, row = t.row;
     const simPrice = L.touched && L.price != null ? L.price : t.spot;
-    const mark = row ? row.mid ?? row.ask : p.entry;
+    const mark = t.estMark ?? (row ? row.mid ?? row.ask : p.entry);
     const closes = histCloses(t);
     const sc = S.SCENARIOS.find((x) => x.id === t.scenario);
     const moved = L.touched && (L.day > 0 || L.iv !== 0 || Math.abs(simPrice - t.spot) > 1e-9);
@@ -268,7 +271,7 @@ async function loadExp(t, date, render = true) {
     const d = await api(`/api/chain/${encodeURIComponent(t.sym)}/${date}`);
     t.exp = date;
     t.expData = d;
-    t.spot = d.price;
+    t.spot = live.get(t.sym)?.price ?? d.price;
     if (t.pick && t.pick.expiration === date) t.pickData = d;
     buildContract(t);
     if (render && t === st) { renderExps(); renderLadder(); onQuote(); }
@@ -291,8 +294,11 @@ async function pollNow() {
       if (!date) return;
       try {
         const d = await api(`/api/chain/${encodeURIComponent(t.sym)}/${date}`);
-        t.spot = d.price;
-        t.summary = { ...t.summary, price: d.price, change_pct: d.change_pct, stale: d.stale };
+        const q = live.get(t.sym);
+        if (!q) {                                  // no live quote yet: the delayed chain's price stands in
+          t.spot = d.price;
+          t.summary = { ...t.summary, price: d.price, change_pct: d.change_pct, stale: d.stale };
+        }
         if (date === t.exp) t.expData = d;
         if (t.pick) t.pickData = d;
         buildContract(t);
@@ -324,15 +330,49 @@ function schedulePoll() {
   }, POLL_MS);
 }
 
+// The fast loop: live stock quotes for every ticker on every page, in one request. Tab headers, the options'
+// live estimates, the home page, the dock and the signal board all move with it.
+async function livePoll() {
+  if (liveBusy || document.hidden) return;
+  const syms = [...new Set([...tabs.filter((t) => t.sym).map((t) => t.sym), ...home.symbols(), ...signals.symbols()])];
+  if (!syms.length) { lastLive = Date.now(); return renderFresh(); }
+  liveBusy = true;
+  try {
+    const r = await api(`/api/quotes?symbols=${encodeURIComponent(syms.slice(0, 40).join(","))}`);
+    for (const [sym, q] of Object.entries(r.quotes)) if (!q.error) live.set(sym, q);
+    for (const t of tabs) {
+      const q = t.sym && live.get(t.sym);
+      if (!q) continue;
+      t.spot = q.price;
+      t.summary = { ...(t.summary || { symbol: t.sym }), price: q.price, change_pct: q.change_pct, stale: q.stale };
+      buildContract(t);
+    }
+    renderTabs();
+    if (view === "tab" && st.sym && st.summary) {
+      showLive(st.summary);
+      if (!$("pick").hidden) renderLadder();
+      onQuote();
+    }
+    home.applyQuotes(live);
+    signals.applyQuotes(live);
+    liveFailed = false;
+    lastLive = Date.now();
+  } catch { liveFailed = true; }
+  liveBusy = false;
+  renderFresh();
+}
+
 // "UPDATED 4s AGO" in the header, ticking every second; amber when updates stop arriving.
 function renderFresh() {
   const el = $("fresh");
-  if (!lastPoll) { el.textContent = "CONNECTING…"; return; }
-  const ago = Math.round((Date.now() - lastPoll) / 1000);
-  const late = ago > 3 * POLL_MS / 1000 || !navigator.onLine;
-  el.textContent = !navigator.onLine ? "OFFLINE" : polling ? "UPDATING…" : `UPDATED ${ago < 60 ? ago + "s" : Math.floor(ago / 60) + "m"} AGO`;
-  el.classList.toggle("late", late || pollFailed);
-  el.title = `Prices, P&L and charts refresh every ${POLL_MS / 1000} s while this page is open${pollFailed ? ". The last refresh missed some data; it retries on the next one." : "."}`;
+  const last = Math.max(lastLive, lastPoll);
+  if (!last) { el.textContent = "CONNECTING…"; return; }
+  const ago = Math.round((Date.now() - last) / 1000);
+  const late = ago > 15 || !navigator.onLine;
+  el.textContent = !navigator.onLine ? "OFFLINE" : `LIVE · ${ago < 60 ? ago + "s" : Math.floor(ago / 60) + "m"} AGO`;
+  el.classList.toggle("late", late || liveFailed || pollFailed);
+  el.title = `Stock prices, trends, the home page and signals refresh every ${LIVE_MS / 1000} s; option quotes and candles every `
+    + `${POLL_MS / 1000} s (option quotes are 15 minutes old at the source).${liveFailed || pollFailed ? " The last refresh missed some data; it retries." : ""}`;
 }
 
 // A new version of the app on the server: reload into it (tabs and settings are saved in the browser), but never in
@@ -355,6 +395,7 @@ async function checkVersion() {
 function refreshNow() {
   if (document.hidden) return;
   checkVersion();
+  livePoll();
   if (Date.now() - lastPoll > 5000) { clearTimeout(pollTimer); pollNow().then(schedulePoll); }
 }
 
@@ -367,7 +408,14 @@ function buildContract(t) {
   const c = S.makeContract(row, p.isCall, d.dte, d.price, p.qty);
   c.entry = p.entry;
   t.contract = c;
-  t.livePnl = ((row.mid ?? row.ask) - p.entry) * 100 * p.qty;
+  // The option quote is 15 minutes old; the stock price isn't. Move the quoted price by what the model says the
+  // stock's move since then is worth, at the option's own implied volatility (estMark). P&L uses that estimate.
+  const quoted = row.mid ?? row.ask;
+  const est = S.liveEstimate(quoted, d.price, t.spot ?? d.price, c.strike, d.dte, c.iv, c.isCall);
+  t.quoteMark = quoted;
+  t.estMark = est;
+  t.quotePnl = (quoted - p.entry) * 100 * p.qty;
+  t.livePnl = (est - p.entry) * 100 * p.qty;
 }
 
 // Support and resistance over the tab's RANGE; the nearest of each drives the scenarios unless you picked another.
@@ -445,13 +493,14 @@ function renderLadder() {
   if (!d || $("pick").hidden) return;
   const rows = d[st.side].filter((r) => r.ask > 0);
   if (!rows.length) { $("ladder").replaceChildren(); $("ladder-hint").textContent = "No quotes for this expiration."; return; }
-  const atm = rows.reduce((best, r, i) => (Math.abs(r.strike - d.price) < Math.abs(rows[best].strike - d.price) ? i : best), 0);
+  const px = st.spot ?? d.price;
+  const atm = rows.reduce((best, r, i) => (Math.abs(r.strike - px) < Math.abs(rows[best].strike - px) ? i : best), 0);
   const view = rows.slice(Math.max(0, atm - 12), atm + 13);
   const maxVol = Math.max(1, ...view.map((r) => r.volume));
   const isCall = st.side === "calls";
   let affordable = 0;
   const els = view.map((r) => {
-    const cost = r.ask * 100, itm = isCall ? r.strike < d.price : r.strike > d.price, over = cost > st.budget;
+    const cost = r.ask * 100, itm = isCall ? r.strike < px : r.strike > px, over = cost > st.budget;
     if (!over) affordable++;
     const b = document.createElement("button");
     b.className = `row ${isCall ? "call" : "put"}${over ? " over" : ""}`;
@@ -468,8 +517,8 @@ function renderLadder() {
   });
   const mark = document.createElement("div");
   mark.className = "spot-line";
-  mark.textContent = `${st.sym} is at ${money(d.price)}`;
-  const at = view.findIndex((r) => r.strike > d.price);
+  mark.textContent = `${st.sym} is at ${money(px)} now · option prices are 15 min old`;
+  const at = view.findIndex((r) => r.strike > px);
   els.splice(at < 0 ? els.length : at, 0, mark);
   const box = $("ladder"), key = `${st.id}|${st.sym}|${st.exp}|${st.side}`, keep = box.dataset.for === key ? box.scrollTop : null;
   box.replaceChildren(...els);
@@ -500,12 +549,13 @@ function onQuote() {
   $("qty").textContent = p.qty;
   $("hud-cost").textContent = money(p.entry * 100 * p.qty, 0);
   $("hud-be").textContent = money(S.breakeven(c));
-  const mark = row.mid ?? row.ask;
+  const mark = st.estMark ?? row.mid ?? row.ask;
   glide($("hud-val"), mark * 100 * p.qty, (v) => money(v, 0));
   glide($("hud-pnl"), st.livePnl, (v) => signed(v, 0));
   tone($("hud-pnl"), st.livePnl);
   $("hud-pnl-pct").textContent = pct(100 * (mark - p.entry) / p.entry, 1);
-  refreshSim(false);
+  $("hud-quote").textContent = `delayed quote: ${money(st.quoteMark * 100 * p.qty, 0)} (${signed(st.quotePnl, 0)})`;
+  if (!playing) refreshSim(false);
 }
 
 // ---------------------------------------------------------------- levers and scenarios
@@ -1085,4 +1135,6 @@ home.refresh().then(() => { lastPoll = Date.now(); renderFresh(); });
 schedulePoll();
 checkVersion();
 setInterval(renderFresh, 1000);
+setInterval(livePoll, LIVE_MS);
+livePoll();
 setInterval(() => { if (!document.hidden) checkVersion(); }, 60000);

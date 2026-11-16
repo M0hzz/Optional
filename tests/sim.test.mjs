@@ -92,3 +92,15 @@ test("intraday: steps per day follow the chart's bars, and a short horizon moves
   assert.ok(brk(24 / 78) > 0 && brk(24 / 78) < 0.6 * brk(1));
   assert.ok(mc.lo.at(-1) < twoHours.price.at(-1) && twoHours.price.at(-1) < mc.hi.at(-1));
 });
+
+test("live estimate: a delayed option quote moved by the stock's move since", () => {
+  const q = S.bsPrice(280, 285, 7 / 365, 0.2, true);
+  near(S.liveEstimate(q, 280, 280, 285, 7, 0.2, true), q, 1e-12);                     // no move: the quote
+  near(S.liveEstimate(q, 280, 282, 285, 7, 0.2, true), S.bsPrice(282, 285, 7 / 365, 0.2, true), 1e-9);
+  const qp = S.bsPrice(280, 275, 7 / 365, 0.2, false);
+  assert.ok(S.liveEstimate(qp, 280, 282, 275, 7, 0.2, false) < qp);                   // a put loses when the stock rises
+  // a quote off the model (spread, stale mid) keeps its offset: only the change is added
+  near(S.liveEstimate(q + 0.1, 280, 282, 285, 7, 0.2, true) - S.liveEstimate(q, 280, 282, 285, 7, 0.2, true), 0.1, 1e-12);
+  assert.equal(S.liveEstimate(0.05, 280, 260, 280, 3, 0.2, true), 0);                 // never below zero
+  assert.ok(S.liveEstimate(1, 280, 281, 280, 0, 0.2, true) > 1);                       // expiry day still moves
+});

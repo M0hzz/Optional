@@ -59,6 +59,13 @@ export function valueAt(c, S, day, ivMult = 1) {
 
 export const pnlAt = (c, S, day, ivMult = 1) => (valueAt(c, S, day, ivMult) - c.entry) * 100 * c.qty;
 
+// The option's price now, estimated from a delayed quote: the quoted price moved by what the stock's move since
+// the quote is worth at the option's own implied volatility. Equal to the quote when the stock hasn't moved.
+export function liveEstimate(quoted, spotThen, spotNow, strike, dte, iv, isCall) {
+  const T = Math.max(dte, 0.5) / 365;
+  return Math.max(0, quoted + bsPrice(spotNow, strike, T, iv, isCall) - bsPrice(spotThen, strike, T, iv, isCall));
+}
+
 // The stock price at expiration where the trade breaks even.
 export const breakeven = (c) => (c.isCall ? c.strike + c.entry : c.strike - c.entry);
 

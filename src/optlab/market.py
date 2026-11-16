@@ -194,6 +194,47 @@ def fetch_quote(symbol: str, get=_get) -> dict:
             "volume": int(meta.get("regularMarketVolume") or 0), "day": today.isoformat()}
 
 
+YAHOO_SPARK_URL = "https://query1.finance.yahoo.com/v7/finance/spark?symbols={}&range=1d&interval=1m"
+
+
+def fetch_quotes(symbols: list[str], get=_get) -> dict:
+    """Live quotes for many tickers in one request (Yahoo's batch chart endpoint, about a second old during the
+    session): {SYM: quote as in fetch_quote, plus 'time' (epoch seconds of the last trade)}. Up to 20 per request;
+    tickers Yahoo doesn't know are left out of the answer."""
+    out: dict[str, dict] = {}
+    syms = list(dict.fromkeys(clean_symbol(s) for s in symbols))
+    for i in range(0, len(syms), 20):
+        chunk = syms[i:i + 20]
+        ask = {YAHOO_INDEX.get(s, s.replace(".", "-")): s for s in chunk}
+        from urllib.parse import quote as urlquote
+
+        r = get(YAHOO_SPARK_URL.format(urlquote(",".join(ask), safe=",")))
+        if r.status_code != 200:
+            raise MarketError(f"Live quotes are unavailable right now (HTTP {r.status_code}).")
+        try:
+            results = r.json()["spark"]["result"] or []
+        except (KeyError, TypeError, ValueError):
+            raise MarketError("Live quotes are unavailable right now.") from None
+        for x in results:
+            try:
+                sym = ask.get(x["symbol"])
+                meta = x["response"][0]["meta"]
+                price = float(meta["regularMarketPrice"])
+                prev = meta.get("chartPreviousClose") or meta.get("previousClose")
+                prev = float(prev) if prev else None
+                t = int(meta["regularMarketTime"])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            if not sym:
+                continue
+            day = datetime.fromtimestamp(t, _zone(meta.get("exchangeTimezoneName"))).date()
+            out[sym] = {"symbol": sym, "name": meta.get("shortName") or meta.get("longName") or sym,
+                        "price": round(price, 4), "prev_close": round(prev, 4) if prev else None,
+                        "change_pct": round(100 * (price / prev - 1), 2) if prev else None,
+                        "volume": int(meta.get("regularMarketVolume") or 0), "day": day.isoformat(), "time": t}
+    return out
+
+
 def levels(bars: list[dict], price: float | None = None) -> dict:
     """What the simulator needs from the bars, each by a fixed rule:
 

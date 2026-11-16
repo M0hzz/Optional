@@ -50,9 +50,11 @@ export function createSignals(app) {
     return list.slice(0, 20);
   }
 
-  // Today's price folded into the last daily or weekly bar, so the squares move during the day.
+  // The live price folded into the last bar, so the squares move between bar downloads: on intraday lines it is
+  // the forming bar's close; on daily and weekly lines today's (or this week's) close.
   function withQuote(bars, tf, q) {
-    if (!q || !bars.length || INTRADAY.has(tf)) return bars.map((b) => b.c);
+    if (!q || !bars.length) return bars.map((b) => b.c);
+    if (INTRADAY.has(tf)) { const c = bars.map((b) => b.c); c[c.length - 1] = q.price; return c; }
     const closes = bars.map((b) => b.c), last = bars.at(-1).d;
     const same = tf === "1d" ? last === q.day : weekKey(last) === weekKey(q.day);
     if (same) closes[closes.length - 1] = q.price;
@@ -268,8 +270,15 @@ export function createSignals(app) {
   });
   $("sb-clear").addEventListener("click", () => { log = []; unread = 0; saveLog(); render(); });
 
+  // Live quotes from the page's fast loop (every 3 s): rescore every line and log what changed colour.
+  function applyQuotes(map) {
+    const syms = symbols().map((x) => x.sym);
+    for (const s of syms) if (map.has(s)) quotes.set(s, map.get(s));
+    if (syms.some((s) => cfg.rows.some((tf) => data.get(`${s}|${tf}`)?.bars))) { diff(syms); render(); }
+  }
+
   return {
-    refresh, render,
+    refresh, render, applyQuotes, symbols: () => symbols().map((x) => x.sym),
     seen() { unread = 0; saveLog(); renderControls(); },
   };
 }
