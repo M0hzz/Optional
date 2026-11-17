@@ -14,8 +14,7 @@ CBOE_URL = "https://cdn.cboe.com/api/global/delayed_quotes/options/{}.json"
 YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range={}&interval={}"
 # timeframe -> (Yahoo interval, how far back to ask, seconds a fetched copy is reused). Weekly is built from daily.
 TIMEFRAMES = {"5m": ("5m", "10d", 20), "15m": ("15m", "1mo", 30), "1h": ("60m", "6mo", 60), "1d": ("1d", "5y", 600),
-              "1w": ("1d", "5y", 600),
-              "5mx": ("5m", "60d", 120)}     # 60 days of 5-minute bars: the cycle tracker's history (not a chart)
+              "1w": ("1d", "5y", 600)}
 OCC_RE = re.compile(r"^(?P<root>.+?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$")
 YAHOO_QUOTE_URL = "https://query1.finance.yahoo.com/v8/finance/chart/{}?range=5d&interval=1d"
 YAHOO_INDEX = {"SPX": "^SPX", "NDX": "^NDX", "RUT": "^RUT", "VIX": "^VIX", "XSP": "^XSP", "DJX": "^DJI",
@@ -120,13 +119,13 @@ def fetch_bars(symbol: str, tf: str = "1d", get=_get) -> list[dict]:
     r = get(YAHOO_URL.format(YAHOO_INDEX.get(sym, sym.replace(".", "-")), back, interval))
     if r.status_code != 200:
         raise MarketError(f"No price history for {sym} right now (HTTP {r.status_code}).")
-    intraday = tf in ("5m", "15m", "1h", "5mx")
+    intraday = tf in ("5m", "15m", "1h")
     try:
         res = r.json()["chart"]["result"][0]
         q = res["indicators"]["quote"][0]
         zone = _zone(res["meta"].get("exchangeTimezoneName")) if intraday else timezone.utc
         stamps = list(res["timestamp"])
-        step = {"5m": 300, "5mx": 300, "15m": 900, "1h": 3600}.get(tf)
+        step = {"5m": 300, "15m": 900, "1h": 3600}.get(tf)
         if step and len(stamps) >= 2 and stamps[-1] - stamps[-2] < step:
             stamps = stamps[:-1]            # Yahoo adds a "price right now" row off the bar grid: not a bar
         out = []

@@ -29,7 +29,6 @@
   <nav class="tabbar" aria-label="Simulations">
     <button class="tab-home" id="tab-home" role="tab">&#9962; HOME</button>
     <button class="tab-home tab-signals" id="tab-signals" role="tab">&#9873; SIGNALS <small></small></button>
-    <button class="tab-home tab-cycles" id="tab-cycles" role="tab">&#10040; CYCLES</button>
     <div class="tabs" id="tabs" role="tablist"></div>
     <button class="btn tab-add" id="tab-add">+ NEW TAB</button>
   </nav>
@@ -113,33 +112,6 @@
         <p class="hint" id="sb-log-empty">Nothing yet. A line appears here each time a square turns green or red, with the
           whole line as it was at that moment. Changes are checked every 15 seconds while this page is open, on any tab;
           what changed while it was closed is logged when you come back.</p>
-      </section>
-    </div>
-
-    <div id="cycles" class="home" hidden>
-      <section class="panel">
-        <h2><span class="step">&#10040;</span> SCENARIO CYCLES <span class="tag">EACH CYCLE ASSUMES THE ONE BEFORE HAPPENED</span></h2>
-        <div class="sb-controls">
-          <div class="toggles"><span class="k">TICKER</span><span class="toggles" id="cy-syms"></span></div>
-          <div class="toggles" id="cy-depth" role="group" aria-label="How many cycles ahead">
-            <span class="k">SHOW</span>
-            <button class="tg" data-d="1">1 CYCLE</button><button class="tg" data-d="2">2 CYCLES</button><button class="tg" data-d="3">3 CYCLES</button>
-          </div>
-        </div>
-        <button class="arch-toggle" id="cy-arch-toggle" aria-expanded="false">&#9650; STORED BRANCHES (<span id="cy-arch-count">0</span>) <small>scenarios that died or didn't happen</small></button>
-        <div class="arch-list" id="cy-arch" hidden></div>
-        <div class="cy-status" id="cy-status"></div>
-        <div class="ctree" id="cy-tree"></div>
-        <p class="hint">Each 15-minute cycle ends in one of five scenarios, measured from where it started in the ticker's own typical
-          15-minute move (σ): BREAKOUT UP (to the nearest resistance, or +1.5σ), DRIFT UP (+0.5σ or more), CHOP (within ±0.5σ),
-          DRIFT DOWN, BREAKDOWN (to the nearest support, or −1.5σ). NOW updates with every live price: as time runs out the odds
-          polarise, scenarios under 10% fade, and under 2% they die and move to the stored branches. Click a scenario to see the
-          cycle after it: those odds assume it happened, so they add up to 100% on their own; "whole path" is the chance of the
-          whole chain from now. Odds come from the moments most like now in the last 60 days, corrected by how the model has done.</p>
-      </section>
-      <section class="panel">
-        <h2><span class="step">&#10003;</span> HOW GOOD IS IT</h2>
-        <div id="cy-score"></div>
       </section>
     </div>
 
