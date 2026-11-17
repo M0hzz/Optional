@@ -10,6 +10,27 @@ Pick a call or put straight from the live option chain, then pull levers and pla
 
 **Timeframes:** each tab's chart can run on 5-minute, 15-minute, 1-hour, daily or weekly candles. Indicators, the trend read and the support and resistance levels follow the timeframe, and on an intraday one a scenario plays out over hours. The home page has the same choice, so every watched symbol, chain and position can show its weekly or intraday trend.
 
+**GO / HOLD / CUT:** set your rules once (target +$50 net, stop −$40, DAY TRADE sells by 15:45 or SWING holds overnight
+until 2 days before expiry; fees per contract if your broker charges them). The contract list then gives every contract
+a verdict and a chance of hitting your target before your exit, and the card on top names the best one with GO or WAIT
+and the checks behind it. Once you've bought (I BOUGHT IT), the position shows one word: HOLD, TAKE PROFIT at your
+target, CUT at your stop (or before earnings on a swing), or TIME'S UP. When you sell, type your fill and press RECORD
+SALE: HOME keeps YOUR TRADES (win rate, average win and loss, how often you hit +$50).
+
+Why these rules, from recent research on retail option traders:
+- Spreads on cheap short-dated options average about 12%, and costs, not bad direction calls, were most of what retail
+  lost (Bryzgalova, Pavlova & Sikorskaya 2023; Beckmeyer, Branger & Gayda 2023). So profit is counted at the bid, after fees.
+- Far out-of-the-money, near-expiry "lottery" options do worse than other options (Boyer & Vorkink 2014): never a GO.
+- Buying before earnings and holding through them loses on average (de Silva, Smith & So 2023): a swing never holds
+  through earnings unless you tick the box.
+- Exits fixed in advance undo the habit of selling winners early and riding losers (Fischbacher, Hoffmann & Schudy 2017);
+  stops work when not set too tight (Kaminski & Lo 2014). So the target and stop are set when you buy.
+- Retail option losses persist and buying on attention hurts (Bauer, Cosemans & Eichholtz 2009; Barber et al. 2022): a
+  15-minute cool-down after a CUT.
+
+The chance figures assume a random walk at the option's own implied volatility, so they are a fair-odds yardstick,
+not a prediction.
+
 **Signals:** the SIGNALS tab is a board with one block per ticker (from your open tabs, and optionally the home page's monitor and chains), one line per timeframe (5 min to week), and one square per indicator: TREND, EMA 9/21, SMA 50, SMA 200, MACD, RSI and Bollinger. Green is bullish, red bearish, white neutral; the deeper the colour, the stronger the reading. Every time a square changes colour it goes into the alert log with that line's squares at that moment, pops up as a toast on whatever page is open, adds to the count on the tab, and can show a browser notification. Checks run every 15 seconds while the page is open; changes that happened while it was closed are logged when you come back.
 
 **Home page:** the HOME tab shows every position at once (live P&L, and the simulated P&L from whatever you set on its tab), a market monitor for symbols you watch whether or not you hold them (trend health, RSI, nearest support and resistance), and chains: an anchor symbol with the symbols you link to it, compared by how tightly they move together, who is leading, and where they diverge. On every tab, a dock pinned to the bottom shows the watched symbols; ones linked to the tab's ticker come first.

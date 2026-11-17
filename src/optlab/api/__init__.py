@@ -4,6 +4,7 @@
     GET /api/chain/{symbol}/{date}   the calls and puts of one expiration
     GET /api/bars/{symbol}           daily bars and the levels the simulator uses
     GET /api/quotes?symbols=A,B      light quotes for the home page monitor (no option chain needed)
+    GET /api/earnings?symbols=A,B    the next earnings report within two weeks (Nasdaq's calendar)
     GET /api/version                 changes when a new version is installed: open pages reload themselves
 
 It answers only to localhost and your Tailscale name (OPTLAB_ALLOWED_HOSTS to change), so a web page you
@@ -15,6 +16,8 @@ import hashlib
 import os
 import threading
 import time
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -52,7 +55,7 @@ def host_ok(host: str, allowed: list[str]) -> bool:
 
 
 def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetch_quote=market.fetch_quote,
-               fetch_quotes=market.fetch_quotes, chain_ttl: float = 15, bars_ttl: float = 600, quote_ttl: float = 2,
+               fetch_quotes=market.fetch_quotes, fetch_earnings_day=market.fetch_earnings_day, chain_ttl: float = 15, bars_ttl: float = 600, quote_ttl: float = 2,
                allowed_hosts: list[str] | None = None) -> FastAPI:
     allowed = allowed_hosts or [h.strip().lower() for h in os.environ.get(
         "OPTLAB_ALLOWED_HOSTS", "localhost,127.0.0.1,::1,*.ts.net").split(",") if h.strip()]
@@ -110,6 +113,51 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
         daily, _ = bars["1d"].get(sym, lambda: fetch_bars(sym, "1d"))
         b = daily if tf == "1d" else bars[tf].get(sym, lambda: market.weekly(daily) if tf == "1w" else fetch_bars(sym, tf))[0]
         return {"symbol": sym, "tf": tf, "bars": b, "levels": market.levels(daily)}
+
+    # Earnings dates for the next two weeks of weekdays, loaded in the background (the calendar answers one day at a
+    # time, a couple of seconds each) and kept for 6 hours.
+    earn: dict = {"days": {}, "loading": False}
+    earn_lock = threading.Lock()
+
+    def earnings_days(today: date) -> list[date]:
+        out, d = [], today
+        while len(out) < 10:
+            if d.weekday() < 5:
+                out.append(d)
+            d += timedelta(days=1)
+        return out
+
+    def load_earnings(days):
+        try:
+            for d in days:
+                try:
+                    got = fetch_earnings_day(d)
+                except market.MarketError:
+                    continue
+                with earn_lock:
+                    earn["days"][d] = (time.monotonic(), got)
+        finally:
+            earn["loading"] = False
+
+    @app.get("/api/earnings")
+    def earnings_route(symbols: str = ""):
+        """The next earnings report within two weeks for each symbol: {SYM: {date, when: bmo | amc | unknown}}.
+        `loading` is true while the calendar is still being read; symbols without a report in the window are left out."""
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+        days = earnings_days(today)
+        with earn_lock:
+            stale = [d for d in days if d not in earn["days"] or time.monotonic() - earn["days"][d][0] > 6 * 3600]
+            if stale and not earn["loading"]:
+                earn["loading"] = True
+                threading.Thread(target=load_earnings, args=(stale,), daemon=True).start()
+            known = {d: earn["days"][d][1] for d in days if d in earn["days"]}
+        want = {market.clean_symbol(s) for s in symbols.split(",") if s.strip()} if symbols.strip() else set()
+        out = {}
+        for d in sorted(known):
+            for sym, when in known[d].items():
+                if sym in want and sym not in out:
+                    out[sym] = {"date": d.isoformat(), "when": when}
+        return {"earnings": out, "loading": earn["loading"], "days": len(known), "through": days[-1].isoformat()}
 
     @app.get("/api/version")
     def version():

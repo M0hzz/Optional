@@ -144,6 +144,11 @@ export function createHome(app) {
       const read = h.read ?? p.read, lv = h.lv ?? p.lv;
       const tr = el("div", "pos-trend");
       tr.append(trendChip(read), lights(read));
+      if (p.decision) {
+        const dw = el("div", `pos-decide ${p.decision.code}`);
+        dw.append(el("b", "", p.decision.word), el("span", "", p.decision.text));
+        head.after(dw);
+      }
       card.append(head, nums, tr, rangeBar(p.spot, lv, [{ v: p.strike, cls: "strike", title: `strike ${p.strike}` }, { v: p.breakeven, cls: "be", title: `breakeven ${p.breakeven.toFixed(2)}` }]));
       card.addEventListener("click", () => app.openTab(p.index));
       return card;
@@ -315,11 +320,38 @@ export function createHome(app) {
     }
   }
 
+  // Recorded sales: how the rules are working out.
+  function renderRecord() {
+    const rec = app.record(), box = $("home-record");
+    if (!rec.length) { box.replaceChildren(el("p", "hint", "No sales recorded yet. When you sell, type your fill on the position and press RECORD SALE.")); return; }
+    const wins = rec.filter((x) => x.net > 0), losses = rec.filter((x) => x.net <= 0);
+    const avg = (a) => (a.length ? a.reduce((s, x) => s + x.net, 0) / a.length : null);
+    const total = rec.reduce((s, x) => s + x.net, 0), hit = rec.filter((x) => x.net >= 50).length;
+    const stats = el("div", "totals");
+    for (const [k, v, cls] of [["TRADES", String(rec.length)], ["WIN RATE", `${Math.round(100 * wins.length / rec.length)}%`],
+                               ["AVG WIN", avg(wins) == null ? "—" : signed(avg(wins), 0), "up"], ["AVG LOSS", avg(losses) == null ? "—" : signed(avg(losses), 0), "down"],
+                               ["+$50 OR MORE", `${hit} of ${rec.length}`], ["NET", signed(total, 0), total >= 0 ? "up" : "down"]]) {
+      const d = el("div", "tot"); d.append(el("span", "k", k)); const s = el("span", `v ${cls || ""}`, v); d.append(s); stats.append(d);
+    }
+    const list = el("div", "rec-list");
+    for (const x of rec.slice(0, 10)) {
+      const row = el("div", "rec-row");
+      const n = el("b", "", signed(x.net, 0)); tone(n, x.net);
+      row.append(el("span", "rec-t", new Date(x.at).toLocaleDateString([], { month: "short", day: "numeric" })), el("span", "", x.name),
+                 el("span", "rec-m", `${money(x.entry)} → ${money(x.exit)}`), n, el("span", "rec-w", x.word ? `said ${x.word}` : ""));
+      list.append(row);
+    }
+    const clear = el("button", "tg", "CLEAR RECORD");
+    clear.addEventListener("click", () => { if (confirm("Clear every recorded trade?")) { app.clearRecord(); render(); } });
+    box.replaceChildren(stats, list, clear);
+  }
+
   function render() {
     renderDock();
     document.body.classList.toggle("has-dock", !$("dock").hidden);
     if ($("home").hidden) return;
     renderPositions();
+    renderRecord();
     renderMonitor();
     renderChains();
   }

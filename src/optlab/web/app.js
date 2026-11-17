@@ -4,6 +4,7 @@ import * as LV from "./levels.js";
 import { PriceChart } from "./chart.js";
 import { createHome } from "./home.js";
 import { createSignals } from "./signals.js";
+import * as DC from "./decide.js";
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15000;
@@ -40,6 +41,15 @@ let playing = null;            // the animation frame of PLAY (one at a time)
 let pollTimer = null;
 let view = "tab";              // "home" (the overview of everything) or "tab" (one simulation)
 let home = null;
+// GO / HOLD / CUT: your default rules (each position keeps the rules it was bought with), the record of trades you
+// closed, and the earnings calendar.
+const RULES_KEY = "optlab-sim-rules-v1", RECORD_KEY = "optlab-sim-record-v1";
+const readJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || "null") ?? d; } catch { return d; } };
+const writeJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window */ } };
+let rules = { ...DC.DEFAULT_RULES, ...readJSON(RULES_KEY, {}) };
+let record = readJSON(RECORD_KEY, []);
+const earnings = new Map();
+const COOLDOWN_MIN = 15;
 const LIVE_MS = 3000;          // live stock quotes: every 3 s while the page is visible
 const live = new Map();        // SYM -> latest live quote
 let lastLive = 0, liveBusy = false, liveFailed = false;
@@ -48,7 +58,7 @@ let chart = null;              // the interactive chart (one canvas, redrawn for
 
 function newTab(from = {}) {
   return {
-    id: Math.random().toString(36).slice(2, 9), sym: null, side: "calls", budget: 500, pick: null, exp: null,
+    id: Math.random().toString(36).slice(2, 9), sym: null, side: "calls", budget: 300, pick: null, exp: null,
     horizon: 5, seed: 1, scenario: null, lever: { price: null, day: 0, iv: 0, volume: 1, touched: false },
     levelR: "", levelS: "", autoR: true, autoS: true, range: "6M", tf: "1d", hbars: 24,
     overlays: { ema: true, sma50: true, sma200: false, bb: false, vol: true }, osc: "rsi",
@@ -151,6 +161,7 @@ function positions() {
       simNote: !moved ? "levers at now" : `${sc ? sc.name.toLowerCase() + " · " : ""}${money(simPrice)} at ${ahead(L.day, t)}`,
       spot: t.spot, changePct: t.summary?.change_pct ?? null, strike: c.strike, breakeven: S.breakeven(c),
       read: closes.length >= 30 ? I.readout(closes) : null, lv: t.lv,
+      decision: t.decision, netNow: t.netNow, earn: t.earn,
     };
   });
 }
@@ -177,7 +188,10 @@ function renderTabs() {
     main.firstChild.textContent = shortName(t);
     const sub = main.lastChild;
     if (t.loading) sub.textContent = "loading…";
-    else if (t.livePnl != null) { sub.textContent = signed(t.livePnl, 0); tone(sub, t.livePnl); }
+    else if (t.decision && t.netNow != null) {
+      sub.textContent = `${t.decision.word} ${signed(t.netNow, 0)}`;
+      sub.className = `dw ${t.decision.code}`;
+    } else if (t.livePnl != null) { sub.textContent = signed(t.livePnl, 0); tone(sub, t.livePnl); }
     else sub.textContent = t.scenario ? S.SCENARIOS.find((s) => s.id === t.scenario)?.name.toLowerCase() ?? "" : t.sym ? "pick a contract" : "empty";
     main.addEventListener("click", () => switchTo(i));
     x.addEventListener("click", (e) => { e.stopPropagation(); closeTab(i); });
@@ -315,6 +329,7 @@ async function pollNow() {
     }
     await home.refresh();
     await signals.refresh();
+    await loadEarnings();
   } catch { failed = true; }
   polling = false;
   pollFailed = failed;
@@ -328,6 +343,16 @@ function schedulePoll() {
     if (!document.hidden) await pollNow();
     schedulePoll();
   }, POLL_MS);
+}
+
+// Earnings dates for every ticker on screen (the server keeps the calendar; this is cheap).
+async function loadEarnings() {
+  const syms = [...new Set([...tabs.filter((t) => t.sym).map((t) => t.sym), ...home.symbols()])];
+  if (!syms.length) return;
+  try {
+    const r = await api(`/api/earnings?symbols=${encodeURIComponent(syms.join(","))}`);
+    for (const s of syms) { if (r.earnings[s]) earnings.set(s, r.earnings[s]); else if (!r.loading) earnings.delete(s); }
+  } catch { /* the calendar is optional: decisions still work without it */ }
 }
 
 // The fast loop: live stock quotes for every ticker on every page, in one request. Tab headers, the options'
@@ -416,6 +441,34 @@ function buildContract(t) {
   t.estMark = est;
   t.quotePnl = (quoted - p.entry) * 100 * p.qty;
   t.livePnl = (est - p.entry) * 100 * p.qty;
+  // what you could sell for: the bid, moved the same way, and what that nets after fees
+  const R = rulesOf(t), clock = DC.marketClock();
+  t.bidEst = row.bid > 0 ? S.liveEstimate(row.bid, d.price, t.spot ?? d.price, c.strike, d.dte, c.iv, c.isCall) : 0;
+  t.netNow = DC.netNow({ entry: p.entry, bid: t.bidEst, qty: p.qty, fees: R.fees });
+  t.earn = DC.earningsInPlan(earnings.get(t.sym), R, clock, p.expiration);
+  const was = t.decision?.code;
+  t.decision = DC.status({ net: t.netNow, rules: R, clock, dte: d.dte, earn: t.earn });
+  if (was && was !== t.decision.code) decisionAlert(t);
+}
+
+const rulesOf = (t) => ({ ...DC.DEFAULT_RULES, ...rules, ...(t.pick?.rules || {}) });
+
+// A position's word changed: say so wherever you are.
+function decisionAlert(t) {
+  const d = t.decision, p = t.pick;
+  const title = `${p.symbol} ${p.strike}${p.isCall ? "C" : "P"}: ${d.word}`;
+  const box = $("sb-toasts"), el = document.createElement("button");
+  el.className = `toast ${d.code === "TAKE" || d.code === "HOLD" ? "g" : "r"}`;
+  el.innerHTML = "<b></b><span></span>";
+  el.firstChild.textContent = title;
+  el.lastChild.textContent = d.text;
+  el.addEventListener("click", () => { el.remove(); switchTo(tabs.indexOf(t)); });
+  box.prepend(el);
+  setTimeout(() => el.classList.add("out"), 15000);
+  setTimeout(() => el.remove(), 15600);
+  if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+    try { new Notification(title, { body: d.text, tag: `optlab-${t.id}` }); } catch { /* not allowed here */ }
+  }
 }
 
 // Support and resistance over the tab's RANGE; the nearest of each drives the scenarios unless you picked another.
@@ -496,25 +549,33 @@ function renderLadder() {
   const px = st.spot ?? d.price;
   const atm = rows.reduce((best, r, i) => (Math.abs(r.strike - px) < Math.abs(rows[best].strike - px) ? i : best), 0);
   const view = rows.slice(Math.max(0, atm - 12), atm + 13);
-  const maxVol = Math.max(1, ...view.map((r) => r.volume));
   const isCall = st.side === "calls";
-  let affordable = 0;
+  const ctx0 = goContext(d, px, isCall);
+  let affordable = 0, best = null;
   const els = view.map((r) => {
     const cost = r.ask * 100, itm = isCall ? r.strike < px : r.strike > px, over = cost > st.budget;
     if (!over) affordable++;
+    const v = judge(r, d, px, isCall, ctx0);
+    if (!over && !v.lot.lottery && (!best || (v.go.go && !best.v.go.go) || (v.go.go === best.v.go.go && (v.odds?.pTarget ?? 0) > (best.v.odds?.pTarget ?? 0)))) best = { r, v };
     const b = document.createElement("button");
-    b.className = `row ${isCall ? "call" : "put"}${over ? " over" : ""}`;
-    b.innerHTML = `<span class="cells"><span class="strike"></span><span class="cost"></span><span class="delta"></span><span class="bar"><i></i><em></em></span></span>`;
-    const [strike, costEl, delta, bar] = b.firstChild.children;
+    b.className = `row ${isCall ? "call" : "put"}${over ? " over" : ""}${v.lot.lottery ? " lottery" : ""}`;
+    b.innerHTML = `<span class="cells"><span class="strike"></span><span class="cost"></span><span class="odds"></span><span class="verdict"></span></span>`;
+    const [strike, costEl, oddsEl, verdict] = b.firstChild.children;
     strike.textContent = r.strike % 1 ? r.strike.toFixed(2) : r.strike;
     if (itm) strike.insertAdjacentHTML("beforeend", "<small>IN THE MONEY</small>");
     costEl.textContent = money(cost, 0);
-    delta.textContent = r.delta == null ? "—" : `$${Math.abs(r.delta * 100).toFixed(0)}`;
-    bar.firstChild.style.setProperty("--w", `${Math.round(100 * r.volume / maxVol)}%`);
-    bar.lastChild.textContent = r.volume.toLocaleString("en-US");
+    oddsEl.innerHTML = "<b></b><small></small>";
+    oddsEl.firstChild.textContent = v.odds ? `${Math.round(100 * v.odds.pTarget)}%` : "—";
+    oddsEl.lastChild.textContent = v.odds ? `stop ${Math.round(100 * v.odds.pStop)}%` : "";
+    verdict.textContent = v.lot.lottery ? "LOTTERY" : v.go.go ? "GO" : "WAIT";
+    verdict.className = `verdict ${v.lot.lottery ? "lot" : v.go.go ? "go" : "wait"}`;
+    b.title = v.lot.lottery ? `Lottery ticket: ${v.lot.why.join(", ")}` : `${v.go.go ? "GO" : "WAIT"}: ${v.go.reason}`
+      + (v.odds?.sTarget ? `\n+$${rulesOf(st).target} needs ${st.sym} at ${v.odds.sTarget.toFixed(2)} (${pct(v.odds.move, 1)})` : "");
+    b.dataset.occ = r.occ;
     b.addEventListener("click", () => choose(r, isCall));
     return b;
   });
+  renderGoCard(best, d, isCall);
   const mark = document.createElement("div");
   mark.className = "spot-line";
   mark.textContent = `${st.sym} is at ${money(px)} now · option prices are 15 min old`;
@@ -524,12 +585,81 @@ function renderLadder() {
   box.replaceChildren(...els);
   box.dataset.for = key;
   box.scrollTop = keep ?? Math.max(0, mark.offsetTop - box.clientHeight / 2 + 20);   // open at the stock's price
-  $("ladder-hint").textContent = affordable ? `${affordable} of these fit your budget. Dimmed ones cost more. "Moves per $1" is how much one contract gains or loses when the stock moves $1.`
+  if (best) box.querySelector(`[data-occ="${best.r.occ}"]`)?.classList.add("best");
+  $("ladder-hint").textContent = affordable ? `${affordable} of these fit your budget (dimmed ones cost more). "Chance" is how likely the stock reaches the price where one contract nets +$${rulesOf(st).target} at the bid before your exit; "stop" is the same for your −$${rulesOf(st).stop} stop. Hover a row for its reason.`
     : "Nothing here fits that budget. Raise it, or pick a nearer expiration.";
 }
 
+// What every row on the ladder is judged against: the trend on this tab's timeframe, the nearest levels, earnings,
+// the time, and the cool-down after a CUT.
+function goContext(d, px, isCall) {
+  const closes = histCloses(st), rd = closes.length >= 30 ? I.readout(closes) : null;
+  const clock = DC.marketClock(), R = { ...DC.DEFAULT_RULES, ...rules };
+  const lastCut = record.find((x) => x.word === "CUT");
+  const cooldownLeft = lastCut ? COOLDOWN_MIN - (Date.now() - lastCut.at) / 60000 : 0;
+  return {
+    clock, R, hz: DC.horizon(R, clock, d.dte),
+    trend: rd ? { verdict: rd.verdict.value, short: rd.short?.tone || "flat" } : null,
+    resistance: st.lv?.resistance.find((l) => l.price > px)?.price ?? null,
+    support: st.lv?.support.find((l) => l.price < px)?.price ?? null,
+    earn: DC.earningsInPlan(earnings.get(st.sym), R, clock, st.exp), cooldownLeft, isCall,
+  };
+}
+
+function judge(r, d, px, isCall, c) {
+  const mid = r.mid ?? r.ask;
+  const iv = S.impliedVol(mid, d.price, r.strike, Math.max(d.dte, 0.5) / 365, isCall) ?? r.iv ?? 0.3;
+  const shift = S.liveEstimate(mid, d.price, px, r.strike, d.dte, iv, isCall) - mid;     // the 15-minute-old quote, moved
+  const bid = r.bid > 0 ? Math.max(r.bid + shift, 0.01) : 0, ask = Math.max(r.ask + shift, 0.01);
+  const odds = DC.targetOdds({ spot: px, strike: r.strike, isCall, bid, ask, dte: d.dte, iv, qty: 1, rules: c.R, hz: c.hz });
+  const lot = DC.isLottery({ delta: r.delta, bid: r.bid, ask: r.ask, dte: d.dte });
+  const go = DC.goCheck({ isCall, cost: r.ask * 100, budget: st.budget, odds, lot, trend: c.trend, resistance: c.resistance,
+                          support: c.support, earn: c.earn, rules: c.R, clock: c.clock, dte: d.dte, cooldownLeft: c.cooldownLeft });
+  return { odds, lot, go };
+}
+
+// The card above the ladder: the best contract for your rules, and GO or WAIT with every check.
+function renderGoCard(best, d, isCall) {
+  const card = $("go-card"), R = { ...DC.DEFAULT_RULES, ...rules };
+  if (!document.activeElement?.closest?.("#go-rules")) {
+    $("gr-target").value = R.target;
+    $("gr-stop").value = R.stop;
+    $("gr-mode").textContent = R.mode === "swing" ? "SWING" : "DAY TRADE";
+    $("gr-mode").setAttribute("aria-pressed", R.mode === "swing");
+    $("gr-fees").value = R.fees;
+  }
+  if (!best) {
+    card.className = "go-card WAIT";
+    $("go-word").textContent = "WAIT";
+    const ok = d[st.side].filter((r) => r.ask > 0 && !DC.isLottery({ delta: r.delta, bid: r.bid, ask: r.ask, dte: d.dte }).lottery)
+      .sort((a, b) => a.ask - b.ask)[0];
+    $("go-what").textContent = `Nothing on this expiration fits: every ${isCall ? "call" : "put"} under $${st.budget} is a lottery ticket.`
+      + (ok ? ` The cheapest that isn't costs ${money(ok.ask * 100, 0)} (${ok.strike}). Try another expiration, ${isCall ? "puts" : "calls"}, or a cheaper stock.` : "");
+    $("go-checks").replaceChildren();
+    $("go-buy").hidden = true;
+    return;
+  }
+  const { r, v } = best;
+  card.className = `go-card ${v.go.go ? "GO" : "WAIT"}`;
+  $("go-word").textContent = v.go.go ? "GO" : "WAIT";
+  $("go-what").textContent = `${st.sym} ${r.strike % 1 ? r.strike.toFixed(2) : r.strike} ${isCall ? "CALL" : "PUT"} · ${dateLabel(d.date)} · ${money(r.ask * 100, 0)}`
+    + (v.odds ? ` · ${Math.round(100 * v.odds.pTarget)}% chance of +$${R.target}, ${Math.round(100 * v.odds.pStop)}% of the stop` : "")
+    + (v.go.go ? "" : ` · waiting on: ${v.go.reason}`);
+  $("go-checks").replaceChildren(...v.go.checks.map((c) => {
+    const li = document.createElement("li");
+    li.className = c.ok ? "ok" : "no";
+    li.textContent = `${c.ok ? "✓" : "✗"} ${c.label}`;
+    if (!c.ok) li.title = c.why;
+    return li;
+  }));
+  $("go-buy").hidden = false;
+  $("go-buy").textContent = v.go.go ? "I BOUGHT IT" : "BUY ANYWAY (I BOUGHT IT)";
+  $("go-buy").onclick = () => choose(r, isCall);
+}
+
 function choose(r, isCall) {
-  st.pick = { symbol: st.sym, expiration: st.exp, isCall, occ: r.occ, strike: r.strike, entry: r.ask, qty: 1 };
+  st.pick = { symbol: st.sym, expiration: st.exp, isCall, occ: r.occ, strike: r.strike, entry: r.ask, qty: 1, rules: { ...rules },
+              boughtAt: Date.now() };
   st.pickData = st.expData;
   buildContract(st);
   resetLevers(false);
@@ -537,6 +667,33 @@ function choose(r, isCall) {
   renderTabs();
   renderTab();
   $("hud").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+// The position's one word, how far it is from the target and the stop, and its rules.
+function renderDecision() {
+  const p = st.pick, d = st.decision;
+  if (!p || !d) return;
+  const R = rulesOf(st), box = $("decide");
+  box.className = `decide ${d.code}`;
+  $("dc-word").textContent = d.word;
+  $("dc-text").textContent = d.text;
+  const span = R.target + R.stop, at = Math.min(1, Math.max(0, (st.netNow + R.stop) / span));
+  $("dc-bar").style.setProperty("--x", `${(100 * at).toFixed(1)}%`);
+  $("dc-bar").style.setProperty("--zero", `${(100 * R.stop / span).toFixed(1)}%`);
+  $("dc-lo").textContent = `STOP −$${R.stop}`;
+  $("dc-hi").textContent = `TARGET +$${R.target}`;
+  $("dc-net").textContent = `If you sold now: ${signed(st.netNow, 0)} net (at the bid${R.fees ? ", after fees" : ""}, estimated)`;
+  tone($("dc-net"), st.netNow);
+  $("dc-earn").textContent = st.earn ? `Earnings: ${st.sym} ${st.earn.text}.` : "";
+  $("dc-earn").hidden = !st.earn;
+  if (document.activeElement?.closest?.("#dc-rules")) return;     // don't overwrite what's being typed
+  $("dc-target").value = R.target;
+  $("dc-stop").value = R.stop;
+  $("dc-mode").textContent = R.mode === "swing" ? "SWING" : "DAY TRADE";
+  $("dc-mode").setAttribute("aria-pressed", R.mode === "swing");
+  $("dc-hold").checked = !!R.holdEarnings;
+  $("dc-hold-wrap").hidden = R.mode !== "swing";
+  if (document.activeElement !== $("dc-sold")) $("dc-sold").value = st.bidEst ? st.bidEst.toFixed(2) : "";
 }
 
 function onQuote() {
@@ -555,6 +712,7 @@ function onQuote() {
   tone($("hud-pnl"), st.livePnl);
   $("hud-pnl-pct").textContent = pct(100 * (mark - p.entry) / p.entry, 1);
   $("hud-quote").textContent = `delayed quote: ${money(st.quoteMark * 100 * p.qty, 0)} (${signed(st.quotePnl, 0)})`;
+  renderDecision();
   if (!playing) refreshSim(false);
 }
 
@@ -977,6 +1135,33 @@ function wire() {
     loadSymbol(st, v, false);
   });
   $("tab-add").addEventListener("click", () => addTab());
+  // your default rules (for the next trade)
+  const setRule = (k, v) => { rules = { ...rules, [k]: v }; writeJSON(RULES_KEY, rules); renderLadder(); };
+  $("gr-target").addEventListener("change", (e) => setRule("target", Math.max(5, Math.round(+e.target.value || 50))));
+  $("gr-stop").addEventListener("change", (e) => setRule("stop", Math.max(5, Math.round(+e.target.value || 40))));
+  $("gr-fees").addEventListener("change", (e) => setRule("fees", Math.max(0, +e.target.value || 0)));
+  $("gr-mode").addEventListener("click", () => setRule("mode", rules.mode === "swing" ? "eod" : "swing"));
+  // this position's rules
+  const setMine = (k, v) => {
+    if (!st.pick) return;
+    st.pick.rules = { ...rulesOf(st), [k]: v };
+    buildContract(st); saveTabs(); renderTabs(); onQuote(); home.render();
+  };
+  $("dc-target").addEventListener("change", (e) => setMine("target", Math.max(5, Math.round(+e.target.value || 50))));
+  $("dc-stop").addEventListener("change", (e) => setMine("stop", Math.max(5, Math.round(+e.target.value || 40))));
+  $("dc-mode").addEventListener("click", () => setMine("mode", rulesOf(st).mode === "swing" ? "eod" : "swing"));
+  $("dc-hold").addEventListener("change", (e) => setMine("holdEarnings", e.target.checked));
+  $("dc-record").addEventListener("click", () => {
+    const p = st.pick, R = rulesOf(st), exit = parseFloat($("dc-sold").value);
+    if (!p || !(exit >= 0)) return say("Type the price you sold at (per share, like 2.35).", true);
+    const net = DC.netNow({ entry: p.entry, bid: exit, qty: p.qty, fees: R.fees });
+    record = [{ at: Date.now(), sym: p.symbol, name: `${p.symbol} ${p.strike}${p.isCall ? "C" : "P"} ${dateLabel(p.expiration)}`,
+                qty: p.qty, entry: p.entry, exit, net, word: st.decision?.word ?? "", mode: R.mode,
+                followed: !!st.decision && st.decision.code !== "HOLD" }, ...record].slice(0, 500);
+    writeJSON(RECORD_KEY, record);
+    say(`Recorded: ${signed(net, 0)} net.`);
+    stopPlay(); clearPick(st); saveTabs(); renderTabs(); renderTab(); home.render();
+  });
   $("tab-home").addEventListener("click", showHome);
   $("tab-signals").addEventListener("click", showSignals);
   $("copy").addEventListener("click", () => addTab(st));
@@ -1119,7 +1304,8 @@ function restore() {
 
 wire();
 home = createHome({
-  $, api, money, signed, pct, tone, positions, openTab: switchTo, openSymbol,
+  $, api, money, signed, pct, tone, positions, openTab: switchTo, openSymbol, record: () => record,
+  clearRecord: () => { record = []; writeJSON(RECORD_KEY, record); },
   currentSymbol: () => (view === "tab" ? st.sym : null),
   currentSide: () => ({ bars: st.bars, changePct: st.summary?.change_pct ?? null,
                         verdict: st.bars.length >= 30 ? I.readout(histCloses(st)).verdict.value : undefined }),

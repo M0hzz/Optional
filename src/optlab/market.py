@@ -235,6 +235,36 @@ def fetch_quotes(symbols: list[str], get=_get) -> dict:
     return out
 
 
+NASDAQ_EARNINGS_URL = "https://api.nasdaq.com/api/calendar/earnings?date={}"
+WHEN = {"time-pre-market": "bmo", "time-after-hours": "amc"}
+
+
+def _browser_get(url: str, timeout: float = 25):
+    import requests
+
+    return requests.get(url, timeout=timeout, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+        "Accept": "application/json"})
+
+
+def fetch_earnings_day(day: date, get=_browser_get) -> dict:
+    """Companies reporting on `day`, from Nasdaq's earnings calendar: {SYM: "bmo" | "amc" | "unknown"}
+    (before the open, after the close, time not given)."""
+    r = get(NASDAQ_EARNINGS_URL.format(day.isoformat()))
+    if r.status_code != 200:
+        raise MarketError(f"The earnings calendar is unavailable right now (HTTP {r.status_code}).")
+    try:
+        rows = ((r.json() or {}).get("data") or {}).get("rows") or []
+    except ValueError:
+        raise MarketError("The earnings calendar is unavailable right now.") from None
+    out = {}
+    for x in rows:
+        sym = str(x.get("symbol") or "").strip().upper().replace("/", ".")
+        if sym:
+            out[sym] = WHEN.get(x.get("time"), "unknown")
+    return out
+
+
 def levels(bars: list[dict], price: float | None = None) -> dict:
     """What the simulator needs from the bars, each by a fixed rule:
 

@@ -249,3 +249,38 @@ def test_version_changes_when_the_page_files_do(client, tmp_path, monkeypatch):
     (web / "app.js").write_text("two, longer")
     b = client.get("/api/version").json()["version"]
     assert a != b and a.split("-")[0] == b.split("-")[0]          # only the page part moved
+
+
+def test_earnings(monkeypatch):
+    class R:
+        status_code = 200
+
+        def __init__(self, rows):
+            self.rows = rows
+
+        def json(self):
+            return {"data": {"rows": self.rows}}
+    got = market.fetch_earnings_day(date(2026, 11, 17), get=lambda url: R([
+        {"symbol": "NVDA", "time": "time-after-hours"}, {"symbol": "HD", "time": "time-pre-market"},
+        {"symbol": "BRK/B", "time": "time-not-supplied"}]))
+    assert got == {"NVDA": "amc", "HD": "bmo", "BRK.B": "unknown"}
+
+    import threading as th
+    calls = []
+
+    def day(d):
+        calls.append(d)
+        return {"NVDA": "amc"} if d.weekday() == 1 else {"WMT": "bmo"} if d.weekday() == 3 else {}
+    app = create_app(fetch_chain=lambda s: PAYLOAD, fetch_bars=lambda s, tf="1d": bars(), fetch_earnings_day=day)
+    c = TestClient(app, base_url="http://127.0.0.1:8600")
+    first = c.get("/api/earnings?symbols=nvda,wmt,spy").json()
+    for t in th.enumerate():                                    # let the background read finish
+        if t is not th.current_thread() and t.daemon:
+            t.join(timeout=5)
+    out = c.get("/api/earnings?symbols=nvda,wmt,spy").json()
+    assert first["loading"] in (True, False) and out["loading"] is False and out["days"] == 10
+    assert set(out["earnings"]) == {"NVDA", "WMT"}
+    assert out["earnings"]["NVDA"]["when"] == "amc" and date.fromisoformat(out["earnings"]["NVDA"]["date"]).weekday() == 1
+    assert len(calls) == 10                                     # read once, then kept
+    c.get("/api/earnings?symbols=nvda")
+    assert len(calls) == 10

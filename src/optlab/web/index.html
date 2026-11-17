@@ -46,6 +46,11 @@
       </section>
 
       <section class="panel">
+        <h2><span class="step">&#9733;</span> YOUR TRADES <span class="tag">RECORDED SALES</span></h2>
+        <div id="home-record"></div>
+      </section>
+
+      <section class="panel">
         <h2><span class="step">&#9673;</span> MARKET MONITOR
           <span class="toggles" id="home-ranges" role="group" aria-label="How far back levels are found">
             <span class="k">LEVELS FROM</span>
@@ -136,12 +141,41 @@
           <input type="range" id="budget" min="20" max="2000" step="10" value="500">
         </label>
       </div>
-      <div class="ladder-head"><span>STRIKE</span><span>COST OF ONE</span><span>MOVES PER $1</span><span>TRADED TODAY</span></div>
+      <div class="go-card" id="go-card">
+        <div class="go-head"><span class="go-word" id="go-word">…</span><span class="go-what" id="go-what"></span></div>
+        <ul class="go-checks" id="go-checks"></ul>
+        <div class="go-foot">
+          <div class="go-rules" id="go-rules">
+            <span class="k">YOUR RULES</span>
+            <label>TARGET +$<input type="number" id="gr-target" min="5" step="5" inputmode="numeric"></label>
+            <label>STOP −$<input type="number" id="gr-stop" min="5" step="5" inputmode="numeric"></label>
+            <button class="tg" id="gr-mode" title="DAY TRADE sells by 15:45. SWING can hold overnight, until 2 days before expiry, and not through earnings.">DAY TRADE</button>
+            <label title="Your broker's fee per contract, charged when you buy and again when you sell">FEES $<input type="number" id="gr-fees" min="0" step="0.05" inputmode="decimal">/contract</label>
+          </div>
+          <button class="btn go" id="go-buy" hidden>I BOUGHT IT</button>
+        </div>
+      </div>
+      <div class="ladder-head"><span>STRIKE</span><span>COST OF ONE</span><span>CHANCE OF TARGET</span><span>VERDICT</span></div>
       <div class="ladder" id="ladder"></div>
       <p class="hint" id="ladder-hint"></p>
     </section>
 
     <section class="panel hud" id="hud" hidden>
+      <div class="decide" id="decide">
+        <div class="dc-top"><span class="dc-word" id="dc-word"></span><span class="dc-text" id="dc-text"></span></div>
+        <div class="dc-bar" id="dc-bar"><i></i><b></b></div>
+        <div class="dc-ends"><span id="dc-lo"></span><span id="dc-net"></span><span id="dc-hi"></span></div>
+        <p class="dc-earn" id="dc-earn" hidden></p>
+        <div class="dc-rules" id="dc-rules">
+          <span class="k">THIS TRADE</span>
+          <label>TARGET +$<input type="number" id="dc-target" min="5" step="5" inputmode="numeric"></label>
+          <label>STOP −$<input type="number" id="dc-stop" min="5" step="5" inputmode="numeric"></label>
+          <button class="tg" id="dc-mode">DAY TRADE</button>
+          <label id="dc-hold-wrap" hidden><input type="checkbox" id="dc-hold"> hold through earnings</label>
+          <span class="dc-sell"><label>SOLD AT $<input type="number" id="dc-sold" min="0" step="0.01" inputmode="decimal"></label>
+            <button class="btn" id="dc-record" title="Record the sale in YOUR TRADES on the home page and close this position">RECORD SALE</button></span>
+        </div>
+      </div>
       <div class="hud-main">
         <div class="hud-name" id="hud-name"></div>
         <div class="hud-sub" id="hud-sub"></div>
@@ -154,7 +188,7 @@
       <div class="stat big"><span class="k">LIVE P&amp;L</span><span class="v" id="hud-pnl"></span><span class="k2" id="hud-pnl-pct"></span><span class="k2" id="hud-quote"></span></div>
       <div class="hud-btns">
         <button class="btn" id="copy" title="Open a copy of this simulation in a new tab">&#10697; COPY TAB</button>
-        <button class="btn ghost" id="change">CHANGE</button>
+        <button class="btn ghost" id="change" title="Pick a different contract. Nothing is recorded: use RECORD SALE for a trade you closed.">CHANGE (NOT BOUGHT)</button>
       </div>
     </section>
 
@@ -285,6 +319,7 @@
         <li><b>Volume</b> doesn't choose a direction. It scales how far the move goes (by the square root of volume), and the surge fades by half every 2 days.</li>
         <li><b>Volatility</b> rises 3% for each 1% the price falls, eases 1.5% for each 1% it rises, and gets a small lift from a volume surge.</li>
         <li><b>Indicators</b> use the stock's last year of daily closes, then the simulated days, so they change as a scenario plays: EMA 9/21 (short trend), SMA 50 and 200 (medium and long trend), MACD 12/26/9 (momentum), RSI 14 (overbought above 70, oversold below 30), Bollinger 20/2 (range and squeezes). TREND counts the four trend signals: 3 or more pointing the same way is an uptrend or downtrend, otherwise mixed.</li>
+        <li><b>GO / HOLD / CUT:</b> the contract list scores every contract against your rules. "Chance" is the probability the stock reaches the price where one contract nets your target at the bid before your exit (a random walk at the option's own implied volatility, with time decay charged), and "stop" the same for your stop. GO needs every check: within budget, not a lottery ticket (delta under 0.20, a spread over 15%, or expiring today), the trend on the tab's timeframe pointing your way, the target price short of the next resistance (calls) or support (puts), at least a 30% chance of the target before your exit (the odds never favour the target over a nearer stop: the trend is the edge), enough time before your exit, no earnings while you'd hold, and not within 15 minutes of a CUT. An open position shows TAKE PROFIT at the target, CUT at the stop (or before earnings on a swing), TIME'S UP at 15:45 for a day trade or 2 days before expiry for a swing, otherwise HOLD. Earnings dates come from Nasdaq's calendar.</li>
         <li><b>Live and delayed:</b> stock prices everywhere (headers, home page, dock, signal board) are live quotes refreshed every 3 seconds. Option quotes come from CBOE 15 minutes late, so a position's WORTH NOW and LIVE P&amp;L are estimates: the 15-minute-old option price moved by what the stock's move since then is worth at that option's implied volatility. They're off mainly when volatility itself has jumped in those 15 minutes. The delayed quote is shown underneath.</li>
         <li><b>Home</b> shows every position's live and simulated P&amp;L together, the symbols you watch, and chains of linked symbols. The monitor uses Yahoo quotes; option prices on tabs use CBOE's 15-minute delayed feed, so a symbol's price can differ slightly between the two.</li>
         <li><b>Chains</b> compare an anchor with each linked symbol over the days both traded: correlation and beta of daily returns over 60 days, the difference in 5- and 20-day returns, and today's gap (the anchor's change minus beta × the link's change). Flags: trends disagree, a gap of 1.5% or more, or correlation under 0.3.</li>
