@@ -171,7 +171,7 @@ export function events(closes, from, levels = {}, ind = compute(closes)) {
 //   BOLLINGER  where the price sits in the band: the middle is neutral, an edge is full colour
 export const BOARD = [
   ["trend", "TREND"], ["short", "EMA 9/21"], ["medium", "SMA 50"], ["long", "SMA 200"],
-  ["momentum", "MACD"], ["rsi", "RSI"], ["bands", "BOLL"],
+  ["momentum", "MACD"], ["rsi", "RSI"], ["bands", "BOLL"], ["vol", "VOL"],
 ];
 
 export function scores(closes, ind = compute(closes)) {

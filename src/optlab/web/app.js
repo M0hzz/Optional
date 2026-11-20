@@ -5,6 +5,7 @@ import { PriceChart } from "./chart.js";
 import { createHome } from "./home.js";
 import { createSignals } from "./signals.js";
 import * as DC from "./decide.js";
+import * as V from "./vol.js";
 
 const $ = (id) => document.getElementById(id);
 const POLL_MS = 15000;
@@ -355,6 +356,24 @@ async function loadEarnings() {
   } catch { /* the calendar is optional: decisions still work without it */ }
 }
 
+// Relative volume for every ticker on screen: 5-minute bars, refreshed once a minute per ticker.
+const volume = V.createVolume((u) => api(u));
+const volRead = (sym) => volume.read(sym, DC.marketClock());
+
+// A "VOL 1.8x" chip with a meter (tab header, home cards, dock): normal for this time of day = 1.0.
+function volChip(sym, small = false) {
+  const v = V.describe(volRead(sym)), b = document.createElement("span");
+  b.className = `vchip ${v?.cls || ""}${small ? " small" : ""}`;
+  if (!v) { b.textContent = "VOL …"; b.title = "Loading the last two weeks of 5-minute volume…"; return b; }
+  const m = document.createElement("i"); m.style.setProperty("--f", v.fill.toFixed(2));
+  const t = document.createElement("b"); t.textContent = v.text;
+  const w = document.createElement("em"); w.textContent = v.word;
+  b.append(t, m, w);
+  if (v.recentText) { const r = document.createElement("small"); r.textContent = v.recentText; if (v.recentHot) r.className = "hot"; b.append(r); }
+  b.title = v.title;
+  return b;
+}
+
 // The fast loop: live stock quotes for every ticker on every page, in one request. Tab headers, the options'
 // live estimates, the home page, the dock and the signal board all move with it.
 async function livePoll() {
@@ -365,6 +384,7 @@ async function livePoll() {
   try {
     const r = await api(`/api/quotes?symbols=${encodeURIComponent(syms.slice(0, 40).join(","))}`);
     for (const [sym, q] of Object.entries(r.quotes)) if (!q.error) live.set(sym, q);
+    volume.refresh(syms.slice(0, 40));                // not awaited: at most once a minute per ticker
     for (const t of tabs) {
       const q = t.sym && live.get(t.sym);
       if (!q) continue;
@@ -523,10 +543,11 @@ function showLive(d) {
   chg.textContent = pct(d.change_pct, 2);
   tone(chg, d.change_pct || 0);
   $("dot").classList.toggle("stale", !!d.stale);
+  $("live-vol").replaceChildren(volChip(d.symbol));
 }
 
 function renderExps() {
-  if (!st.summary) return;
+  if (!st.summary?.expirations) return;            // only a live price so far: the chain didn't load
   $("exps").replaceChildren(...st.summary.expirations.slice(0, 24).map((e) => {
     const b = document.createElement("button");
     b.className = "chip";
@@ -1304,14 +1325,15 @@ function restore() {
 
 wire();
 home = createHome({
-  $, api, money, signed, pct, tone, positions, openTab: switchTo, openSymbol, record: () => record,
+  $, api, money, signed, pct, tone, positions, openTab: switchTo, openSymbol, record: () => record, volChip, volRead,
   clearRecord: () => { record = []; writeJSON(RECORD_KEY, record); },
   currentSymbol: () => (view === "tab" ? st.sym : null),
   currentSide: () => ({ bars: st.bars, changePct: st.summary?.change_pct ?? null,
                         verdict: st.bars.length >= 30 ? I.readout(histCloses(st)).verdict.value : undefined }),
 });
 signals = createSignals({
-  $, api, tone, openSymbol, showSignals, onSignals: () => view === "signals",
+  $, api, tone, openSymbol, showSignals, onSignals: () => view === "signals", volRead,
+  volProfile: (s) => volume.profile(s, DC.marketClock()), clock: () => DC.marketClock(),
   tabSymbols: () => tabs.filter((t) => t.sym).map((t) => ({ sym: t.sym, position: !!t.pick })),
   monitorSymbols: () => home.symbols(),
 });

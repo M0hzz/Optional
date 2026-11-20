@@ -64,7 +64,7 @@ body {
 .tab-home { flex: none; font: 800 13px var(--mono); letter-spacing: 0.12em; color: var(--amber); background: #0b1128; border: 2px solid #2c3a7a; border-bottom: none;
   border-top: 3px solid var(--amber); border-radius: 6px 6px 0 0; padding: 0 16px; cursor: pointer; }
 .tab-home.on { background: linear-gradient(180deg, #2a2208, #0d1330); border-color: var(--amber); box-shadow: 0 -6px 18px rgba(255, 197, 49, 0.3); }
-.home { display: grid; gap: 16px; }
+.home { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .home h2 .toggles { margin-left: auto; letter-spacing: 0; }
 .totals { display: flex; flex-wrap: wrap; gap: 10px 32px; padding: 10px 14px; margin-bottom: 12px; background: #050816; border: 2px solid var(--grid); border-radius: 4px; }
 .tot .v { display: block; font-size: 24px; }
@@ -417,3 +417,19 @@ table.sb { border-collapse: separate; border-spacing: 4px 3px; font-size: 12px; 
   .rec-row { grid-template-columns: 48px 1fr 60px; } .rec-m, .rec-w { display: none; }
   .dc-sell { margin-left: 0; }
 }
+
+/* ------------------------------------------------------------ relative volume */
+.vchip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: 0.06em; color: var(--ink); white-space: nowrap; }
+.vchip b { font-weight: 800; }
+.vchip i { position: relative; width: 44px; height: 6px; border-radius: 3px; background: #1a2248; overflow: hidden; }
+.vchip i::before { content: ""; position: absolute; inset: 0 auto 0 0; width: calc(var(--f) * 100%); background: currentColor; border-radius: 3px; transition: width 0.4s; }
+.vchip i::after { content: ""; position: absolute; left: 33.3%; top: -1px; bottom: -1px; width: 1px; background: var(--dim); }
+.vchip em { font-style: normal; font-size: 10px; color: var(--dim); }
+.vchip small { font-size: 10px; color: var(--dim); } .vchip small.hot { color: var(--mag); font-weight: 800; }
+.vchip.quiet { color: var(--dim); } .vchip.normal { color: var(--ink); }
+.vchip.busy { color: var(--amber); } .vchip.busy em { color: var(--amber); }
+.vchip.heavy { color: var(--mag); text-shadow: 0 0 10px rgba(255, 61, 240, 0.5); } .vchip.heavy em { color: var(--mag); }
+.live-vol { display: inline-flex; }
+.mon-stats .vchip { flex-wrap: wrap; }
+.dchip.vbusy .dchip-sub { color: var(--amber); } .dchip.vheavy .dchip-sub { color: var(--mag); }
+@media (max-width: 820px) { .live-vol .vchip em, .live-vol .vchip small { display: none; } }

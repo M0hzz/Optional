@@ -10,6 +10,13 @@ Pick a call or put straight from the live option chain, then pull levers and pla
 
 **Timeframes:** each tab's chart can run on 5-minute, 15-minute, 1-hour, daily or weekly candles. Indicators, the trend read and the support and resistance levels follow the timeframe, and on an intraday one a scenario plays out over hours. The home page has the same choice, so every watched symbol, chain and position can show its weekly or intraday trend.
 
+**Volume:** every ticker shows VOL 1.8× in its tab header, on the home monitor and in the dock: today's volume against
+what that stock normally trades by this time of day (the median of its last 10 sessions at each 5-minute slot, so a busy
+open doesn't read as heavy and a quiet lunch doesn't read as dead). QUIET under 0.7×, NORMAL to 1.3×, BUSY to 2×, HEAVY
+above. "15m 3.1× ▲" is the last 15 minutes against the same 15 minutes on other days, and which way the price went. The
+signal board's VOL square is the last bar's volume against normal for that bar, green when heavy volume pushed the
+price up, red when it pushed it down, white when the volume was ordinary.
+
 **GO / HOLD / CUT:** set your rules once (target +$50 net, stop −$40, DAY TRADE sells by 15:45 or SWING holds overnight
 until 2 days before expiry; fees per contract if your broker charges them). The contract list then gives every contract
 a verdict and a chance of hitting your target before your exit, and the card on top names the best one with GO or WAIT

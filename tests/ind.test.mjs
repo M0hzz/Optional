@@ -82,7 +82,7 @@ test("board scores: sign follows the trend, size follows how strong it is", () =
   assert.ok(Math.abs(flat.long.s) < 0.3 && Math.abs(flat.short.s) < 0.2);      // going sideways: little colour
   assert.deepEqual(Object.keys(I.scores(accel.slice(0, 15))), []);
   assert.equal(I.scores(accel.slice(0, 60)).long, undefined);       // under 200 bars: no SMA 200 square
-  assert.ok(I.BOARD.every(([k]) => k in up));
+  assert.ok(I.BOARD.every(([k]) => k === "vol" || k in up));          // VOL needs volume: vol.js barScore
 });
 
 test("states have a dead band so a reading at the edge doesn't flicker", () => {

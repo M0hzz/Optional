@@ -187,8 +187,7 @@ export function createHome(app) {
     const rsi = d.read?.rsi;
     const s1 = el("span", rsi ? `rsi ${rsi.tone}` : "rsi", rsi ? `RSI ${rsi.value}` : "RSI —");
     if (rsi) s1.title = rsi.text;
-    const rv = d.quote?.volume && d.avgVolume ? d.quote.volume / d.avgVolume : null;
-    const s2 = el("span", "", rv == null ? "" : `VOL ${rv.toFixed(1)}× avg so far`);
+    const s2 = app.volChip(sym);
     const s3 = el("span", "", d.read?.bands?.text.includes("SQUEEZE") ? "SQUEEZE" : "");
     stats.append(s1, s2, s3);
     card.append(stats);
@@ -289,8 +288,10 @@ export function createHome(app) {
       chip.append(top);
       let rel = null;
       if (linked.has(sym) && curSide && d.bars) rel = R.relation(curSide, side(sym));
+      const vr = app.volRead(sym)?.pace?.rvol;
       const sub = el("span", "dchip-sub", rel ? `⛓ ${cur} ${rel.lead.replace(/ over 20 \w+$/, "")}${rel.flags.length ? " · " + rel.flags[0] : ""}`
-        : `${d.read?.verdict.value ?? ""}${d.read?.rsi ? " · RSI " + d.read.rsi.value : ""}`);
+        : `${d.read?.verdict.value ?? ""}${d.read?.rsi ? " · RSI " + d.read.rsi.value : ""}${vr != null ? ` · VOL ${vr.toFixed(1)}×` : ""}`);
+      if (vr >= 1.3) chip.classList.add(vr >= 2 ? "vheavy" : "vbusy");
       if (rel?.flags.length) sub.classList.add("flagged");
       chip.append(sub);
       chip.addEventListener("click", () => { openCard = openCard === sym ? null : sym; renderDock(); });

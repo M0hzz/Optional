@@ -12,6 +12,7 @@
 // every 10 minutes with today's price folded into the last bar. Colours seen when the page was last open are saved,
 // so changes that happened while it was closed are logged when it opens again, marked as found on return.
 import * as I from "./ind.js";
+import * as V from "./vol.js";
 
 const CFG_KEY = "optlab-sim-signals-v1";
 const LOG_KEY = "optlab-sim-signal-log-v1";
@@ -93,6 +94,15 @@ export function createSignals(app) {
       if (!d?.bars?.length) continue;
       const closes = withQuote(d.bars, tf, quotes.get(sym));
       d.sc = I.scores(closes);
+      const vs = V.barScore(d.bars, tf, app.clock(), app.volProfile(sym));     // volume isn't in the closes
+      if (vs) d.sc.vol = { s: vs.s, text: vs.text };
+      // today's daily bar is downloaded every 10 minutes; the 5-minute pace is fresher
+      const pc = tf === "1d" ? app.volRead(sym)?.pace : null, q = quotes.get(sym);
+      if (pc?.rvol != null && pc.label !== "last session" && q?.change_pct != null) {
+        const dir = Math.sign(q.change_pct), w = V.word(pc.rvol).word.toLowerCase();
+        d.sc.vol = { s: dir * Math.max(0, Math.min(1, (pc.rvol - 1) / 1.5)),
+                     text: `${pc.rvol.toFixed(1)}× normal volume for this time of day (${w}), price ${q.change_pct >= 0 ? "up" : "down"} ${Math.abs(q.change_pct).toFixed(2)}% today` };
+      }
       for (const [k] of I.BOARD) {
         const v = d.sc[k];
         if (!v) continue;
