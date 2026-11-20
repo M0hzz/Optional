@@ -17,7 +17,9 @@ import * as V from "./vol.js";
 const CFG_KEY = "optlab-sim-signals-v1";
 const LOG_KEY = "optlab-sim-signal-log-v1";
 const STATE_KEY = "optlab-sim-signal-state-v1";
-const MAX_LOG = 300;
+const MAX_LOG = 1000;
+const FILTER_KEY = "optlab-sim-signal-filter-v1";
+const PERIODS = { "1h": ["LAST HOUR", 3600e3], today: ["TODAY", null], "7d": ["7 DAYS", 7 * 86400e3], all: ["ALL", Infinity] };
 const TFS = ["5m", "15m", "1h", "1d", "1w"];
 const ROW_LABEL = { "5m": "5 MIN", "15m": "15 MIN", "1h": "HOUR", "1d": "DAY", "1w": "WEEK" };
 const INTRADAY = new Set(["5m", "15m", "1h"]);
@@ -26,12 +28,25 @@ const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls)
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k) || "null") ?? d; } catch { return d; } };
 const store = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* private window */ } };
 
+// The log's filter: an empty list means "all". `turned` is which colours to show ("g", "r", "w"); `when` a PERIODS key.
+export const NO_FILTER = { syms: [], tfs: [], keys: [], turned: ["g", "r"], when: "all" };
+const COLOUR = { 1: "g", "-1": "r", 0: "w" };
+export function filterLog(log, f, now = Date.now()) {
+  const since = f.when === "today" ? new Date(now).setHours(0, 0, 0, 0) : now - (PERIODS[f.when]?.[1] ?? Infinity);
+  return log.filter((e) => (!f.syms.length || f.syms.includes(e.sym)) && (!f.tfs.length || f.tfs.includes(e.tf))
+    && (!f.keys.length || f.keys.includes(e.key)) && f.turned.includes(COLOUR[e.to]) && e.t >= since);
+}
+
 export function createSignals(app) {
   const { $, api } = app;
   let cfg = { rows: ["1d", "1w"], tabs: true, monitor: false, positionsOnly: false, notify: false, neutral: false, ...load(CFG_KEY, {}) };
   cfg.rows = cfg.rows.filter((t) => TFS.includes(t));
   if (!cfg.rows.length) cfg.rows = ["1d", "1w"];
   let log = load(LOG_KEY, []);
+  let filter = { ...NO_FILTER, ...load(FILTER_KEY, {}) };
+  filter.turned = filter.turned.filter((c) => c !== "w").concat(cfg.neutral ? ["w"] : []);   // NEUTRAL follows cfg.neutral
+  const saveFilter = () => store(FILTER_KEY, filter);
+  const EMPTY_TEXT = $("sb-log-empty").textContent;
   let states = load(STATE_KEY, {});           // "SYM|tf|key" -> -1 | 0 | 1, as last seen
   const firstLook = new Set();                // keys compared for the first time in this visit (changes = while away)
   const data = new Map();                     // "SYM|tf" -> {bars, at, sc, err}
@@ -184,9 +199,49 @@ export function createSignals(app) {
     box.replaceChildren(table);
   }
 
+  // The filter chips: tickers and lines that appear in the log, every indicator, the colours and the period.
+  function renderFilter() {
+    const box = $("sb-filter");
+    const toggleIn = (list, v) => (list.includes(v) ? list.filter((x) => x !== v) : [...list, v]);
+    const group = (label, items, isOn, onClick) => {
+      const g = el("div", "toggles");
+      g.append(el("span", "k", label));
+      for (const [v, text, title] of items) {
+        const b = el("button", "tg", text);
+        b.setAttribute("aria-pressed", isOn(v));
+        if (title) b.title = title;
+        b.addEventListener("click", () => { onClick(v); saveFilter(); renderLog(); });
+        g.append(b);
+      }
+      return g;
+    };
+    const syms = [...new Set([...log.map((e) => e.sym), ...filter.syms])].sort();
+    const tfs = TFS.filter((t) => log.some((e) => e.tf === t) || filter.tfs.includes(t));
+    const all = (key) => () => { filter[key] = []; };
+    box.replaceChildren(
+      group("TICKER", [["*", "ALL"], ...syms.map((s) => [s, s])], (v) => (v === "*" ? !filter.syms.length : filter.syms.includes(v)),
+        (v) => (v === "*" ? all("syms")() : (filter.syms = toggleIn(filter.syms, v)))),
+      group("LINE", [["*", "ALL"], ...tfs.map((t) => [t, ROW_LABEL[t]])], (v) => (v === "*" ? !filter.tfs.length : filter.tfs.includes(v)),
+        (v) => (v === "*" ? all("tfs")() : (filter.tfs = toggleIn(filter.tfs, v)))),
+      group("INDICATOR", [["*", "ALL"], ...I.BOARD], (v) => (v === "*" ? !filter.keys.length : filter.keys.includes(v)),
+        (v) => (v === "*" ? all("keys")() : (filter.keys = toggleIn(filter.keys, v)))),
+      group("TURNED", [["g", "GREEN"], ["r", "RED"], ["w", "NEUTRAL", "Also log turns to neutral as alerts (toasts and the count on the tab)"]],
+        (v) => filter.turned.includes(v), (v) => {
+          filter.turned = toggleIn(filter.turned, v);
+          if (v === "w") { cfg.neutral = filter.turned.includes("w"); save(); }
+        }),
+      group("WHEN", Object.entries(PERIODS).map(([k, [t]]) => [k, t]), (v) => filter.when === v, (v) => { filter.when = v; }),
+    );
+  }
+
   function renderLog() {
-    const shown = log.filter((e) => cfg.neutral || e.to !== 0).slice(0, 150);
+    renderFilter();
+    const matched = filterLog(log, filter), shown = matched.slice(0, 200);
+    const narrowed = JSON.stringify({ ...filter, turned: filter.turned.filter((c) => c !== "w").sort() }) !== JSON.stringify(NO_FILTER);
+    $("sb-log-count").textContent = log.length ? `SHOWING ${shown.length}${matched.length > shown.length ? " (newest)" : ""} OF ${matched.length} MATCHING · ${log.length} LOGGED` : "";
+    $("sb-log-reset").hidden = !narrowed;
     $("sb-log-empty").hidden = shown.length > 0;
+    $("sb-log-empty").textContent = log.length ? "Nothing in the log matches this filter." : EMPTY_TEXT;
     const table = el("table", "sb sb-log");
     if (shown.length) {
       const h = header(0);
@@ -214,7 +269,7 @@ export function createSignals(app) {
 
   function renderControls() {
     for (const b of $("sb-tfs").children) if (b.dataset.tf) b.setAttribute("aria-pressed", cfg.rows.includes(b.dataset.tf));
-    for (const [id, k] of [["sb-src-tabs", "tabs"], ["sb-src-mon", "monitor"], ["sb-pos-only", "positionsOnly"], ["sb-neutral", "neutral"]]) $(id).setAttribute("aria-pressed", !!cfg[k]);
+    for (const [id, k] of [["sb-src-tabs", "tabs"], ["sb-src-mon", "monitor"], ["sb-pos-only", "positionsOnly"]]) $(id).setAttribute("aria-pressed", !!cfg[k]);
     const perm = typeof Notification === "undefined" ? "unsupported" : Notification.permission;
     $("sb-notify").setAttribute("aria-pressed", cfg.notify && perm === "granted");
     $("sb-notify").title = perm === "unsupported" ? "This browser can't show notifications"
@@ -269,7 +324,8 @@ export function createSignals(app) {
       save(); render(); refresh();
     });
   }
-  for (const [id, k] of [["sb-src-tabs", "tabs"], ["sb-src-mon", "monitor"], ["sb-pos-only", "positionsOnly"], ["sb-neutral", "neutral"]]) {
+  $("sb-log-reset").addEventListener("click", () => { filter = { ...NO_FILTER, turned: ["g", "r", ...(cfg.neutral ? ["w"] : [])] }; saveFilter(); renderLog(); });
+  for (const [id, k] of [["sb-src-tabs", "tabs"], ["sb-src-mon", "monitor"], ["sb-pos-only", "positionsOnly"]]) {
     $(id).addEventListener("click", () => { cfg[k] = !cfg[k]; save(); render(); refresh(); });
   }
   $("sb-notify").addEventListener("click", async () => {

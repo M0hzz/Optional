@@ -433,3 +433,10 @@ table.sb { border-collapse: separate; border-spacing: 4px 3px; font-size: 12px; 
 .mon-stats .vchip { flex-wrap: wrap; }
 .dchip.vbusy .dchip-sub { color: var(--amber); } .dchip.vheavy .dchip-sub { color: var(--mag); }
 @media (max-width: 820px) { .live-vol .vchip em, .live-vol .vchip small { display: none; } }
+
+/* ------------------------------------------------------------ alert log filter */
+.sb-filter { gap: 8px 22px; }
+.sb-filter .toggles { align-items: center; }
+.sb-filter .k { display: inline; margin-right: 2px; }
+.sb-log-bar { display: flex; align-items: center; gap: 12px; min-height: 26px; margin-bottom: 6px; }
+.sb-log-bar .k { display: inline; }

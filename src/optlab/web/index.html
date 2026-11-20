@@ -110,10 +110,11 @@
       <section class="panel">
         <h2><span class="step">&#9776;</span> ALERT LOG
           <span class="toggles">
-            <button class="tg" id="sb-neutral">SHOW TURNS TO NEUTRAL</button>
             <button class="tg" id="sb-notify">BROWSER NOTIFICATIONS</button>
             <button class="tg" id="sb-clear">CLEAR</button>
           </span></h2>
+        <div class="sb-controls sb-filter" id="sb-filter"></div>
+        <div class="sb-log-bar"><span class="k" id="sb-log-count"></span><button class="tg" id="sb-log-reset" hidden>RESET FILTER</button></div>
         <div class="sb-wrap" id="sb-log"></div>
         <p class="hint" id="sb-log-empty">Nothing yet. A line appears here each time a square turns green or red, with the
           whole line as it was at that moment. Changes are checked every 15 seconds while this page is open, on any tab;
