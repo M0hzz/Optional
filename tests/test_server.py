@@ -76,6 +76,10 @@ def test_symbols_and_fetch_retry():
     assert market.fetch_cboe("SPX", get=only_index, pause=0) is PAYLOAD and len(index) == 2
     with pytest.raises(market.MarketError, match="Check the ticker"):
         market.fetch_cboe("NOPE", get=lambda url: R(403), pause=0)
+    blocked = R(403)
+    blocked.text = "<title>Attention Required! | Cloudflare</title>"
+    with pytest.raises(market.MarketError, match="refusing requests"):         # the firewall isn't "no such ticker"
+        market.fetch_cboe("SPY", get=lambda url: blocked, pause=0)
     with pytest.raises(market.MarketError, match="busy"):
         market.fetch_cboe("IWM", get=lambda url: R(429), pause=0, retries=1)
 

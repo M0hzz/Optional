@@ -52,6 +52,9 @@ def fetch_cboe(symbol: str, get=_get, retries: int = 4, pause: float = 1.5) -> d
             status = r.status_code
             if status == 200:
                 return r.json()
+            if status == 403 and "cloudflare" in (getattr(r, "text", "") or "").lower():   # its firewall, not a missing ticker
+                raise MarketError("CBOE is refusing requests from optlab (HTTP 403), so no option chain can load. "
+                                  "Stock prices, charts and signals still work.")
             if status != 429 and status < 500:
                 break
             if attempt < retries:
