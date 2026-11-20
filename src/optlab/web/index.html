@@ -23,7 +23,7 @@
       <span class="live-px" id="live-px"></span>
       <span class="live-chg" id="live-chg"></span>
       <span class="live-vol" id="live-vol"></span>
-      <span class="live-note" title="The stock price is live. Option quotes come from CBOE 15 minutes late; the P&amp;L shown is a live estimate from the stock's price now.">LIVE · OPTIONS 15 MIN DELAYED</span>
+      <span class="live-note" id="live-note" title="The stock price is live. Option quotes come from CBOE 15 minutes late; the P&amp;L shown is a live estimate from the stock's price now.">LIVE · OPTIONS 15 MIN DELAYED</span>
     </div>
   </header>
 
@@ -329,7 +329,7 @@
         <li><b>Timeframes:</b> 5m, 15m and 1h bars cover the last 10 days, month and 6 months of regular trading hours; weekly bars are built from 5 years of daily ones. Indicators, the trend read and the levels use whichever you pick. On an intraday timeframe a scenario plays out over hours, one bar per step, with a trading session counted as one day of time decay.</li>
         <li><b>Tabs</b> are separate simulations, saved in this browser. COPY TAB starts a new one from the current contract.</li>
         <li><b>Resistance and support</b> come from swing highs and lows over the RANGE you pick (1M to 5Y): swing points within half a day's average range of each other count as one level, and each is a touch. The nearest above and below drive the scenarios; tap another, or type your own.</li>
-        <li>Prices are CBOE delayed quotes. You pay the ask; "worth" is the midpoint, so a new pick starts slightly negative.</li>
+        <li>Option prices are live Tastytrade quotes when a Tastytrade login is set up (see the README), otherwise CBOE quotes 15 minutes late. You pay the ask; "worth" is the midpoint, so a new pick starts slightly negative.</li>
       </ul>
     </details>
   </footer>

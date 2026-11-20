@@ -356,6 +356,20 @@ async function loadEarnings() {
   } catch { /* the calendar is optional: decisions still work without it */ }
 }
 
+// Where option quotes come from: Tastytrade (live) when a login is set up on the server, else CBOE (15 min late).
+let optSource = { options: "cboe", error: null };
+const optLive = () => optSource.options === "tastytrade";
+async function loadSource() {
+  try { optSource = await api("/api/source"); } catch { /* keep the default */ }
+  const note = $("live-note");
+  note.textContent = optLive() ? "LIVE · OPTIONS LIVE (TASTYTRADE)" : "LIVE · OPTIONS 15 MIN DELAYED";
+  note.classList.toggle("warn", !!optSource.error);
+  note.title = (optLive()
+    ? "Stock prices and option quotes are live (option quotes from Tastytrade, refreshed every 15 s; P&L moves with the stock in between)."
+    : "The stock price is live. Option quotes come from CBOE 15 minutes late; the P&L shown is a live estimate from the stock's price now.")
+    + (optSource.error ? ` Tastytrade login problem: ${optSource.error}` : "");
+}
+
 // Relative volume for every ticker on screen: 5-minute bars, refreshed once a minute per ticker.
 const volume = V.createVolume((u) => api(u));
 const volRead = (sym) => volume.read(sym, DC.marketClock());
@@ -417,7 +431,7 @@ function renderFresh() {
   el.textContent = !navigator.onLine ? "OFFLINE" : `LIVE · ${ago < 60 ? ago + "s" : Math.floor(ago / 60) + "m"} AGO`;
   el.classList.toggle("late", late || liveFailed || pollFailed);
   el.title = `Stock prices, trends, the home page and signals refresh every ${LIVE_MS / 1000} s; option quotes and candles every `
-    + `${POLL_MS / 1000} s (option quotes are 15 minutes old at the source).${liveFailed || pollFailed ? " The last refresh missed some data; it retries." : ""}`;
+    + `${POLL_MS / 1000} s (option quotes ${optLive() ? "live from Tastytrade" : "are 15 minutes old at the source"}).${liveFailed || pollFailed ? " The last refresh missed some data; it retries." : ""}`;
 }
 
 // A new version of the app on the server: reload into it (tabs and settings are saved in the browser), but never in
@@ -599,7 +613,7 @@ function renderLadder() {
   renderGoCard(best, d, isCall);
   const mark = document.createElement("div");
   mark.className = "spot-line";
-  mark.textContent = `${st.sym} is at ${money(px)} now · option prices are 15 min old`;
+  mark.textContent = `${st.sym} is at ${money(px)} now${optLive() ? "" : " · option prices are 15 min old"}`;
   const at = view.findIndex((r) => r.strike > px);
   els.splice(at < 0 ? els.length : at, 0, mark);
   const box = $("ladder"), key = `${st.id}|${st.sym}|${st.exp}|${st.side}`, keep = box.dataset.for === key ? box.scrollTop : null;
@@ -732,7 +746,7 @@ function onQuote() {
   glide($("hud-pnl"), st.livePnl, (v) => signed(v, 0));
   tone($("hud-pnl"), st.livePnl);
   $("hud-pnl-pct").textContent = pct(100 * (mark - p.entry) / p.entry, 1);
-  $("hud-quote").textContent = `delayed quote: ${money(st.quoteMark * 100 * p.qty, 0)} (${signed(st.quotePnl, 0)})`;
+  $("hud-quote").textContent = `${optLive() ? "last quote" : "delayed quote"}: ${money(st.quoteMark * 100 * p.qty, 0)} (${signed(st.quotePnl, 0)})`;
   renderDecision();
   if (!playing) refreshSim(false);
 }
@@ -1338,6 +1352,7 @@ signals = createSignals({
   monitorSymbols: () => home.symbols(),
 });
 try { localStorage.removeItem("optlab-sim-cycles-v1"); } catch { /* the scenario tree's saved state, no longer used */ }
+loadSource();
 restore();
 signals.refresh();
 home.refresh().then(() => { lastPoll = Date.now(); renderFresh(); });

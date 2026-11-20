@@ -54,6 +54,7 @@ def fetch_cboe(symbol: str, get=_get, retries: int = 4, pause: float = 1.5) -> d
                 return r.json()
             if status == 403 and "cloudflare" in (getattr(r, "text", "") or "").lower():   # its firewall, not a missing ticker
                 raise MarketError("CBOE is refusing requests from optlab (HTTP 403), so no option chain can load. "
+                                  "Set up Tastytrade for live chains (README: Live option quotes from Tastytrade). "
                                   "Stock prices, charts and signals still work.")
             if status != 429 and status < 500:
                 break

@@ -440,3 +440,5 @@ table.sb { border-collapse: separate; border-spacing: 4px 3px; font-size: 12px; 
 .sb-filter .k { display: inline; margin-right: 2px; }
 .sb-log-bar { display: flex; align-items: center; gap: 12px; min-height: 26px; margin-bottom: 6px; }
 .sb-log-bar .k { display: inline; }
+
+.live-note.warn { color: var(--amber); }

@@ -1,10 +1,12 @@
 """The whole server: four read-only data routes and the page. No database, no accounts, no orders.
 
     GET /api/chain/{symbol}          price, expirations (date, days left, how many contracts)
+                                     (from Tastytrade, live, when a Tastytrade login is set up; else CBOE)
     GET /api/chain/{symbol}/{date}   the calls and puts of one expiration
     GET /api/bars/{symbol}           daily bars and the levels the simulator uses
     GET /api/quotes?symbols=A,B      light quotes for the home page monitor (no option chain needed)
     GET /api/earnings?symbols=A,B    the next earnings report within two weeks (Nasdaq's calendar)
+    GET /api/source                  where option quotes come from, and any problem with the Tastytrade login
     GET /api/version                 changes when a new version is installed: open pages reload themselves
 
 It answers only to localhost and your Tailscale name (OPTLAB_ALLOWED_HOSTS to change), so a web page you
@@ -25,6 +27,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .. import market
+from .. import tasty as tasty_mod
 
 PKG = Path(__file__).resolve().parents[1]
 WEB = PKG / "web"
@@ -56,11 +59,21 @@ def host_ok(host: str, allowed: list[str]) -> bool:
 
 def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetch_quote=market.fetch_quote,
                fetch_quotes=market.fetch_quotes, fetch_earnings_day=market.fetch_earnings_day, chain_ttl: float = 15, bars_ttl: float = 600, quote_ttl: float = 2,
-               allowed_hosts: list[str] | None = None) -> FastAPI:
+               allowed_hosts: list[str] | None = None, tasty=None) -> FastAPI:
+    """`tasty`: a tasty.Tasty client for live option chains, "auto" to log in with the saved Tastytrade setup if
+    there is one (python -m optlab.api does), or None for CBOE's delayed chains."""
+    tasty_error = None
+    if tasty == "auto":
+        try:
+            creds = tasty_mod.load_credentials()
+            tasty = tasty_mod.Tasty(creds) if creds else None
+        except market.MarketError as exc:
+            tasty, tasty_error = None, str(exc)
     allowed = allowed_hosts or [h.strip().lower() for h in os.environ.get(
         "OPTLAB_ALLOWED_HOSTS", "localhost,127.0.0.1,::1,*.ts.net").split(",") if h.strip()]
     app = FastAPI(title="optlab sim", docs_url=None, redoc_url=None, openapi_url=None)
     chains, quotes = market.Cache(chain_ttl), market.Cache(quote_ttl)
+    live_sums, live_exps = market.Cache(chain_ttl), market.Cache(min(chain_ttl, 5))
     # The server code is fixed for the life of the process (a new version needs a restart); the page's files are
     # served from disk, so their part of the version is read on every request.
     server_version = fingerprint([f for f in PKG.rglob("*.py") if "__pycache__" not in f.parts])
@@ -87,20 +100,32 @@ def create_app(fetch_chain=market.fetch_cboe, fetch_bars=market.fetch_bars, fetc
         sym = market.clean_symbol(symbol)
         return chains.get(sym, lambda: market.parse_chain(fetch_chain(sym)))
 
+    @app.get("/api/source")
+    def source():
+        return {"options": "tastytrade" if tasty else "cboe", "error": tasty_error}
+
     @app.get("/api/chain/{symbol}")
     def chain_summary(symbol: str):
+        if tasty:
+            sym = market.clean_symbol(symbol)
+            c, stale = live_sums.get(sym, lambda: tasty_mod.summary(tasty, sym))
+            return {**c, "stale": stale}
         c, stale = chain(symbol)
         return {**{k: v for k, v in c.items() if k != "expirations"}, "stale": stale,
                 "expirations": [{"date": e["date"], "dte": e["dte"], "count": len(e["calls"]) + len(e["puts"])}
-                                for e in c["expirations"]]}
+                                for e in c["expirations"]], "source": "cboe"}
 
     @app.get("/api/chain/{symbol}/{expiration}")
     def chain_expiration(symbol: str, expiration: str):
+        if tasty:
+            sym = market.clean_symbol(symbol)
+            e, stale = live_exps.get(f"{sym}|{expiration}", lambda: tasty_mod.expiration(tasty, sym, expiration))
+            return {**e, "stale": stale}
         c, stale = chain(symbol)
         for e in c["expirations"]:
             if e["date"] == expiration:
                 return {"symbol": c["symbol"], "price": c["price"], "change_pct": c["change_pct"], "as_of": c["as_of"],
-                        "stale": stale, **e}
+                        "stale": stale, "source": "cboe", **e}
         raise market.MarketError(f"{c['symbol']} has no options expiring on {expiration}.")
 
     @app.get("/api/bars/{symbol}")

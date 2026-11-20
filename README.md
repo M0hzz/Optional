@@ -2,7 +2,7 @@
 
 Pick a call or put straight from the live option chain, then pull levers and play out what-if scenarios to see what happens to it.
 
-1. **Type a ticker** and press LOAD. The chain comes from CBOE (15 minutes delayed).
+1. **Type a ticker** and press LOAD. The chain comes from Tastytrade, live, once you've set up a login (below); otherwise from CBOE, 15 minutes delayed.
 2. **Pick an expiration, calls or puts, and a strike.** Each row shows what one contract costs, how much it moves per $1 in the stock, and how much traded today. Set a budget to dim what you can't afford.
 3. **Pull the levers:** stock price, days from now, volatility and volume. The P&L updates as you drag.
 4. **Read the chart:** candles with volume and RSI or MACD underneath. Scroll or pinch to zoom, drag to pan, hover for a day's values. Pick a RANGE (1M to 5Y): it sets how far back the chart shows and how far back support and resistance are found. Toggle EMA 9/21, SMA 50/200 and Bollinger lines.
@@ -53,6 +53,32 @@ bash scripts/run.sh            # http://127.0.0.1:8600
 ```
 
 Over Tailscale it's the same address as before, `https://<computer>.<tailnet>.ts.net/`, because it uses the same port (8600) as the old dashboard.
+
+## Live option quotes from Tastytrade
+
+CBOE's free delayed feed now turns optlab's requests away, so option chains need a Tastytrade account (free API access
+for account holders, real-time quotes). optlab only asks for read access: it can't place, change or cancel an order.
+
+1. On [my.tastytrade.com](https://my.tastytrade.com): **Manage → My Profile → API → OAuth Applications**, create an
+   application with the **read** scope only. Copy its **client secret**.
+2. Next to the application, **Manage → Create Grant**. Copy the **refresh token** it shows.
+3. On the computer that runs optlab, save both in a file only you can read:
+
+   ```bash
+   mkdir -p ~/.config/optlab
+   printf '{"client_secret": "%s", "refresh_token": "%s"}\n' 'PASTE-SECRET' 'PASTE-TOKEN' > ~/.config/optlab/tastytrade.json
+   chmod 600 ~/.config/optlab/tastytrade.json
+   ```
+
+   (Or set `TASTYTRADE_CLIENT_SECRET` and `TASTYTRADE_REFRESH_TOKEN` in optlab's environment instead.)
+4. Check it: `PYTHONPATH=src .venv/bin/python -m optlab.tasty SPY` should print SPY's price and a quoted call.
+5. Restart optlab (`bash scripts/run.sh`, or the autoupdate service restarts it). The header then says
+   **OPTIONS LIVE (TASTYTRADE)**.
+
+The secret and token stay on the server: the page never sees them. Quotes are fetched for the strikes near the price
+on the expiration you're looking at, every 15 seconds. Tastytrade's quotes carry no implied volatility, delta or open
+interest, so optlab works out IV and delta from each contract's mid price; open interest isn't shown. Without the file,
+optlab falls back to CBOE.
 
 ## Live and delayed
 
