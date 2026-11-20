@@ -47,9 +47,19 @@ def load_credentials(path: Path = CRED_FILE, env=os.environ) -> dict | None:
         return None
     except (OSError, ValueError):
         raise MarketError(f"Can't read {path}: it should be JSON with client_secret and refresh_token.") from None
-    if not (data.get("client_secret") and data.get("refresh_token")):
-        raise MarketError(f"{path} needs both client_secret and refresh_token.")
-    return {"client_secret": data["client_secret"], "refresh_token": data["refresh_token"], "client_id": data.get("client_id")}
+    if not isinstance(data, dict):
+        raise MarketError(f"{path} should be a JSON object with client_secret and refresh_token.")
+    # forgiving about spelling (client-secret, clientSecret) and stray spaces from copying
+    norm = {k.lower().replace("-", "_").replace(" ", "_"): v for k, v in data.items()}
+    norm.update({k.replace("clientsecret", "client_secret").replace("refreshtoken", "refresh_token")
+                  .replace("clientid", "client_id"): v for k, v in list(norm.items())})
+    got = {k: str(norm.get(k) or "").strip() for k in ("client_secret", "refresh_token", "client_id")}
+    missing = [k for k in ("client_secret", "refresh_token") if not got[k] or got[k].startswith("PASTE-")]
+    if missing:
+        keys = ", ".join(f"{k} ({len(str(v).strip())} characters)" for k, v in data.items()) or "nothing"
+        raise MarketError(f"{path} is missing {' and '.join(missing)}. It has: {keys}. "
+                          'It should look like {"client_secret": "...", "refresh_token": "..."}.')
+    return {"client_secret": got["client_secret"], "refresh_token": got["refresh_token"], "client_id": got["client_id"] or None}
 
 
 def field(item: dict, name: str):

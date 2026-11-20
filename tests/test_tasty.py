@@ -86,8 +86,13 @@ def test_credentials_from_env_or_file(tmp_path):
     f.write_text(json.dumps({"client_secret": "x", "refresh_token": "y"}))
     assert tasty.load_credentials(f, env={}) == {"client_secret": "x", "refresh_token": "y", "client_id": None}
     f.write_text(json.dumps({"client_secret": "x"}))
-    with pytest.raises(market.MarketError, match="needs both"):
+    with pytest.raises(market.MarketError, match="missing refresh_token. It has: client_secret \\(1 characters\\)"):
         tasty.load_credentials(f, env={})
+    f.write_text(json.dumps({"client_secret": "PASTE-SECRET", "refresh_token": "PASTE-TOKEN"}))
+    with pytest.raises(market.MarketError, match="missing client_secret and refresh_token"):
+        tasty.load_credentials(f, env={})
+    f.write_text(json.dumps({"Client-Secret": " x ", "refreshToken": "y\n"}))
+    assert tasty.load_credentials(f, env={}) == {"client_secret": "x", "refresh_token": "y", "client_id": None}
     f.write_text("not json")
     with pytest.raises(market.MarketError, match="Can't read"):
         tasty.load_credentials(f, env={})
